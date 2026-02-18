@@ -3481,6 +3481,7 @@ app.post('/api/login', loginLimiter, async (req, res) => {
                     role = 'student';
                     console.log('✅ Student logged in:', user.name);
                     console.log('📸 PhotoUrl from DB:', user.photoUrl);
+                    console.log('👤 Face embedding:', user.faceEmbedding ? `${user.faceEmbedding.length} floats` : 'Not enrolled');
                     return res.json({
                         success: true,
                         user: {
@@ -3493,6 +3494,8 @@ app.post('/api/login', loginLimiter, async (req, res) => {
                             semester: user.semester,
                             phone: user.phone,
                             photoUrl: user.photoUrl,
+                            faceEmbedding: user.faceEmbedding || null, // Include face embedding
+                            hasFaceEnrolled: !!user.faceEmbedding,
                             role: 'student'
                         }
                     });
@@ -3585,6 +3588,8 @@ const studentManagementSchema = new mongoose.Schema({
     dob: { type: Date, required: true },
     phone: String,
     photoUrl: String,
+    faceEmbedding: { type: [Number], default: null }, // Face recognition embedding (192 floats)
+    faceEnrolledAt: { type: Date }, // When face was enrolled
     createdAt: { type: Date, default: Date.now },
     // Timer and attendance tracking fields
     timerValue: { type: Number, default: 0 },
@@ -3941,6 +3946,234 @@ app.post('/api/students/bulk', async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+
+// Face Enrollment API Routes
+// Enroll face for existing student
+app.post('/api/enrollment', async (req, res) => {
+    try {
+        const { enrollmentNo, faceEmbedding } = req.body;
+
+        // Validation
+        if (!enrollmentNo || !faceEmbedding) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Missing required fields: enrollmentNo and faceEmbedding' 
+            });
+        }
+
+        if (!Array.isArray(faceEmbedding) || faceEmbedding.length === 0) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Invalid face embedding data' 
+            });
+        }
+
+        // Check if student exists
+        const student = await StudentManagement.findOne({ enrollmentNo });
+        if (!student) {
+            return res.status(404).json({ 
+                success: false, 
+                message: `Student with enrollment number ${enrollmentNo} not found. Please register the student first.` 
+            });
+        }
+
+        // Update student with face embedding
+        student.faceEmbedding = faceEmbedding;
+        student.faceEnrolledAt = new Date();
+        await student.save();
+
+        console.log(`✅ Face enrolled for student: ${enrollmentNo} (${student.name})`);
+
+        res.status(201).json({ 
+            success: true, 
+            message: `Face enrolled successfully for ${student.name}`,
+            data: {
+                enrollmentNo: student.enrollmentNo,
+                name: student.name,
+                faceEnrolledAt: student.faceEnrolledAt
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error enrolling face:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error while enrolling face',
+            error: error.message 
+        });
+    }
+});
+
+// Get enrollment status by enrollment number
+app.get('/api/enrollment/:enrollmentNo', async (req, res) => {
+    try {
+        const { enrollmentNo } = req.params;
+
+        const student = await StudentManagement.findOne({ enrollmentNo })
+            .select('enrollmentNo name branch semester faceEmbedding faceEnrolledAt');
+
+        if (!student) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found' 
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            data: {
+                enrollmentNo: student.enrollmentNo,
+                name: student.name,
+                branch: student.branch,
+                semester: student.semester,
+                hasFaceEnrolled: !!student.faceEmbedding,
+                faceEnrolledAt: student.faceEnrolledAt
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error fetching enrollment:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error',
+            error: error.message 
+        });
+    }
+});
+
+// Update face enrollment
+app.put('/api/enrollment/:enrollmentNo', async (req, res) => {
+    try {
+        const { enrollmentNo } = req.params;
+        const { faceEmbedding } = req.body;
+
+        const student = await StudentManagement.findOne({ enrollmentNo });
+
+        if (!student) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found' 
+            });
+        }
+
+        if (faceEmbedding) {
+            student.faceEmbedding = faceEmbedding;
+            student.faceEnrolledAt = new Date();
+        }
+
+        await student.save();
+
+        console.log(`✅ Face updated for student: ${enrollmentNo}`);
+
+        res.json({ 
+            success: true, 
+            message: 'Face enrollment updated successfully' 
+        });
+
+    } catch (error) {
+        console.error('❌ Error updating face enrollment:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error',
+            error: error.message 
+        });
+    }
+});
+
+// Delete face enrollment
+app.delete('/api/enrollment/:enrollmentNo', async (req, res) => {
+    try {
+        const { enrollmentNo } = req.params;
+
+        const student = await StudentManagement.findOne({ enrollmentNo });
+
+        if (!student) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found' 
+            });
+        }
+
+        student.faceEmbedding = null;
+        student.faceEnrolledAt = null;
+        await student.save();
+
+        console.log(`✅ Face enrollment deleted for: ${enrollmentNo}`);
+
+        res.json({ 
+            success: true, 
+            message: 'Face enrollment deleted successfully' 
+        });
+
+    } catch (error) {
+        console.error('❌ Error deleting face enrollment:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error',
+            error: error.message 
+        });
+    }
+});
+
+// Get all enrollments (for admin)
+app.get('/api/enrollments', async (req, res) => {
+    try {
+        const students = await StudentManagement.find({ faceEmbedding: { $ne: null } })
+            .select('enrollmentNo name branch semester faceEnrolledAt');
+
+        res.json({ 
+            success: true, 
+            count: students.length,
+            data: students 
+        });
+
+    } catch (error) {
+        console.error('❌ Error fetching enrollments:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error',
+            error: error.message 
+        });
+    }
+});
+
+// Verify if student exists (for enrollment app validation)
+app.post('/api/enrollment/verify', async (req, res) => {
+    try {
+        const { enrollmentNo } = req.body;
+
+        const student = await StudentManagement.findOne({ enrollmentNo })
+            .select('enrollmentNo name branch semester faceEmbedding');
+
+        if (!student) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Student not found. Please check the enrollment number.' 
+            });
+        }
+
+        res.json({ 
+            success: true, 
+            message: 'Student found',
+            data: {
+                enrollmentNo: student.enrollmentNo,
+                name: student.name,
+                branch: student.branch,
+                semester: student.semester,
+                hasFaceEnrolled: !!student.faceEmbedding
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error verifying student:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Server error',
+            error: error.message 
+        });
+    }
+});
+// End of Face Enrollment API Routes
 
 app.put('/api/students/:id', async (req, res) => {
     try {

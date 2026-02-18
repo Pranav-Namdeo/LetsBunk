@@ -37,6 +37,7 @@ import TestBSSID from './TestBSSID';
 import { useUnifiedTimer } from './UnifiedTimerManager';
 import SecurityStatusIndicator from './SecurityStatusIndicator';
 // WiFi BSSID Integration from LetsBunk
+import SecureStorage from './SecureStorage';
 
 // Configuration - Using computer IP for mobile device testing
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.6:3000/api/config';
@@ -2302,6 +2303,7 @@ export default function App() {
         // Debug: Log user data to check photoUrl
         console.log('🔍 Login successful, user data:', data.user);
         console.log('📸 PhotoUrl:', data.user.photoUrl);
+        console.log('👤 Face embedding:', data.user.faceEmbedding ? `${data.user.faceEmbedding.length} floats` : 'Not enrolled');
 
         const normalizedUser = normalizeStudentUserData(data.user);
 
@@ -2339,6 +2341,21 @@ export default function App() {
 
           if (normalizedUser.semester) storageData.push([SEMESTER_KEY, normalizedUser.semester]);
           if (normalizedUser.branch) storageData.push([BRANCH_KEY, normalizedUser.branch]);
+
+          // Save face embedding securely (if available)
+          if (data.user.faceEmbedding && Array.isArray(data.user.faceEmbedding)) {
+            console.log('💾 Saving face embedding to secure storage...');
+            SecureStorage.saveFaceEmbedding(data.user.faceEmbedding).then((success) => {
+              if (success) {
+                console.log('✅ Face embedding saved successfully');
+                SecureStorage.saveEnrollmentNumber(normalizedUser.enrollmentNo);
+              } else {
+                console.log('⚠️ Failed to save face embedding');
+              }
+            });
+          } else {
+            console.log('ℹ️ No face embedding available for this student');
+          }
         } else if (data.user.role === 'teacher') {
           // Don't set default semester/branch for teachers - let current class detection handle it
           // setSemester(data.user.semester || '1');
@@ -2830,6 +2847,10 @@ export default function App() {
         LOGIN_ID_KEY,
         DAILY_VERIFICATION_KEY
       ]);
+      
+      // Clear face data from secure storage
+      await SecureStorage.clearFaceData();
+      console.log('🗑️ Face data cleared on logout');
     } catch (error) {
       console.log('Error clearing storage:', error);
     }

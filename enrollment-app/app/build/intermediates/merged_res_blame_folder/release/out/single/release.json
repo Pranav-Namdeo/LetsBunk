@@ -1,0 +1,14 @@
+[
+    {
+        "merged": "com.example.enrollmentapp-merged_res-36:/layout_activity_main.xml.flat",
+        "source": "com.example.enrollmentapp-main-37:/layout/activity_main.xml"
+    },
+    {
+        "merged": "com.example.enrollmentapp-merged_res-36:/layout_activity_camera.xml.flat",
+        "source": "com.example.enrollmentapp-main-37:/layout/activity_camera.xml"
+    },
+    {
+        "merged": "com.example.enrollmentapp-merged_res-36:/xml_network_security_config.xml.flat",
+        "source": "com.example.enrollmentapp-main-37:/xml/network_security_config.xml"
+    }
+]

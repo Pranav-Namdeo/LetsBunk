@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Server Configuration -->
+    <!-- LetsBunk Server -->
+    <string name="server_base_url">http://192.168.1.6:3000/api</string>
+</resources>

@@ -1,0 +1,10 @@
+[
+    {
+        "merged": "com.example.enrollmentapp-mergeDebugResources-35:/layout/activity_camera.xml",
+        "source": "com.example.enrollmentapp-main-38:/layout/activity_camera.xml"
+    },
+    {
+        "merged": "com.example.enrollmentapp-mergeDebugResources-35:/layout/activity_main.xml",
+        "source": "com.example.enrollmentapp-main-38:/layout/activity_main.xml"
+    }
+]

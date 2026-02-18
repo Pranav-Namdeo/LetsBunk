@@ -41,6 +41,9 @@ android/build/
 android/.gradle/
 android/app/release/
 android/app/debug/
+enrollment-app/app/build/
+enrollment-app/build/
+enrollment-app/.gradle/
 *.apk
 *.aab
 
