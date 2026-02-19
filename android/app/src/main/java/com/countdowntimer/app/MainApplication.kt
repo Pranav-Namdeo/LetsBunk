@@ -14,6 +14,7 @@ import com.facebook.soloader.SoLoader
 
 import expo.modules.ApplicationLifecycleDispatcher
 import expo.modules.ReactNativeHostWrapper
+import com.letsbunk.faceverification.FaceVerificationPackage
 
 class MainApplication : Application(), ReactApplication {
 
@@ -26,6 +27,8 @@ class MainApplication : Application(), ReactApplication {
             val packages = PackageList(this).packages.toMutableList()
             // Add our custom WiFi package
             packages.add(WifiPackage())
+            // Add face verification package
+            packages.add(FaceVerificationPackage())
             return packages
           }
 

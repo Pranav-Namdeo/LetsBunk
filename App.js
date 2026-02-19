@@ -38,6 +38,8 @@ import { useUnifiedTimer } from './UnifiedTimerManager';
 import SecurityStatusIndicator from './SecurityStatusIndicator';
 // WiFi BSSID Integration from LetsBunk
 import SecureStorage from './SecureStorage';
+// Face Verification Module
+import FaceVerification from './FaceVerification';
 
 // Configuration - Using computer IP for mobile device testing
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.6:3000/api/config';
@@ -2165,8 +2167,49 @@ export default function App() {
       }
     }
 
+    // 2. Face Verification (ASYNC)
+    console.log('👤 Step 2: Starting face verification...');
+    try {
+      // Get stored face embedding from SecureStorage
+      const storedEmbedding = await SecureStorage.getFaceEmbedding();
+      
+      if (!storedEmbedding || storedEmbedding.length !== 192) {
+        console.log('❌ No face data found or invalid');
+        alert('❌ Face Data Not Found\n\nYour face data is not enrolled on this device.\n\nPlease login again to download your face data, or contact your teacher to enroll your face.');
+        return;
+      }
+
+      console.log('✅ Face data loaded from storage (192 floats)');
+      console.log('📸 Opening camera for face verification...');
+
+      // Start face verification using native module
+      const verificationResult = await FaceVerification.verifyFace(storedEmbedding);
+
+      console.log('🔍 Face verification result:', verificationResult);
+
+      if (!verificationResult.success || !verificationResult.isMatch) {
+        console.log('❌ Face verification failed');
+        alert(`❌ Face Verification Failed\n\n${verificationResult.message}\n\nSimilarity: ${verificationResult.similarityPercentage}%\n\nPlease try again or contact your teacher if you believe this is an error.`);
+        return;
+      }
+
+      console.log('✅ Face verified successfully!');
+      console.log(`   Similarity: ${verificationResult.similarityPercentage}%`);
+
+    } catch (error) {
+      console.error('❌ Face verification error:', error);
+      
+      if (error.message === 'VERIFICATION_CANCELLED') {
+        alert('❌ Verification Cancelled\n\nFace verification was cancelled.\n\nYou must complete face verification to start attendance tracking.');
+      } else {
+        alert(`❌ Face Verification Error\n\n${error.message}\n\nPlease try again or contact support if the issue persists.`);
+      }
+      return;
+    }
+
     console.log('✅ All validations passed - Starting timer');
     console.log('   ✅ WiFi: Connected to classroom network');
+    console.log('   ✅ Face: Verified successfully');
     console.log('   ✅ Class: Active lecture in progress');
 
     setIsRunning(true);
