@@ -1,7 +1,7 @@
 // Quick script to set the production server URL in admin panel localStorage
 // Run this in the browser console when admin panel is open
 
-const SERVER_URL = 'https://letsbunk-server.azurewebsites.net';
+const SERVER_URL = 'https://letsbunk-omqs.onrender.com';
 
 console.log('🔧 Setting server URL to:', SERVER_URL);
 localStorage.setItem('serverUrl', SERVER_URL);
