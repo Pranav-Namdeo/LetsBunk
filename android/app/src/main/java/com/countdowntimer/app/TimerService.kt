@@ -64,7 +64,7 @@ class TimerService : Service() {
             }
             ACTION_STOP -> stopTimer()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun startTimer(subject: String, resumeFrom: Long) {
@@ -88,21 +88,10 @@ class TimerService : Service() {
         Log.d(TAG, "Timer stopped at ${elapsedSeconds}s")
     }
 
-    // Called when user swipes app from recents — restart the service so timer survives
+    // Called when user swipes app from recents — stop the timer and notification
     override fun onTaskRemoved(rootIntent: Intent?) {
-        if (isRunning) {
-            val restartIntent = Intent(applicationContext, TimerService::class.java).apply {
-                action = ACTION_START
-                putExtra("subject", lectureSubject)
-                putExtra("resumeFrom", elapsedSeconds)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                applicationContext.startForegroundService(restartIntent)
-            } else {
-                applicationContext.startService(restartIntent)
-            }
-            Log.d(TAG, "onTaskRemoved — restarting service to preserve timer")
-        }
+        stopTimer()
+        Log.d(TAG, "onTaskRemoved — stopping timer as app was removed from recents")
         super.onTaskRemoved(rootIntent)
     }
 
