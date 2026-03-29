@@ -236,6 +236,12 @@ class OfflineTimerService {
           skippedFaceVerification: isManualRestartInSameLecture
         });
 
+        // Step 4: Register check-in on server (creates PeriodAttendance { verificationType: 'initial' })
+        // This is required so that offline-sync doesn't get 403 "No verified check-in for today"
+        if (!isManualRestartInSameLecture) {
+          await this.registerCheckIn(lectureInfo, bssidCheck.currentBSSID, faceVerificationResult);
+        }
+
         // Try to sync with server
         await this.syncToServer();
 
@@ -366,6 +372,62 @@ class OfflineTimerService {
         success: false,
         error: `Failed to fetch face data: ${error.message}`
       };
+    }
+  }
+
+  /**
+   * Register check-in on server — creates PeriodAttendance { verificationType: 'initial' }
+   * Without this, offline-sync returns 403 "No verified check-in for today"
+   */
+  async registerCheckIn(lectureInfo, currentBSSID, faceVerificationResult) {
+    try {
+      console.log('📡 Registering check-in on server...');
+
+      // Get stored face embedding to send to server
+      const FaceVerification = require('./FaceVerification').default;
+      const SecureStorage = require('./SecureStorage').default;
+      const storedEmbedding = await SecureStorage.getFaceEmbedding();
+
+      if (!storedEmbedding || storedEmbedding.length !== 192) {
+        console.warn('⚠️ No stored face embedding — skipping server check-in');
+        return { success: false, error: 'No face embedding available' };
+      }
+
+      let timestamp;
+      try {
+        const { getServerTime } = require('./ServerTime');
+        timestamp = getServerTime().nowISO();
+      } catch {
+        timestamp = new Date().toISOString();
+      }
+
+      const response = await fetch(`${this.serverUrl}/api/attendance/check-in`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enrollmentNo: this.studentId,
+          faceEmbedding: storedEmbedding,
+          wifiBSSID: currentBSSID || '',
+          timestamp,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (response.ok && data.success) {
+        console.log('✅ Server check-in registered successfully');
+        return { success: true };
+      } else if (response.status === 409) {
+        // Already checked in today — that's fine, sync will work
+        console.log('ℹ️ Already checked in today — sync will proceed normally');
+        return { success: true, alreadyCheckedIn: true };
+      } else {
+        console.warn(`⚠️ Server check-in failed (${response.status}): ${data.error || data.message}`);
+        return { success: false, error: data.error || data.message };
+      }
+    } catch (error) {
+      console.error('❌ Error registering check-in:', error.message);
+      return { success: false, error: error.message };
     }
   }
 

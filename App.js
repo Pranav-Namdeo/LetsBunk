@@ -215,7 +215,7 @@ export default function App() {
   const [selectedSemesterForTimetable] = useState(null);
 
   // Login states
-  const [showLogin, setShowLogin] = useState(true);
+  const [showLogin, setShowLogin] = useState(false);
   const [loginId, setLoginId] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -1865,7 +1865,11 @@ export default function App() {
           console.log('Error parsing cached user data:', parseError);
           // Clear corrupted data
           await AsyncStorage.multiRemove([USER_DATA_KEY, LOGIN_ID_KEY]);
+          setShowLogin(true);
         }
+      } else {
+        // No cached session — show login screen
+        setShowLogin(true);
       }
 
       // Load cached config
@@ -2996,25 +3000,19 @@ export default function App() {
           if (normalizedUser.semester) storageData.push([SEMESTER_KEY, normalizedUser.semester]);
           if (normalizedUser.branch) storageData.push([BRANCH_KEY, normalizedUser.branch]);
 
-          // Save face embedding + photo cache in parallel (non-blocking, after UI is shown)
+          // Save face embedding in parallel (non-blocking, after UI is shown)
           if (data.user.faceEmbedding && Array.isArray(data.user.faceEmbedding)) {
-            Promise.all([
-              SecureStorage.saveFaceEmbedding(data.user.faceEmbedding).then(success => {
-                if (success) SecureStorage.saveEnrollmentNumber(normalizedUser.enrollmentNo);
-              }),
-              normalizedUser.photoUrl
-                ? cacheProfilePhoto(normalizedUser.photoUrl, normalizedUser._id).then(p => { if (p) setPhotoCached(true); })
-                : Promise.resolve()
-            ]).catch(() => {});
-          } else if (normalizedUser.photoUrl) {
-            cacheProfilePhoto(normalizedUser.photoUrl, normalizedUser._id)
-              .then(p => { if (p) setPhotoCached(true); })
+            SecureStorage.saveFaceEmbedding(data.user.faceEmbedding)
+              .then(success => { if (success) SecureStorage.saveEnrollmentNumber(normalizedUser.enrollmentNo); })
               .catch(() => {});
           }
         } else if (data.user.role === 'teacher') {
           // Don't set default semester/branch for teachers - let current class detection handle it
           fetchStudents();
         }
+
+        // Save session to AsyncStorage so it persists across app restarts
+        AsyncStorage.multiSet(storageData).catch(err => console.warn('⚠️ Failed to save session:', err));
       } else {
         // Server returned an error message
         setLoginError(data.message || 'Login failed');
@@ -3131,7 +3129,7 @@ export default function App() {
   };
 
   // Loading Screen
-  if (!splashDone) {
+  if (!splashDone || isInitializing) {
     return (
       <SplashScreenView onDone={() => setSplashDone(true)} />
     );
