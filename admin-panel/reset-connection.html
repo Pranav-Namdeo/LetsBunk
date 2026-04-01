@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Reset Admin Panel Connection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: #1a1a2e;
+            color: white;
+        }
+        .container {
+            text-align: center;
+            padding: 40px;
+            background: #16213e;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        button {
+            padding: 15px 30px;
+            font-size: 16px;
+            background: #00d9ff;
+            color: #1a1a2e;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 10px;
+        }
+        button:hover {
+            background: #00b8d4;
+        }
+        .status {
+            margin-top: 20px;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .success {
+            background: #4caf50;
+        }
+        .error {
+            background: #f44336;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔧 Admin Panel Connection Reset</h1>
+        <p>Current Server URL: <span id="currentUrl">Loading...</span></p>
+        <button onclick="resetToLocalhost()">Reset to Localhost</button>
+        <button onclick="clearAll()">Clear All Settings</button>
+        <button onclick="testConnection()">Test Connection</button>
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // Display current URL
+        const DEFAULT_SERVER_URL = 'https://letsbunk-server.azurewebsites.net';
+        const currentUrl = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL + ' (default)';
+        document.getElementById('currentUrl').textContent = currentUrl;
+
+        function resetToLocalhost() {
+            localStorage.setItem('serverUrl', DEFAULT_SERVER_URL);
+            showStatus('✅ Server URL reset to ' + DEFAULT_SERVER_URL, 'success');
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        }
+
+        function clearAll() {
+            localStorage.clear();
+            showStatus('✅ All settings cleared. Reloading...', 'success');
+            setTimeout(() => {
+                window.location.reload();
+            }, 1500);
+        }
+
+        async function testConnection() {
+            const serverUrl = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
+            showStatus('🔄 Testing connection to ' + serverUrl + '...', '');
+            
+            try {
+                const response = await fetch(serverUrl + '/api/health');
+                const data = await response.json();
+                
+                if (response.ok) {
+                    showStatus('✅ Connection successful! Server is running.', 'success');
+                } else {
+                    showStatus('❌ Server responded with error: ' + response.status, 'error');
+                }
+            } catch (error) {
+                showStatus('❌ Connection failed: ' + error.message, 'error');
+            }
+        }
+
+        function showStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = 'status ' + type;
+        }
+
+        // Auto-test on load
+        setTimeout(testConnection, 500);
+    </script>
+</body>
+</html>

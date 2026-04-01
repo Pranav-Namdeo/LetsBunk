@@ -1,0 +1,54 @@
+{
+  "appId": "com.letsbunk.admin",
+  "productName": "LetsBunk Admin",
+  "copyright": "Copyright © 2025 LetsBunk",
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": ["x64"]
+      }
+    ],
+    "publisherName": "LetsBunk",
+    "verifyUpdateCodeSignature": false,
+    "requestedExecutionLevel": "asInvoker"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowElevation": true,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "LetsBunk Admin",
+    "license": "LICENSE.txt",
+    "artifactName": "${productName} Setup ${version}.${ext}",
+    "deleteAppDataOnUninstall": false,
+    "displayLanguageSelector": false,
+    "runAfterFinish": true,
+    "menuCategory": "Education",
+    "include": "installer.nsh",
+    "warningsAsErrors": false,
+    "perMachine": false,
+    "packElevateHelper": true
+  },
+  "directories": {
+    "output": "dist",
+    "buildResources": "."
+  },
+  "files": [
+    "**/*",
+    "!node_modules/**/*",
+    "node_modules/electron-squirrel-startup/**/*",
+    "!*.md",
+    "!*.bat",
+    "!*.ps1",
+    "!dist/**/*",
+    "!.git/**/*"
+  ],
+  "extraResources": [
+    {
+      "from": "LICENSE.txt",
+      "to": "LICENSE.txt"
+    }
+  ]
+}
