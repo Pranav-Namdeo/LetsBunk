@@ -742,8 +742,8 @@ app.get('/api/teacher/current-lecture/:teacherId', async (req, res) => {
     try {
         const { teacherId } = req.params;
 
-        // Get current time
-        const now = new Date();
+        // Get current time in IST
+        const now = nowIST();
         const currentDay = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
         const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
@@ -1233,7 +1233,7 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
         const { teacherId } = req.params;
 
         // Get current day and time in IST (server clock)
-        const now = new Date();
+        const now = nowIST(); // IST time for period matching
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const currentDay = days[now.getDay()];
         const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
@@ -1440,6 +1440,13 @@ function timeToMinutes(timeStr) {
     return hours * 60 + minutes;
 }
 
+// Helper: get current IST time (works on both Azure/IST and Render/UTC servers)
+function nowIST() {
+    const now = new Date();
+    // IST = UTC + 5:30
+    return new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+}
+
 // Helper function to create default timetable
 function createDefaultTimetable(semester, branch) {
     const periods = [];
@@ -1551,9 +1558,8 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
 // clientTimestamp param kept for API compat but ignored.
 async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
     try {
-        const now = new Date(); // server clock = IST on this Azure instance
-        const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDay  = days[now.getDay()];
+        const now = nowIST(); // IST time for period matching
+        const currentDay  = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
         const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
 
         const timetable = await Timetable.findOne({ semester, branch });
@@ -2157,8 +2163,8 @@ app.post('/api/attendance/check-in', checkInLimiter, async (req, res) => {
         const markedPeriods = [];
         const missedPeriods = [];
         const checkInTime = new Date(timestamp);
-        // Use server clock (IST) for period matching — period times are stored in IST
-        const serverNow     = new Date();
+        // Use IST clock for period matching — period times are stored in IST
+        const serverNow     = nowIST();
         const serverMinutes = serverNow.getHours() * 60 + serverNow.getMinutes();
         const dbErrors = [];
 
@@ -3103,7 +3109,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         markingDate.setHours(0, 0, 0, 0); // Normalize to start of day
         
         // Validate period is not in the future
-        const now = new Date();
+        const now = nowIST(); // IST for period time comparison
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const markingDay = days[markingDate.getDay()];
         
@@ -3143,7 +3149,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         }
 
         // Check if marking future period
-        const periodInfo = timetable.periods[periodNumber - 1];
+        const periodInfo = timetable.periods.find(p => p.number === periodNumber) || timetable.periods[periodNumber - 1];
         if (periodInfo) {
             const periodEndTime = timeToMinutes(periodInfo.endTime);
             const currentTime = now.getHours() * 60 + now.getMinutes();
@@ -7295,7 +7301,7 @@ setInterval(() => { checkExpiredRandomRings(); }, 30000);
 cron.schedule('5 0 * * *', async () => {
     console.log('📅 [CRON] Snapshotting today\'s timetable into TimetableHistory...');
     try {
-        const now   = new Date();
+        const now   = nowIST();
         const today = new Date(now); today.setHours(0, 0, 0, 0);
         const days  = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
         const dayName = days[now.getDay()];

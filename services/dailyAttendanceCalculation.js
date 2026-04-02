@@ -23,8 +23,9 @@ async function calculateDailyAttendance(models) {
     console.log('='.repeat(60));
 
     try {
-        // Get today's date
-        const today = new Date();
+        // Get today's date in IST (Render server runs UTC)
+        const nowIst = new Date(new Date().getTime() + (5.5 * 60 * 60 * 1000));
+        const today = new Date(nowIst);
         today.setHours(0, 0, 0, 0);
         
         console.log(`📅 [DAILY-CALC] Calculating for date: ${today.toISOString()}`);
