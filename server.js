@@ -2841,31 +2841,74 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         }
 
         // 7b. Sync timer progress back into the current period's PeriodAttendance record
-        // so the daily cron sees up-to-date data even before lecture ends
+        // so the daily cron AND admin panel see up-to-date status on every poll
         try {
-            if (lecture && lecture.startTime && lecture.endTime) {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
 
-                // Identify which period this lecture maps to — use server clock (IST)
-                const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
-                if (currentLectureInfo) {
-                    const periodId = `P${currentLectureInfo.period}`;
-                    await PeriodAttendance.updateOne(
-                        {
-                            enrollmentNo: student.enrollmentNo,
-                            date: today,
-                            period: periodId
-                        },
-                        {
-                            $set: {
-                                timerSeconds: Math.floor(timerSeconds),
-                                updatedAt: new Date()
-                            }
-                        }
-                    );
-                    console.log(`📊 [OFFLINE-SYNC] Updated PeriodAttendance timer - Student: ${studentId}, Period: ${periodId}`);
+            // Identify which period is active right now — use server clock (IST)
+            const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
+            if (currentLectureInfo) {
+                const periodId = `P${currentLectureInfo.period}`;
+
+                // Compute live status for this period based on attended seconds vs period length
+                const periodTotalSeconds = currentLectureInfo.totalSeconds || 0;
+                let periodStatus = 'absent';
+                if (periodTotalSeconds > 0) {
+                    const pct = (Math.floor(timerSeconds) / periodTotalSeconds) * 100;
+                    if (pct >= ATTENDANCE_THRESHOLD) {
+                        periodStatus = 'present';
+                    } else if (Boolean(isRunning)) {
+                        periodStatus = 'absent'; // still attending — keep absent until threshold crossed
+                    }
+                } else if (Boolean(isRunning)) {
+                    periodStatus = 'absent';
                 }
+
+                await PeriodAttendance.updateOne(
+                    {
+                        enrollmentNo: student.enrollmentNo,
+                        date: today,
+                        period: periodId
+                    },
+                    {
+                        $set: {
+                            timerSeconds: Math.floor(timerSeconds),
+                            status: periodStatus,
+                            updatedAt: new Date()
+                        }
+                    }
+                );
+
+                // Also update the lectures array in AttendanceRecord so admin panel period balls reflect live status
+                await AttendanceRecord.updateOne(
+                    {
+                        $or: [{ enrollmentNo: student.enrollmentNo }, { studentId: student.enrollmentNo }],
+                        date: today,
+                        'lectures.period': periodId
+                    },
+                    {
+                        $set: {
+                            [`lectures.$.status`]: periodStatus,
+                            updatedAt: new Date()
+                        }
+                    }
+                );
+
+                console.log(`📊 [OFFLINE-SYNC] Updated PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Status: ${periodStatus}, Timer: ${Math.floor(timerSeconds)}s`);
+
+                // Broadcast period status update to admin panel via socket
+                io.emit('period_status_update', {
+                    enrollmentNo: student.enrollmentNo,
+                    studentName: student.name,
+                    period: periodId,
+                    status: periodStatus,
+                    timerSeconds: Math.floor(timerSeconds),
+                    periodTotalSeconds,
+                    semester: student.semester,
+                    branch: student.branch,
+                    date: today.toISOString()
+                });
             }
         } catch (periodError) {
             console.error(`❌ [OFFLINE-SYNC] Error updating PeriodAttendance:`, periodError);
@@ -2886,7 +2929,9 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             attendanceThreshold: ATTENDANCE_THRESHOLD,
             thresholdSeconds: lecture?.startTime && lecture?.endTime
                 ? Math.ceil((timeToMinutes(lecture.endTime) - timeToMinutes(lecture.startTime)) * 60 * ATTENDANCE_THRESHOLD / 100)
-                : null
+                : null,
+            // Current period info for the app to display time-remaining correctly
+            currentPeriodInfo: await getCurrentLectureInfo(student.semester, student.branch).catch(() => null)
         });
 
     } catch (error) {

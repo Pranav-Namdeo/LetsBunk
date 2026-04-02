@@ -791,10 +791,21 @@ export default function App() {
               
               switch (event.type) {
                 case 'timer_tick':
-                  setOfflineTimerState(prev => ({
-                    ...prev,
-                    timerSeconds: event.timerSeconds
-                  }));
+                  setOfflineTimerState(prev => {
+                    // Decrement remainingSeconds in currentPeriodInfo every tick
+                    let updatedPeriodInfo = prev.currentPeriodInfo;
+                    if (updatedPeriodInfo && updatedPeriodInfo.remainingSeconds > 0) {
+                      updatedPeriodInfo = {
+                        ...updatedPeriodInfo,
+                        remainingSeconds: Math.max(0, updatedPeriodInfo.remainingSeconds - 1)
+                      };
+                    }
+                    return {
+                      ...prev,
+                      timerSeconds: event.timerSeconds,
+                      currentPeriodInfo: updatedPeriodInfo
+                    };
+                  });
                   break;
                   
                 case 'timer_started':
@@ -906,7 +917,8 @@ export default function App() {
                     ...prev,
                     attendanceStatus: event.attendanceStatus,
                     thresholdSeconds: event.thresholdSeconds,
-                    attendanceThreshold: event.attendanceThreshold
+                    attendanceThreshold: event.attendanceThreshold,
+                    currentPeriodInfo: event.currentPeriodInfo
                   }));
                   break;
 
@@ -5096,7 +5108,7 @@ export default function App() {
                 🕐 Offline Timer System
               </Text>
 
-              {/* Timer Display */}
+              {/* Timer Display — shows countdown to period end */}
               <View style={{
                 backgroundColor: theme.background,
                 borderRadius: 15,
@@ -5106,25 +5118,97 @@ export default function App() {
                 borderWidth: 2,
                 borderColor: offlineTimerState.isRunning ? '#22c55e' : theme.border,
               }}>
-                <Text style={{
-                  fontSize: 48,
-                  fontWeight: 'bold',
-                  fontFamily: 'monospace',
-                  color: offlineTimerState.isRunning ? '#22c55e' : theme.text,
-                  textAlign: 'center',
-                }}>
-                  {Math.floor(offlineTimerState.timerSeconds / 3600).toString().padStart(2, '0')}:
-                  {Math.floor((offlineTimerState.timerSeconds % 3600) / 60).toString().padStart(2, '0')}:
-                  {(offlineTimerState.timerSeconds % 60).toString().padStart(2, '0')}
-                </Text>
-                <Text style={{
-                  fontSize: 12,
-                  color: theme.textSecondary,
-                  textAlign: 'center',
-                  marginTop: 5,
-                }}>
-                  {offlineTimerState.timerSeconds > 0 ? `${Math.floor(offlineTimerState.timerSeconds / 60)} minutes attended` : 'Ready to start'}
-                </Text>
+                {(() => {
+                  // Calculate time remaining in current period
+                  let remainingDisplay = null;
+                  let subLabel = null;
+                  let periodLabel = null;
+
+                  // Use server-provided period info (most accurate)
+                  const pInfo = offlineTimerState.currentPeriodInfo;
+                  if (pInfo && pInfo.remainingSeconds !== undefined) {
+                    const remaining = Math.max(0, pInfo.remainingSeconds);
+                    const rh = Math.floor(remaining / 3600);
+                    const rm = Math.floor((remaining % 3600) / 60);
+                    const rs = remaining % 60;
+                    remainingDisplay = `${rh.toString().padStart(2, '0')}:${rm.toString().padStart(2, '0')}:${rs.toString().padStart(2, '0')}`;
+                    subLabel = remaining > 0 ? `${Math.floor(remaining / 60)}m left in period` : 'Period ending';
+                    periodLabel = `P${pInfo.period} · ${pInfo.subject || ''}`;
+                  } else if (offlineTimerState.isRunning && offlineTimerState.currentLecture?.endTime) {
+                    // Fallback: compute from lecture endTime using server clock
+                    try {
+                      const toSec = (t) => {
+                        const [h, m] = t.split(':').map(Number);
+                        return h * 3600 + m * 60;
+                      };
+                      const endSec = toSec(offlineTimerState.currentLecture.endTime);
+                      let now;
+                      try { now = getServerTime().nowDate(); } catch { now = new Date(); }
+                      const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+                      const remaining = Math.max(0, endSec - nowSec);
+                      const rh = Math.floor(remaining / 3600);
+                      const rm = Math.floor((remaining % 3600) / 60);
+                      const rs = remaining % 60;
+                      remainingDisplay = `${rh.toString().padStart(2, '0')}:${rm.toString().padStart(2, '0')}:${rs.toString().padStart(2, '0')}`;
+                      subLabel = remaining > 0 ? `${Math.floor(remaining / 60)}m left in period` : 'Period ending';
+                    } catch { /* fall through */ }
+                  }
+                  // Fallback: show elapsed time
+                  if (!remainingDisplay) {
+                    const h = Math.floor(offlineTimerState.timerSeconds / 3600);
+                    const m = Math.floor((offlineTimerState.timerSeconds % 3600) / 60);
+                    const s = offlineTimerState.timerSeconds % 60;
+                    remainingDisplay = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+                    subLabel = offlineTimerState.timerSeconds > 0
+                      ? `${Math.floor(offlineTimerState.timerSeconds / 60)} min attended`
+                      : 'Ready to start';
+                  }
+                  return (
+                    <>
+                      {periodLabel && (
+                        <Text style={{
+                          fontSize: 13,
+                          fontWeight: 'bold',
+                          color: offlineTimerState.isRunning ? '#22c55e' : theme.textSecondary,
+                          textAlign: 'center',
+                          marginBottom: 6,
+                          letterSpacing: 0.5,
+                        }}>
+                          {periodLabel}
+                        </Text>
+                      )}
+                      <Text style={{
+                        fontSize: 48,
+                        fontWeight: 'bold',
+                        fontFamily: 'monospace',
+                        color: offlineTimerState.isRunning ? '#22c55e' : theme.text,
+                        textAlign: 'center',
+                      }}>
+                        {remainingDisplay}
+                      </Text>
+                      <Text style={{
+                        fontSize: 12,
+                        color: theme.textSecondary,
+                        textAlign: 'center',
+                        marginTop: 5,
+                      }}>
+                        {subLabel}
+                      </Text>
+                      {/* Also show attended time below */}
+                      {offlineTimerState.isRunning && offlineTimerState.timerSeconds > 0 && (
+                        <Text style={{
+                          fontSize: 11,
+                          color: theme.textSecondary,
+                          textAlign: 'center',
+                          marginTop: 3,
+                          opacity: 0.7,
+                        }}>
+                          {Math.floor(offlineTimerState.timerSeconds / 60)}m {offlineTimerState.timerSeconds % 60}s attended
+                        </Text>
+                      )}
+                    </>
+                  );
+                })()}
               </View>
 
               {/* Attendance Threshold Progress */}
