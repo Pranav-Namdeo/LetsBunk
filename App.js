@@ -679,7 +679,7 @@ export default function App() {
     };
 
     updateClassProgress();
-    const progressInterval = setInterval(updateClassProgress, 30000); // Check every 30s — period boxes removed, no per-second display needed
+    const progressInterval = setInterval(updateClassProgress, 1000); // Every second for real-time attended timer
 
     return () => clearInterval(progressInterval);
   }, [timetable, currentDay, selectedRole]);

@@ -2758,7 +2758,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 7. Update AttendanceRecord with class duration
         try {
-            const today = new Date();
+            const today = nowIST();
             today.setHours(0, 0, 0, 0);
 
             // Convert timer seconds to minutes for attendance record
@@ -2803,13 +2803,15 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 try {
                     const tt = await Timetable.findOne({ semester: student.semester, branch: student.branch });
                     if (tt) {
+                        const istNow = nowIST();
                         const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-                        const dayName = days[today.getDay()];
+                        const dayName = days[istNow.getDay()];
                         const sched   = tt.timetable[dayName] || [];
                         let classMinutes = 0;
                         for (let i = 0; i < sched.length; i++) {
                             const slot = sched[i];
-                            const pInfo = tt.periods[i];
+                            // Match by period number, not array index
+                            const pInfo = tt.periods.find(p => p.number === slot.period) || tt.periods[i];
                             if (!slot || slot.isBreak || !slot.subject || !pInfo) continue;
                             classMinutes += timeToMinutes(pInfo.endTime) - timeToMinutes(pInfo.startTime);
                         }
@@ -2837,6 +2839,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                         room:        p.room || '',
                         startTime:   '',
                         endTime:     '',
+                        status:      p.status || 'absent',   // ← CRITICAL: include status for calendar
                         studentCheckIn: p.checkInTime,
                         verifications: p.checkInTime ? [{ time: p.checkInTime, type: 'face', success: p.faceVerified, event: 'check_in' }] : []
                     }));
@@ -2853,7 +2856,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         // 7b. Sync timer progress back into the current period's PeriodAttendance record
         // so the daily cron AND admin panel see up-to-date status on every poll
         try {
-            const today = new Date();
+            const today = nowIST();
             today.setHours(0, 0, 0, 0);
 
             // Identify which period is active right now — use server clock (IST)
@@ -4067,9 +4070,9 @@ app.get('/api/attendance/date/:date', async (req, res) => {
                     subject: l.subject || '',
                     teacher: l.teacherName || l.teacher || '',
                     room:    l.room || '',
-                    status:  l.present ? 'present' : 'absent',
-                    verificationType: '',
-                    checkInTime: null
+                    status:  l.status || (l.present ? 'present' : 'absent'),
+                    verificationType: l.verificationType || '',
+                    checkInTime: l.studentCheckIn || null
                 }))
             };
         }
