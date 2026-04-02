@@ -5145,50 +5145,48 @@ export default function App() {
                 borderColor: offlineTimerState.isRunning ? '#22c55e' : theme.border,
               }}>
                 {(() => {
-                  // Calculate time remaining in current period
-                  let remainingDisplay = null;
-                  let subLabel = null;
+                  // Big display = elapsed time attended (primary)
+                  // Small label = time remaining in period (secondary)
+                  const pInfo = offlineTimerState.currentPeriodInfo;
+
+                  // Elapsed (attended) — always from timerSeconds
+                  const elapsed = offlineTimerState.timerSeconds || 0;
+                  const eh = Math.floor(elapsed / 3600);
+                  const em = Math.floor((elapsed % 3600) / 60);
+                  const es = elapsed % 60;
+                  const elapsedDisplay = `${eh.toString().padStart(2, '0')}:${em.toString().padStart(2, '0')}:${es.toString().padStart(2, '0')}`;
+
+                  // Remaining in current period
+                  let remainingLabel = null;
                   let periodLabel = null;
 
-                  // Use server-provided period info (most accurate)
-                  const pInfo = offlineTimerState.currentPeriodInfo;
                   if (pInfo && pInfo.remainingSeconds !== undefined) {
-                    const remaining = Math.max(0, pInfo.remainingSeconds);
-                    const rh = Math.floor(remaining / 3600);
-                    const rm = Math.floor((remaining % 3600) / 60);
-                    const rs = remaining % 60;
-                    remainingDisplay = `${rh.toString().padStart(2, '0')}:${rm.toString().padStart(2, '0')}:${rs.toString().padStart(2, '0')}`;
-                    subLabel = remaining > 0 ? `${Math.floor(remaining / 60)}m left in period` : 'Period ending';
+                    const rem = Math.max(0, pInfo.remainingSeconds);
+                    const rh = Math.floor(rem / 3600);
+                    const rm = Math.floor((rem % 3600) / 60);
+                    const rs = rem % 60;
+                    const remStr = rh > 0
+                      ? `${rh}h ${rm}m left in period`
+                      : `${rm}m ${rs}s left in period`;
+                    remainingLabel = rem > 0 ? remStr : 'Period ending';
                     periodLabel = `P${pInfo.period} · ${pInfo.subject || ''}`;
                   } else if (offlineTimerState.isRunning && offlineTimerState.currentLecture?.endTime) {
-                    // Fallback: compute from lecture endTime using server clock
                     try {
-                      const toSec = (t) => {
-                        const [h, m] = t.split(':').map(Number);
-                        return h * 3600 + m * 60;
-                      };
+                      const toSec = (t) => { const [h, m] = t.split(':').map(Number); return h * 3600 + m * 60; };
                       const endSec = toSec(offlineTimerState.currentLecture.endTime);
-                      let now;
-                      try { now = getServerTime().nowDate(); } catch { now = new Date(); }
+                      let now; try { now = getServerTime().nowDate(); } catch { now = new Date(); }
                       const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
-                      const remaining = Math.max(0, endSec - nowSec);
-                      const rh = Math.floor(remaining / 3600);
-                      const rm = Math.floor((remaining % 3600) / 60);
-                      const rs = remaining % 60;
-                      remainingDisplay = `${rh.toString().padStart(2, '0')}:${rm.toString().padStart(2, '0')}:${rs.toString().padStart(2, '0')}`;
-                      subLabel = remaining > 0 ? `${Math.floor(remaining / 60)}m left in period` : 'Period ending';
-                    } catch { /* fall through */ }
+                      const rem = Math.max(0, endSec - nowSec);
+                      const rh = Math.floor(rem / 3600);
+                      const rm2 = Math.floor((rem % 3600) / 60);
+                      remainingLabel = rem > 0 ? `${rh > 0 ? rh + 'h ' : ''}${rm2}m left in period` : 'Period ending';
+                    } catch { /* ignore */ }
                   }
-                  // Fallback: show elapsed time
-                  if (!remainingDisplay) {
-                    const h = Math.floor(offlineTimerState.timerSeconds / 3600);
-                    const m = Math.floor((offlineTimerState.timerSeconds % 3600) / 60);
-                    const s = offlineTimerState.timerSeconds % 60;
-                    remainingDisplay = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-                    subLabel = offlineTimerState.timerSeconds > 0
-                      ? `${Math.floor(offlineTimerState.timerSeconds / 60)} min attended`
-                      : 'Ready to start';
-                  }
+
+                  const subLabel = elapsed > 0
+                    ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s attended`
+                    : 'Ready to start';
+
                   return (
                     <>
                       {periodLabel && (
@@ -5203,6 +5201,7 @@ export default function App() {
                           {periodLabel}
                         </Text>
                       )}
+                      {/* BIG: elapsed time attended */}
                       <Text style={{
                         fontSize: 48,
                         fontWeight: 'bold',
@@ -5210,26 +5209,27 @@ export default function App() {
                         color: offlineTimerState.isRunning ? '#22c55e' : theme.text,
                         textAlign: 'center',
                       }}>
-                        {remainingDisplay}
+                        {elapsedDisplay}
                       </Text>
+                      {/* Small: attended label */}
                       <Text style={{
                         fontSize: 12,
                         color: theme.textSecondary,
                         textAlign: 'center',
-                        marginTop: 5,
+                        marginTop: 4,
                       }}>
                         {subLabel}
                       </Text>
-                      {/* Also show attended time below */}
-                      {offlineTimerState.isRunning && offlineTimerState.timerSeconds > 0 && (
+                      {/* Small: time remaining in period */}
+                      {remainingLabel && (
                         <Text style={{
                           fontSize: 11,
-                          color: theme.textSecondary,
+                          color: offlineTimerState.isRunning ? '#f59e0b' : theme.textSecondary,
                           textAlign: 'center',
                           marginTop: 3,
-                          opacity: 0.7,
+                          opacity: 0.85,
                         }}>
-                          {Math.floor(offlineTimerState.timerSeconds / 60)}m {offlineTimerState.timerSeconds % 60}s attended
+                          ⏱ {remainingLabel}
                         </Text>
                       )}
                     </>
@@ -5238,45 +5238,50 @@ export default function App() {
               </View>
 
               {/* Attendance Threshold Progress */}
-              {offlineTimerState.thresholdSeconds > 0 && (
-                <View style={{
-                  backgroundColor: theme.background,
-                  borderRadius: 10,
-                  padding: 12,
-                  marginBottom: 15,
-                }}>
-                  {(() => {
-                    const pct = Math.min(100, Math.round((offlineTimerState.timerSeconds / offlineTimerState.thresholdSeconds) * 100));
-                    const reached = offlineTimerState.attendanceStatus === 'present';
-                    const remaining = Math.max(0, offlineTimerState.thresholdSeconds - offlineTimerState.timerSeconds);
-                    return (
-                      <>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                          <Text style={{ fontSize: 12, color: theme.textSecondary }}>
-                            Attendance ({offlineTimerState.attendanceThreshold}% required)
-                          </Text>
-                          <Text style={{ fontSize: 12, fontWeight: 'bold', color: reached ? '#22c55e' : '#f59e0b' }}>
-                            {reached ? '✅ Present' : `${pct}%`}
-                          </Text>
-                        </View>
-                        <View style={{ height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: 'hidden' }}>
-                          <View style={{
-                            height: 8,
-                            width: `${pct}%`,
-                            backgroundColor: reached ? '#22c55e' : '#f59e0b',
-                            borderRadius: 4,
-                          }} />
-                        </View>
-                        {!reached && remaining > 0 && (
-                          <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 4, textAlign: 'center' }}>
-                            {Math.ceil(remaining / 60)} min more to mark present
-                          </Text>
-                        )}
-                      </>
-                    );
-                  })()}
-                </View>
-              )}
+              {(() => {
+                const pInfo = offlineTimerState.currentPeriodInfo;
+                // Use current period's total seconds for threshold, not full-day
+                const periodTotal = pInfo?.totalSeconds || offlineTimerState.thresholdSeconds || 0;
+                if (!periodTotal) return null;
+
+                const threshold = (offlineTimerState.attendanceThreshold || 75) / 100;
+                const neededSeconds = Math.ceil(periodTotal * threshold);
+                const attended = offlineTimerState.timerSeconds || 0;
+                const pct = Math.min(100, Math.round((attended / neededSeconds) * 100));
+                const reached = attended >= neededSeconds;
+                const remaining = Math.max(0, neededSeconds - attended);
+
+                return (
+                  <View style={{
+                    backgroundColor: theme.background,
+                    borderRadius: 10,
+                    padding: 12,
+                    marginBottom: 15,
+                  }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 12, color: theme.textSecondary }}>
+                        Attendance ({offlineTimerState.attendanceThreshold || 75}% required)
+                      </Text>
+                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: reached ? '#22c55e' : '#f59e0b' }}>
+                        {reached ? '✅ Present' : `${pct}%`}
+                      </Text>
+                    </View>
+                    <View style={{ height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: 'hidden' }}>
+                      <View style={{
+                        height: 8,
+                        width: `${pct}%`,
+                        backgroundColor: reached ? '#22c55e' : '#f59e0b',
+                        borderRadius: 4,
+                      }} />
+                    </View>
+                    {!reached && remaining > 0 && (
+                      <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 4, textAlign: 'center' }}>
+                        {Math.ceil(remaining / 60)} min more to mark present this period
+                      </Text>
+                    )}
+                  </View>
+                );
+              })()}
               <View style={{
                 backgroundColor: theme.background,
                 borderRadius: 10,
