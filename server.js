@@ -1232,11 +1232,11 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
     try {
         const { teacherId } = req.params;
 
-        // Get current day and time in UTC (critical for proper class detection)
+        // Get current day and time in IST (server clock)
         const now = new Date();
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDay = days[now.getUTCDay()];
-        const currentTime = now.getUTCHours() * 60 + now.getUTCMinutes(); // minutes since midnight (UTC)
+        const currentDay = days[now.getDay()];
+        const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
 
         console.log(`🔍 Finding current class for teacher: ${teacherId} at ${now.toLocaleTimeString()}`);
 
@@ -1565,7 +1565,9 @@ async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
         // Find the period whose window contains currentTime
         for (let i = 0; i < daySchedule.length; i++) {
             const period = daySchedule[i];
-            const periodInfo = timetable.periods[i];
+            // Match by period.period number first, fallback to array index
+            const periodInfo = timetable.periods.find(p => p.number === period.period)
+                || timetable.periods[i];
             if (!periodInfo || period.isBreak || !period.subject) continue;
 
             const periodStart = timeToMinutes(periodInfo.startTime);
@@ -1593,7 +1595,9 @@ async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
         let latestStarted = null;
         for (let i = 0; i < daySchedule.length; i++) {
             const period = daySchedule[i];
-            const periodInfo = timetable.periods[i];
+            // Match periodInfo by period.period number, not array index
+            const periodInfo = timetable.periods.find(p => p.number === period.period)
+                || timetable.periods[i];
             if (!periodInfo || period.isBreak || !period.subject) continue;
             const periodStart = timeToMinutes(periodInfo.startTime);
             if (periodStart <= currentTime) {

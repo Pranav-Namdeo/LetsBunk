@@ -581,8 +581,10 @@ export default function App() {
       let firstLectureStart = null;
       let lastLectureEnd = null;
       let currentLecture = null;
+      let currentPeriodNumber = null;
 
-      for (const slot of schedule) {
+      for (let slotIdx = 0; slotIdx < schedule.length; slotIdx++) {
+        const slot = schedule[slotIdx];
         if (slot.time && !slot.isBreak) {
           const [start, end] = slot.time.split('-').map(t => t.trim());
           const [startH, startM] = start.split(':').map(Number);
@@ -599,14 +601,18 @@ export default function App() {
             lastLectureEnd = endSeconds;
           }
 
-          // Check if we're currently in this lecture
-          if (currentTimeInSeconds >= startSeconds && currentTimeInSeconds <= endSeconds) {
+          // Check if we're currently in this lecture — use per-period start/end
+          if (currentTimeInSeconds >= startSeconds && currentTimeInSeconds < endSeconds) {
+            // period number: use slot.period if available, else slotIdx+1
+            const pNum = slot.period != null ? slot.period : (slotIdx + 1);
+            currentPeriodNumber = pNum;
             currentLecture = {
               subject: slot.subject,
               teacher: slot.teacher || slot.teacherName || 'Unknown',
               room: slot.room,
               startTime: start,
               endTime: end,
+              periodNumber: pNum,
             };
           }
         }
@@ -615,30 +621,38 @@ export default function App() {
       // Check if we're within the overall lecture period (first to last)
       if (firstLectureStart !== null && lastLectureEnd !== null) {
         if (currentTimeInSeconds >= firstLectureStart && currentTimeInSeconds <= lastLectureEnd) {
-          // We're within lecture hours (including breaks)
-          const elapsed = currentTimeInSeconds - firstLectureStart;
-          const total = lastLectureEnd - firstLectureStart;
-          const remaining = total - elapsed;
+          // elapsed/remaining relative to current period (not full day)
+          let periodElapsed = 0;
+          let periodRemaining = 0;
+          let periodTotal = 0;
 
-          // Convert first/last times to HH:MM format
-          const firstStartH = Math.floor(firstLectureStart / 3600);
-          const firstStartM = Math.floor((firstLectureStart % 3600) / 60);
-          const lastEndH = Math.floor(lastLectureEnd / 3600);
-          const lastEndM = Math.floor((lastLectureEnd % 3600) / 60);
+          if (currentLecture) {
+            const [sh, sm] = currentLecture.startTime.split(':').map(Number);
+            const [eh, em] = currentLecture.endTime.split(':').map(Number);
+            const pStart = sh * 3600 + sm * 60;
+            const pEnd = eh * 3600 + em * 60;
+            periodTotal = pEnd - pStart;
+            periodElapsed = Math.max(0, currentTimeInSeconds - pStart);
+            periodRemaining = Math.max(0, pEnd - currentTimeInSeconds);
+          }
 
           foundClass = {
             subject: currentLecture ? currentLecture.subject : 'Break Time',
             teacher: currentLecture ? currentLecture.teacher : '',
             room: currentLecture ? currentLecture.room : '',
-            startTime: `${firstStartH.toString().padStart(2, '0')}:${firstStartM.toString().padStart(2, '0')}`,
-            endTime: `${lastEndH.toString().padStart(2, '0')}:${lastEndM.toString().padStart(2, '0')}`,
-            currentLecture: currentLecture ? `${currentLecture.subject} (${currentLecture.startTime}-${currentLecture.endTime})` : 'Break',
-            elapsedMinutes: Math.floor(elapsed / 60),
-            remainingMinutes: Math.floor(remaining / 60),
-            remainingSeconds: remaining,
-            totalMinutes: Math.floor(total / 60),
-            elapsedSeconds: elapsed,
-            totalSeconds: total,
+            // Use current period's own start/end (not full-day range)
+            startTime: currentLecture ? currentLecture.startTime : '',
+            endTime: currentLecture ? currentLecture.endTime : '',
+            periodNumber: currentPeriodNumber,
+            currentLecture: currentLecture
+              ? `${currentLecture.subject} (${currentLecture.startTime}-${currentLecture.endTime})`
+              : 'Break',
+            elapsedMinutes: Math.floor(periodElapsed / 60),
+            remainingMinutes: Math.floor(periodRemaining / 60),
+            remainingSeconds: periodRemaining,
+            totalMinutes: Math.floor(periodTotal / 60),
+            elapsedSeconds: periodElapsed,
+            totalSeconds: periodTotal,
             isWithinLectureHours: true,
           };
         }
@@ -655,6 +669,7 @@ export default function App() {
           prev.currentLecture !== foundClass.currentLecture ||
           prev.startTime !== foundClass.startTime ||
           prev.endTime !== foundClass.endTime ||
+          prev.periodNumber !== foundClass.periodNumber ||
           prev.elapsedMinutes !== foundClass.elapsedMinutes
         ) {
           return foundClass;
@@ -1112,7 +1127,8 @@ export default function App() {
         teacher: currentClassInfo.teacher || 'Unknown',
         room: currentClassInfo.room || 'Unknown',
         startTime: currentClassInfo.startTime,
-        endTime: currentClassInfo.endTime
+        endTime: currentClassInfo.endTime,
+        period: currentClassInfo.periodNumber ? `P${currentClassInfo.periodNumber}` : undefined,
       };
       
       const result = await OfflineTimerService.startTimer(lectureInfo);
@@ -2142,14 +2158,24 @@ export default function App() {
       const dayName = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
       console.log(`🔍 Processing day: ${dayKey} → ${dayName}`);
       if (timetable.timetable[dayKey]) {
-        schedule[dayName] = timetable.timetable[dayKey].map(period => ({
-          subject: period.subject,
-          room: period.room,
-          time: timetable.periods && timetable.periods[period.period - 1]
-            ? `${timetable.periods[period.period - 1].startTime}-${timetable.periods[period.period - 1].endTime}`
-            : '',
-          isBreak: period.isBreak
-        }));
+        schedule[dayName] = timetable.timetable[dayKey].map((period, idx) => {
+          // Find period info by matching period.number, fallback to array index
+          let pInfo = null;
+          if (timetable.periods) {
+            pInfo = timetable.periods.find(p => p.number === period.period)
+              || timetable.periods[idx]
+              || null;
+          }
+          return {
+            subject: period.subject,
+            room: period.room,
+            period: period.period,  // preserve period number for detection
+            teacher: period.teacher,
+            teacherName: period.teacherName,
+            time: pInfo ? `${pInfo.startTime}-${pInfo.endTime}` : '',
+            isBreak: period.isBreak
+          };
+        });
         console.log(`✅ ${dayName} schedule created with ${schedule[dayName].length} periods`);
       }
     });

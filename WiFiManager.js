@@ -1,6 +1,7 @@
 import { NativeModules, PermissionsAndroid, Platform, Alert, Linking } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NativeWiFiService from './NativeWiFiService';
+import { getServerTime } from './ServerTime';
 
 // Use native Kotlin WiFi module instead of react-native-wifi-reborn
 console.log('📶 Using native Kotlin WiFi module for BSSID detection');
@@ -431,27 +432,26 @@ class WiFiManager {
    */
   getCurrentLectureRoom(timetable) {
     try {
-      const now = new Date();
+      const now = (() => { try { return getServerTime().nowDate(); } catch { return new Date(); } })();
       const currentDay = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
       const currentTime = now.getHours() * 60 + now.getMinutes(); // minutes since midnight
 
       const daySchedule = timetable.schedule?.[currentDay];
       if (!daySchedule || !timetable.periods) return null;
 
-      // Find current period
+      // Find current period — match by period.period number, not array index
       for (let i = 0; i < daySchedule.length; i++) {
         const period = daySchedule[i];
-        const periodInfo = timetable.periods[i];
+        if (period.isBreak || !period.time) continue;
 
-        if (!periodInfo || period.isBreak) continue;
-
-        const [startH, startM] = periodInfo.startTime.split(':').map(Number);
-        const [endH, endM] = periodInfo.endTime.split(':').map(Number);
+        const [timeStart, timeEnd] = period.time.split('-').map(t => t.trim());
+        const [startH, startM] = timeStart.split(':').map(Number);
+        const [endH, endM] = timeEnd.split(':').map(Number);
 
         const periodStart = startH * 60 + startM;
         const periodEnd = endH * 60 + endM;
 
-        if (currentTime >= periodStart && currentTime <= periodEnd) {
+        if (currentTime >= periodStart && currentTime < periodEnd) {
           return period.room;
         }
       }
