@@ -2011,7 +2011,6 @@ let clipboardData = null;
 let undoStack = [];
 let redoStack = [];
 let timetableHistory = [];
-let autoSaveTimeout = null;
 
 // Auto-load timetable when semester or course changes
 async function autoLoadTimetable() {
@@ -2263,7 +2262,8 @@ function renderAdvancedTimetableEditor(timetable) {
 
     // Quick Actions Bar
     html += '<div class="quick-actions-bar">';
-    html += '<div style="color: var(--text-secondary); font-size: 14px; padding: 8px;">💾 Auto-saving enabled</div>';
+    html += '<div style="color: var(--text-secondary); font-size: 14px; padding: 8px;" id="timetable-save-status">✏️ Unsaved changes</div>';
+    html += '<button class="btn btn-primary" id="save-timetable-btn" onclick="saveAndRefreshSchedule()" style="background:#2563eb;border-color:#2563eb;font-weight:700;padding:8px 22px;">💾 Save</button>';
     html += '<button class="btn btn-success" onclick="autoFillTimetable()">🤖 Auto Fill</button>';
     html += '<button class="btn btn-warning" onclick="validateTimetable()">✓ Validate</button>';
     html += '<button class="btn btn-secondary" onclick="printTimetable()">🖨️ Print</button>';
@@ -2638,17 +2638,18 @@ function toggleBreakPeriod(event, dayIdx, periodIdx) {
     console.log(`Period ${periodIdx + 1} on ${dayKey} ${period.isBreak ? 'marked as break' : 'reverted to normal'}`);
 }
 
-// Auto-save function (silent, debounced)
+// Mark unsaved changes (replaces auto-save)
 function triggerAutoSave() {
-    // Clear existing timeout
-    if (autoSaveTimeout) {
-        clearTimeout(autoSaveTimeout);
+    const status = document.getElementById('timetable-save-status');
+    if (status) {
+        status.textContent = '✏️ Unsaved changes';
+        status.style.color = '#f59e0b';
     }
-
-    // Set new timeout for 1 second after last change
-    autoSaveTimeout = setTimeout(() => {
-        saveTimetable(true); // true = silent mode
-    }, 1000);
+    const btn = document.getElementById('save-timetable-btn');
+    if (btn) {
+        btn.style.background = '#f59e0b';
+        btn.style.borderColor = '#f59e0b';
+    }
 }
 
 async function saveTimetable(silent = false) {
@@ -2674,6 +2675,73 @@ async function saveTimetable(silent = false) {
         if (!silent) {
             showNotification('Error: ' + error.message, 'error');
         }
+    }
+}
+
+// Save timetable + trigger offline BSSID schedule refresh for all students
+async function saveAndRefreshSchedule() {
+    if (!currentTimetable) return;
+
+    const btn = document.getElementById('save-timetable-btn');
+    const status = document.getElementById('timetable-save-status');
+
+    // Show saving state
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Saving...'; }
+    if (status) { status.textContent = '⏳ Saving...'; status.style.color = 'var(--text-secondary)'; }
+
+    try {
+        // Step 1: Save timetable
+        const saveResp = await fetch(`${SERVER_URL}/api/timetable`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(currentTimetable)
+        });
+
+        if (!saveResp.ok) {
+            throw new Error('Failed to save timetable');
+        }
+
+        // Step 2: Trigger BSSID schedule broadcast so students' offline cache updates
+        // The server does this automatically on PUT /api/timetable/:semester/:branch
+        // For POST we call the PUT endpoint to ensure broadcast fires
+        const semester = currentTimetable.semester;
+        const branch = currentTimetable.branch;
+        if (semester && branch) {
+            await fetch(`${SERVER_URL}/api/timetable/${semester}/${encodeURIComponent(branch)}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(currentTimetable)
+            });
+        }
+
+        // Update UI to saved state
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '✅ Saved';
+            btn.style.background = '#22c55e';
+            btn.style.borderColor = '#22c55e';
+            setTimeout(() => {
+                btn.textContent = '💾 Save';
+                btn.style.background = '#2563eb';
+                btn.style.borderColor = '#2563eb';
+            }, 2000);
+        }
+        if (status) { status.textContent = '✅ Saved & schedule refreshed'; status.style.color = '#22c55e'; }
+        showNotification('Timetable saved & offline schedule updated for all students', 'success');
+
+    } catch (error) {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = '💾 Save';
+            btn.style.background = '#ef4444';
+            btn.style.borderColor = '#ef4444';
+            setTimeout(() => {
+                btn.style.background = '#2563eb';
+                btn.style.borderColor = '#2563eb';
+            }, 2000);
+        }
+        if (status) { status.textContent = '❌ Save failed'; status.style.color = '#ef4444'; }
+        showNotification('Error: ' + error.message, 'error');
     }
 }
 
