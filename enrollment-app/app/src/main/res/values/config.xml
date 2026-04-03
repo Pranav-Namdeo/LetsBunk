@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Server Configuration -->
+    <!-- Local LetsBunk Server (Computer IP for Physical Device) -->
+    <string name="server_base_url">https://letsbunk-server.azurewebsites.net/api</string>
+</resources>
