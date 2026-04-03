@@ -564,16 +564,34 @@ export default function TimetableScreen({
   const getCurrentPeriod = () => {
     try {
       const now = getServerTime().nowDate();
-      const hour = now.getHours();
-      if (hour >= 9 && hour < 17) {
-        return hour - 8; // Period 1 starts at 9 AM
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+      if (!timetable || !timetable.periods) return null;
+
+      for (const p of timetable.periods) {
+        const [sh, sm] = p.startTime.split(':').map(Number);
+        const [eh, em] = p.endTime.split(':').map(Number);
+        const start = sh * 60 + sm;
+        const end = eh * 60 + em;
+        if (currentMinutes >= start && currentMinutes < end) {
+          return p.number;
+        }
       }
       return null;
     } catch {
       const now = new Date();
-      const hour = now.getHours();
-      if (hour >= 9 && hour < 17) {
-        return hour - 8;
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+
+      if (!timetable || !timetable.periods) return null;
+
+      for (const p of timetable.periods) {
+        const [sh, sm] = p.startTime.split(':').map(Number);
+        const [eh, em] = p.endTime.split(':').map(Number);
+        const start = sh * 60 + sm;
+        const end = eh * 60 + em;
+        if (currentMinutes >= start && currentMinutes < end) {
+          return p.number;
+        }
       }
       return null;
     }

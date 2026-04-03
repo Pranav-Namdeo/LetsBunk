@@ -1051,14 +1051,14 @@ class OfflineTimerService {
   }
 
   /**
-   * Setup sync interval (every 2 minutes)
+   * Setup sync interval (every 30 seconds for live period ball updates)
    */
   setupSyncInterval() {
     this.syncInterval = setInterval(async () => {
       if (this.isRunning) {
         await this.syncToServer();
       }
-    }, 120000); // 2 minutes
+    }, 30000); // 30 seconds — keeps period balls in admin panel live
   }
 
   /**
@@ -1323,6 +1323,10 @@ class OfflineTimerService {
         if (result.attendanceThreshold) {
           this.attendanceThreshold = result.attendanceThreshold;
         }
+        // Store current period info from server (period ID, remainingSeconds, etc.)
+        if (result.currentPeriodInfo) {
+          this.currentPeriodInfo = result.currentPeriodInfo;
+        }
         
         // Check for missed random rings
         if (result.missedRandomRing) {
@@ -1347,7 +1351,8 @@ class OfflineTimerService {
           lastSyncTime: this.lastSyncTime,
           attendanceStatus: this.attendanceStatus || 'absent',
           thresholdSeconds: this.thresholdSeconds || null,
-          attendanceThreshold: this.attendanceThreshold || 75
+          attendanceThreshold: this.attendanceThreshold || 75,
+          currentPeriodInfo: this.currentPeriodInfo || null
         });
         
         // Also notify connectivity change to update UI
@@ -1589,6 +1594,8 @@ class OfflineTimerService {
       attendanceStatus: this.attendanceStatus || 'absent',
       thresholdSeconds: this.thresholdSeconds || null,
       attendanceThreshold: this.attendanceThreshold || 75,
+      // Current period info from server (period ID, remainingSeconds, totalSeconds)
+      currentPeriodInfo: this.currentPeriodInfo || null,
       // Disconnection state
       pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
       wasRunningBeforeDisconnect: this.wasRunningBeforeDisconnect,

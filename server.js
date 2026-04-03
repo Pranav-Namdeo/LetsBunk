@@ -742,8 +742,8 @@ app.get('/api/teacher/current-lecture/:teacherId', async (req, res) => {
     try {
         const { teacherId } = req.params;
 
-        // Get current time
-        const now = new Date();
+        // Get current time in IST
+        const now = nowIST();
         const currentDay = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
         const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
 
@@ -1232,11 +1232,11 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
     try {
         const { teacherId } = req.params;
 
-        // Get current day and time in UTC (critical for proper class detection)
-        const now = new Date();
+        // Get current day and time in IST (server clock)
+        const now = nowIST(); // IST time for period matching
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDay = days[now.getUTCDay()];
-        const currentTime = now.getUTCHours() * 60 + now.getUTCMinutes(); // minutes since midnight (UTC)
+        const currentDay = days[now.getDay()];
+        const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
 
         console.log(`🔍 Finding current class for teacher: ${teacherId} at ${now.toLocaleTimeString()}`);
 
@@ -1440,6 +1440,13 @@ function timeToMinutes(timeStr) {
     return hours * 60 + minutes;
 }
 
+// Helper: get current IST time (works on both Azure/IST and Render/UTC servers)
+function nowIST() {
+    const now = new Date();
+    // IST = UTC + 5:30
+    return new Date(now.getTime() + (5.5 * 60 * 60 * 1000));
+}
+
 // Helper function to create default timetable
 function createDefaultTimetable(semester, branch) {
     const periods = [];
@@ -1551,9 +1558,8 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
 // clientTimestamp param kept for API compat but ignored.
 async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
     try {
-        const now = new Date(); // server clock = IST on this Azure instance
-        const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDay  = days[now.getDay()];
+        const now = nowIST(); // IST time for period matching
+        const currentDay  = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
         const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
 
         const timetable = await Timetable.findOne({ semester, branch });
@@ -1565,7 +1571,9 @@ async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
         // Find the period whose window contains currentTime
         for (let i = 0; i < daySchedule.length; i++) {
             const period = daySchedule[i];
-            const periodInfo = timetable.periods[i];
+            // Match by period.period number first, fallback to array index
+            const periodInfo = timetable.periods.find(p => p.number === period.period)
+                || timetable.periods[i];
             if (!periodInfo || period.isBreak || !period.subject) continue;
 
             const periodStart = timeToMinutes(periodInfo.startTime);
@@ -1593,7 +1601,9 @@ async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
         let latestStarted = null;
         for (let i = 0; i < daySchedule.length; i++) {
             const period = daySchedule[i];
-            const periodInfo = timetable.periods[i];
+            // Match periodInfo by period.period number, not array index
+            const periodInfo = timetable.periods.find(p => p.number === period.period)
+                || timetable.periods[i];
             if (!periodInfo || period.isBreak || !period.subject) continue;
             const periodStart = timeToMinutes(periodInfo.startTime);
             if (periodStart <= currentTime) {
@@ -2153,8 +2163,8 @@ app.post('/api/attendance/check-in', checkInLimiter, async (req, res) => {
         const markedPeriods = [];
         const missedPeriods = [];
         const checkInTime = new Date(timestamp);
-        // Use server clock (IST) for period matching — period times are stored in IST
-        const serverNow     = new Date();
+        // Use IST clock for period matching — period times are stored in IST
+        const serverNow     = nowIST();
         const serverMinutes = serverNow.getHours() * 60 + serverNow.getMinutes();
         const dbErrors = [];
 
@@ -2748,7 +2758,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 7. Update AttendanceRecord with class duration
         try {
-            const today = new Date();
+            const today = nowIST();
             today.setHours(0, 0, 0, 0);
 
             // Convert timer seconds to minutes for attendance record
@@ -2793,13 +2803,15 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 try {
                     const tt = await Timetable.findOne({ semester: student.semester, branch: student.branch });
                     if (tt) {
+                        const istNow = nowIST();
                         const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-                        const dayName = days[today.getDay()];
+                        const dayName = days[istNow.getDay()];
                         const sched   = tt.timetable[dayName] || [];
                         let classMinutes = 0;
                         for (let i = 0; i < sched.length; i++) {
                             const slot = sched[i];
-                            const pInfo = tt.periods[i];
+                            // Match by period number, not array index
+                            const pInfo = tt.periods.find(p => p.number === slot.period) || tt.periods[i];
                             if (!slot || slot.isBreak || !slot.subject || !pInfo) continue;
                             classMinutes += timeToMinutes(pInfo.endTime) - timeToMinutes(pInfo.startTime);
                         }
@@ -2827,6 +2839,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                         room:        p.room || '',
                         startTime:   '',
                         endTime:     '',
+                        status:      p.status || 'absent',   // ← CRITICAL: include status for calendar
                         studentCheckIn: p.checkInTime,
                         verifications: p.checkInTime ? [{ time: p.checkInTime, type: 'face', success: p.faceVerified, event: 'check_in' }] : []
                     }));
@@ -2841,31 +2854,74 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         }
 
         // 7b. Sync timer progress back into the current period's PeriodAttendance record
-        // so the daily cron sees up-to-date data even before lecture ends
+        // so the daily cron AND admin panel see up-to-date status on every poll
         try {
-            if (lecture && lecture.startTime && lecture.endTime) {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
+            const today = nowIST();
+            today.setHours(0, 0, 0, 0);
 
-                // Identify which period this lecture maps to — use server clock (IST)
-                const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
-                if (currentLectureInfo) {
-                    const periodId = `P${currentLectureInfo.period}`;
-                    await PeriodAttendance.updateOne(
-                        {
-                            enrollmentNo: student.enrollmentNo,
-                            date: today,
-                            period: periodId
-                        },
-                        {
-                            $set: {
-                                timerSeconds: Math.floor(timerSeconds),
-                                updatedAt: new Date()
-                            }
-                        }
-                    );
-                    console.log(`📊 [OFFLINE-SYNC] Updated PeriodAttendance timer - Student: ${studentId}, Period: ${periodId}`);
+            // Identify which period is active right now — use server clock (IST)
+            const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
+            if (currentLectureInfo) {
+                const periodId = `P${currentLectureInfo.period}`;
+
+                // Compute live status for this period based on attended seconds vs period length
+                const periodTotalSeconds = currentLectureInfo.totalSeconds || 0;
+                let periodStatus = 'absent';
+                if (periodTotalSeconds > 0) {
+                    const pct = (Math.floor(timerSeconds) / periodTotalSeconds) * 100;
+                    if (pct >= ATTENDANCE_THRESHOLD) {
+                        periodStatus = 'present';
+                    } else if (Boolean(isRunning)) {
+                        periodStatus = 'absent'; // still attending — keep absent until threshold crossed
+                    }
+                } else if (Boolean(isRunning)) {
+                    periodStatus = 'absent';
                 }
+
+                await PeriodAttendance.updateOne(
+                    {
+                        enrollmentNo: student.enrollmentNo,
+                        date: today,
+                        period: periodId
+                    },
+                    {
+                        $set: {
+                            timerSeconds: Math.floor(timerSeconds),
+                            status: periodStatus,
+                            updatedAt: new Date()
+                        }
+                    }
+                );
+
+                // Also update the lectures array in AttendanceRecord so admin panel period balls reflect live status
+                await AttendanceRecord.updateOne(
+                    {
+                        $or: [{ enrollmentNo: student.enrollmentNo }, { studentId: student.enrollmentNo }],
+                        date: today,
+                        'lectures.period': periodId
+                    },
+                    {
+                        $set: {
+                            [`lectures.$.status`]: periodStatus,
+                            updatedAt: new Date()
+                        }
+                    }
+                );
+
+                console.log(`📊 [OFFLINE-SYNC] Updated PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Status: ${periodStatus}, Timer: ${Math.floor(timerSeconds)}s`);
+
+                // Broadcast period status update to admin panel via socket
+                io.emit('period_status_update', {
+                    enrollmentNo: student.enrollmentNo,
+                    studentName: student.name,
+                    period: periodId,
+                    status: periodStatus,
+                    timerSeconds: Math.floor(timerSeconds),
+                    periodTotalSeconds,
+                    semester: student.semester,
+                    branch: student.branch,
+                    date: today.toISOString()
+                });
             }
         } catch (periodError) {
             console.error(`❌ [OFFLINE-SYNC] Error updating PeriodAttendance:`, periodError);
@@ -2886,7 +2942,9 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             attendanceThreshold: ATTENDANCE_THRESHOLD,
             thresholdSeconds: lecture?.startTime && lecture?.endTime
                 ? Math.ceil((timeToMinutes(lecture.endTime) - timeToMinutes(lecture.startTime)) * 60 * ATTENDANCE_THRESHOLD / 100)
-                : null
+                : null,
+            // Current period info for the app to display time-remaining correctly
+            currentPeriodInfo: await getCurrentLectureInfo(student.semester, student.branch).catch(() => null)
         });
 
     } catch (error) {
@@ -3054,7 +3112,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         markingDate.setHours(0, 0, 0, 0); // Normalize to start of day
         
         // Validate period is not in the future
-        const now = new Date();
+        const now = nowIST(); // IST for period time comparison
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const markingDay = days[markingDate.getDay()];
         
@@ -3094,7 +3152,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         }
 
         // Check if marking future period
-        const periodInfo = timetable.periods[periodNumber - 1];
+        const periodInfo = timetable.periods.find(p => p.number === periodNumber) || timetable.periods[periodNumber - 1];
         if (periodInfo) {
             const periodEndTime = timeToMinutes(periodInfo.endTime);
             const currentTime = now.getHours() * 60 + now.getMinutes();
@@ -4012,9 +4070,9 @@ app.get('/api/attendance/date/:date', async (req, res) => {
                     subject: l.subject || '',
                     teacher: l.teacherName || l.teacher || '',
                     room:    l.room || '',
-                    status:  l.present ? 'present' : 'absent',
-                    verificationType: '',
-                    checkInTime: null
+                    status:  l.status || (l.present ? 'present' : 'absent'),
+                    verificationType: l.verificationType || '',
+                    checkInTime: l.studentCheckIn || null
                 }))
             };
         }
@@ -7246,7 +7304,7 @@ setInterval(() => { checkExpiredRandomRings(); }, 30000);
 cron.schedule('5 0 * * *', async () => {
     console.log('📅 [CRON] Snapshotting today\'s timetable into TimetableHistory...');
     try {
-        const now   = new Date();
+        const now   = nowIST();
         const today = new Date(now); today.setHours(0, 0, 0, 0);
         const days  = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
         const dayName = days[now.getDay()];

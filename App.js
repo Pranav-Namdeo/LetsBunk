@@ -581,8 +581,10 @@ export default function App() {
       let firstLectureStart = null;
       let lastLectureEnd = null;
       let currentLecture = null;
+      let currentPeriodNumber = null;
 
-      for (const slot of schedule) {
+      for (let slotIdx = 0; slotIdx < schedule.length; slotIdx++) {
+        const slot = schedule[slotIdx];
         if (slot.time && !slot.isBreak) {
           const [start, end] = slot.time.split('-').map(t => t.trim());
           const [startH, startM] = start.split(':').map(Number);
@@ -599,14 +601,18 @@ export default function App() {
             lastLectureEnd = endSeconds;
           }
 
-          // Check if we're currently in this lecture
-          if (currentTimeInSeconds >= startSeconds && currentTimeInSeconds <= endSeconds) {
+          // Check if we're currently in this lecture — use per-period start/end
+          if (currentTimeInSeconds >= startSeconds && currentTimeInSeconds < endSeconds) {
+            // period number: use slot.period if available, else slotIdx+1
+            const pNum = slot.period != null ? slot.period : (slotIdx + 1);
+            currentPeriodNumber = pNum;
             currentLecture = {
               subject: slot.subject,
               teacher: slot.teacher || slot.teacherName || 'Unknown',
               room: slot.room,
               startTime: start,
               endTime: end,
+              periodNumber: pNum,
             };
           }
         }
@@ -615,30 +621,38 @@ export default function App() {
       // Check if we're within the overall lecture period (first to last)
       if (firstLectureStart !== null && lastLectureEnd !== null) {
         if (currentTimeInSeconds >= firstLectureStart && currentTimeInSeconds <= lastLectureEnd) {
-          // We're within lecture hours (including breaks)
-          const elapsed = currentTimeInSeconds - firstLectureStart;
-          const total = lastLectureEnd - firstLectureStart;
-          const remaining = total - elapsed;
+          // elapsed/remaining relative to current period (not full day)
+          let periodElapsed = 0;
+          let periodRemaining = 0;
+          let periodTotal = 0;
 
-          // Convert first/last times to HH:MM format
-          const firstStartH = Math.floor(firstLectureStart / 3600);
-          const firstStartM = Math.floor((firstLectureStart % 3600) / 60);
-          const lastEndH = Math.floor(lastLectureEnd / 3600);
-          const lastEndM = Math.floor((lastLectureEnd % 3600) / 60);
+          if (currentLecture) {
+            const [sh, sm] = currentLecture.startTime.split(':').map(Number);
+            const [eh, em] = currentLecture.endTime.split(':').map(Number);
+            const pStart = sh * 3600 + sm * 60;
+            const pEnd = eh * 3600 + em * 60;
+            periodTotal = pEnd - pStart;
+            periodElapsed = Math.max(0, currentTimeInSeconds - pStart);
+            periodRemaining = Math.max(0, pEnd - currentTimeInSeconds);
+          }
 
           foundClass = {
             subject: currentLecture ? currentLecture.subject : 'Break Time',
             teacher: currentLecture ? currentLecture.teacher : '',
             room: currentLecture ? currentLecture.room : '',
-            startTime: `${firstStartH.toString().padStart(2, '0')}:${firstStartM.toString().padStart(2, '0')}`,
-            endTime: `${lastEndH.toString().padStart(2, '0')}:${lastEndM.toString().padStart(2, '0')}`,
-            currentLecture: currentLecture ? `${currentLecture.subject} (${currentLecture.startTime}-${currentLecture.endTime})` : 'Break',
-            elapsedMinutes: Math.floor(elapsed / 60),
-            remainingMinutes: Math.floor(remaining / 60),
-            remainingSeconds: remaining,
-            totalMinutes: Math.floor(total / 60),
-            elapsedSeconds: elapsed,
-            totalSeconds: total,
+            // Use current period's own start/end (not full-day range)
+            startTime: currentLecture ? currentLecture.startTime : '',
+            endTime: currentLecture ? currentLecture.endTime : '',
+            periodNumber: currentPeriodNumber,
+            currentLecture: currentLecture
+              ? `${currentLecture.subject} (${currentLecture.startTime}-${currentLecture.endTime})`
+              : 'Break',
+            elapsedMinutes: Math.floor(periodElapsed / 60),
+            remainingMinutes: Math.floor(periodRemaining / 60),
+            remainingSeconds: periodRemaining,
+            totalMinutes: Math.floor(periodTotal / 60),
+            elapsedSeconds: periodElapsed,
+            totalSeconds: periodTotal,
             isWithinLectureHours: true,
           };
         }
@@ -655,6 +669,7 @@ export default function App() {
           prev.currentLecture !== foundClass.currentLecture ||
           prev.startTime !== foundClass.startTime ||
           prev.endTime !== foundClass.endTime ||
+          prev.periodNumber !== foundClass.periodNumber ||
           prev.elapsedMinutes !== foundClass.elapsedMinutes
         ) {
           return foundClass;
@@ -664,7 +679,7 @@ export default function App() {
     };
 
     updateClassProgress();
-    const progressInterval = setInterval(updateClassProgress, 30000); // Check every 30s — period boxes removed, no per-second display needed
+    const progressInterval = setInterval(updateClassProgress, 1000); // Every second for real-time attended timer
 
     return () => clearInterval(progressInterval);
   }, [timetable, currentDay, selectedRole]);
@@ -791,10 +806,21 @@ export default function App() {
               
               switch (event.type) {
                 case 'timer_tick':
-                  setOfflineTimerState(prev => ({
-                    ...prev,
-                    timerSeconds: event.timerSeconds
-                  }));
+                  setOfflineTimerState(prev => {
+                    // Decrement remainingSeconds in currentPeriodInfo every tick
+                    let updatedPeriodInfo = prev.currentPeriodInfo;
+                    if (updatedPeriodInfo && updatedPeriodInfo.remainingSeconds > 0) {
+                      updatedPeriodInfo = {
+                        ...updatedPeriodInfo,
+                        remainingSeconds: Math.max(0, updatedPeriodInfo.remainingSeconds - 1)
+                      };
+                    }
+                    return {
+                      ...prev,
+                      timerSeconds: event.timerSeconds,
+                      currentPeriodInfo: updatedPeriodInfo
+                    };
+                  });
                   break;
                   
                 case 'timer_started':
@@ -906,7 +932,8 @@ export default function App() {
                     ...prev,
                     attendanceStatus: event.attendanceStatus,
                     thresholdSeconds: event.thresholdSeconds,
-                    attendanceThreshold: event.attendanceThreshold
+                    attendanceThreshold: event.attendanceThreshold,
+                    currentPeriodInfo: event.currentPeriodInfo
                   }));
                   break;
 
@@ -1100,7 +1127,8 @@ export default function App() {
         teacher: currentClassInfo.teacher || 'Unknown',
         room: currentClassInfo.room || 'Unknown',
         startTime: currentClassInfo.startTime,
-        endTime: currentClassInfo.endTime
+        endTime: currentClassInfo.endTime,
+        period: currentClassInfo.periodNumber ? `P${currentClassInfo.periodNumber}` : undefined,
       };
       
       const result = await OfflineTimerService.startTimer(lectureInfo);
@@ -2130,14 +2158,24 @@ export default function App() {
       const dayName = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
       console.log(`🔍 Processing day: ${dayKey} → ${dayName}`);
       if (timetable.timetable[dayKey]) {
-        schedule[dayName] = timetable.timetable[dayKey].map(period => ({
-          subject: period.subject,
-          room: period.room,
-          time: timetable.periods && timetable.periods[period.period - 1]
-            ? `${timetable.periods[period.period - 1].startTime}-${timetable.periods[period.period - 1].endTime}`
-            : '',
-          isBreak: period.isBreak
-        }));
+        schedule[dayName] = timetable.timetable[dayKey].map((period, idx) => {
+          // Find period info by matching period.number, fallback to array index
+          let pInfo = null;
+          if (timetable.periods) {
+            pInfo = timetable.periods.find(p => p.number === period.period)
+              || timetable.periods[idx]
+              || null;
+          }
+          return {
+            subject: period.subject,
+            room: period.room,
+            period: period.period,  // preserve period number for detection
+            teacher: period.teacher,
+            teacherName: period.teacherName,
+            time: pInfo ? `${pInfo.startTime}-${pInfo.endTime}` : '',
+            isBreak: period.isBreak
+          };
+        });
         console.log(`✅ ${dayName} schedule created with ${schedule[dayName].length} periods`);
       }
     });
@@ -5096,7 +5134,7 @@ export default function App() {
                 🕐 Offline Timer System
               </Text>
 
-              {/* Timer Display */}
+              {/* Timer Display — shows countdown to period end */}
               <View style={{
                 backgroundColor: theme.background,
                 borderRadius: 15,
@@ -5106,25 +5144,92 @@ export default function App() {
                 borderWidth: 2,
                 borderColor: offlineTimerState.isRunning ? '#22c55e' : theme.border,
               }}>
-                <Text style={{
-                  fontSize: 48,
-                  fontWeight: 'bold',
-                  fontFamily: 'monospace',
-                  color: offlineTimerState.isRunning ? '#22c55e' : theme.text,
-                  textAlign: 'center',
-                }}>
-                  {Math.floor(offlineTimerState.timerSeconds / 3600).toString().padStart(2, '0')}:
-                  {Math.floor((offlineTimerState.timerSeconds % 3600) / 60).toString().padStart(2, '0')}:
-                  {(offlineTimerState.timerSeconds % 60).toString().padStart(2, '0')}
-                </Text>
-                <Text style={{
-                  fontSize: 12,
-                  color: theme.textSecondary,
-                  textAlign: 'center',
-                  marginTop: 5,
-                }}>
-                  {offlineTimerState.timerSeconds > 0 ? `${Math.floor(offlineTimerState.timerSeconds / 60)} minutes attended` : 'Ready to start'}
-                </Text>
+                {(() => {
+                  // ── Attended time (BIG) ──────────────────────────────────
+                  const ah = Math.floor(offlineTimerState.timerSeconds / 3600);
+                  const am = Math.floor((offlineTimerState.timerSeconds % 3600) / 60);
+                  const as_ = offlineTimerState.timerSeconds % 60;
+                  const attendedDisplay = `${ah.toString().padStart(2, '0')}:${am.toString().padStart(2, '0')}:${as_.toString().padStart(2, '0')}`;
+
+                  // ── Time remaining in period (SMALL) ─────────────────────
+                  let remainingDisplay = null;
+                  let periodLabel = null;
+
+                  const pInfo = offlineTimerState.currentPeriodInfo;
+                  if (pInfo && pInfo.remainingSeconds !== undefined) {
+                    const remaining = Math.max(0, pInfo.remainingSeconds);
+                    const rm = Math.floor(remaining / 60);
+                    const rs = remaining % 60;
+                    remainingDisplay = remaining > 0
+                      ? `${rm}m ${rs}s left in period`
+                      : 'Period ending';
+                    periodLabel = `P${pInfo.period} · ${pInfo.subject || ''}`;
+                  } else if (offlineTimerState.isRunning && offlineTimerState.currentLecture?.endTime) {
+                    try {
+                      const toSec = (t) => { const [h, m] = t.split(':').map(Number); return h * 3600 + m * 60; };
+                      const endSec = toSec(offlineTimerState.currentLecture.endTime);
+                      let now;
+                      try { now = getServerTime().nowDate(); } catch { now = new Date(); }
+                      const nowSec = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+                      const remaining = Math.max(0, endSec - nowSec);
+                      const rm = Math.floor(remaining / 60);
+                      const rs = remaining % 60;
+                      remainingDisplay = remaining > 0 ? `${rm}m ${rs}s left in period` : 'Period ending';
+                    } catch { /* fall through */ }
+                  }
+
+                  return (
+                    <>
+                      {/* Period label */}
+                      {periodLabel && (
+                        <Text style={{
+                          fontSize: 13,
+                          fontWeight: 'bold',
+                          color: offlineTimerState.isRunning ? '#22c55e' : theme.textSecondary,
+                          textAlign: 'center',
+                          marginBottom: 4,
+                          letterSpacing: 0.5,
+                        }}>
+                          {periodLabel}
+                        </Text>
+                      )}
+
+                      {/* BIG — attended time */}
+                      <Text style={{
+                        fontSize: 52,
+                        fontWeight: 'bold',
+                        fontFamily: 'monospace',
+                        color: offlineTimerState.isRunning ? '#22c55e' : theme.text,
+                        textAlign: 'center',
+                        lineHeight: 58,
+                      }}>
+                        {attendedDisplay}
+                      </Text>
+                      <Text style={{
+                        fontSize: 11,
+                        color: theme.textSecondary,
+                        textAlign: 'center',
+                        marginTop: 2,
+                        marginBottom: 8,
+                      }}>
+                        attended
+                      </Text>
+
+                      {/* SMALL — time remaining in period */}
+                      {remainingDisplay && (
+                        <Text style={{
+                          fontSize: 14,
+                          fontWeight: '600',
+                          color: theme.textSecondary,
+                          textAlign: 'center',
+                          fontFamily: 'monospace',
+                        }}>
+                          {remainingDisplay}
+                        </Text>
+                      )}
+                    </>
+                  );
+                })()}
               </View>
 
               {/* Attendance Threshold Progress */}

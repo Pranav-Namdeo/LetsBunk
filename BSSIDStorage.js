@@ -1,5 +1,6 @@
 // BSSIDStorage.js - Secure storage for daily BSSID schedule in React Native
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getServerTime } from './ServerTime';
 
 const KEYS = {
   BSSID_SCHEDULE: '@letsbunk_bssid_schedule',
@@ -79,7 +80,7 @@ class BSSIDStorage {
         return null;
       }
 
-      const now = new Date();
+      const now = (() => { try { return getServerTime().nowDate(); } catch { return new Date(); } })();
       const currentTime = now.getHours() * 60 + now.getMinutes(); // Minutes since midnight
 
       // Find current period
