@@ -165,7 +165,7 @@ if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') 
     localStorage.removeItem('serverUrl');
 }
 
-const DEFAULT_SERVER_URL = 'https://letsbunk-server.azurewebsites.net';
+const DEFAULT_SERVER_URL = 'https://letsbunk-omqs.onrender.com';
 let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
 console.log('🌐 Admin Panel Server URL:', SERVER_URL);
@@ -2702,15 +2702,18 @@ async function saveAndRefreshSchedule() {
         }
 
         // Step 2: Trigger BSSID schedule broadcast so students' offline cache updates
-        // The server does this automatically on PUT /api/timetable/:semester/:branch
-        // For POST we call the PUT endpoint to ensure broadcast fires
+        // POST /api/timetable already calls broadcastBSSIDScheduleUpdate on the server.
+        // We also call PUT to ensure the broadcast fires with the latest saved data.
         const semester = currentTimetable.semester;
         const branch = currentTimetable.branch;
         if (semester && branch) {
             await fetch(`${SERVER_URL}/api/timetable/${semester}/${encodeURIComponent(branch)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(currentTimetable)
+                body: JSON.stringify({
+                    timetable: currentTimetable.timetable,
+                    periods: currentTimetable.periods
+                })
             });
         }
 

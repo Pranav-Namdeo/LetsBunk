@@ -1683,7 +1683,8 @@ export default function App() {
     socketRef.current.on('bssid-schedule-update', async (data) => {
       console.log('📡 BSSID schedule update received:', data);
       
-      if (selectedRole === 'student' && userData && data.enrollmentNo === userData.enrollmentNo) {
+      // Use ref so we always have the current studentId (avoids stale closure bug)
+      if (selectedRoleRef.current === 'student' && studentIdRef.current && data.enrollmentNo === studentIdRef.current) {
         console.log(`   Reason: ${data.reason}`);
         console.log(`   Date: ${data.date}`);
         console.log(`   Periods: ${data.schedule.length}`);
@@ -1693,6 +1694,10 @@ export default function App() {
         
         if (saved) {
           console.log('✅ BSSID schedule updated in cache');
+
+          // Immediately refresh offlinePeriod state so banner updates without waiting 60s
+          const updatedPeriod = await BSSIDStorage.getCurrentPeriodBSSID();
+          setOfflinePeriod(updatedPeriod);
           
           // Show notification to user
           if (data.reason === 'classroom_bssid_updated') {

@@ -683,9 +683,6 @@ app.post('/api/timetable', async (req, res) => {
         
         // Broadcast BSSID schedule update to affected students
         await broadcastBSSIDScheduleUpdate(semester, branch);
-        
-        // Broadcast BSSID schedule update to affected students
-        await broadcastBSSIDScheduleUpdate(semester, branch);
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
