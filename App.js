@@ -829,6 +829,14 @@ export default function App() {
                     isPaused: false,
                     currentLecture: null
                   }));
+                  // Alert if stopped because student left classroom while screen was off
+                  if (event.reason === 'wifi_left_classroom_background') {
+                    Alert.alert(
+                      '📶 Left Classroom',
+                      'Your attendance timer was stopped because you left the classroom WiFi network while the screen was off.',
+                      [{ text: 'OK' }]
+                    );
+                  }
                   break;
                   
                 case 'timer_paused':

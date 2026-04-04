@@ -774,12 +774,25 @@ class OfflineTimerService {
       this.timerInterval = null;
     }
 
-    // Start the native foreground service (WakeLock + Handler timer)
+    // Start the native foreground service (WakeLock + Handler timer + native BSSID check)
     if (TimerModule) {
       const subject = this.currentLecture?.subject || '';
-      TimerModule.startTimer(subject, this.timerSeconds).catch((e) =>
-        console.warn('⚠️ Native timer start failed:', e)
-      );
+      // Pass authorized BSSIDs as comma-separated string so native layer can
+      // validate WiFi every 60s even when screen is off
+      const bssidList = Array.isArray(this.authorizedBSSID)
+        ? this.authorizedBSSID.join(',')
+        : (this.authorizedBSSID || '');
+
+      if (TimerModule.startTimerWithBSSID) {
+        TimerModule.startTimerWithBSSID(subject, this.timerSeconds, bssidList).catch((e) =>
+          console.warn('⚠️ Native timer start failed:', e)
+        );
+      } else {
+        // Fallback to legacy method if module not updated yet
+        TimerModule.startTimer(subject, this.timerSeconds).catch((e) =>
+          console.warn('⚠️ Native timer start failed:', e)
+        );
+      }
     } else {
       console.warn('⚠️ TimerModule not available — falling back to JS timer');
       this._countingStartedAt = Date.now();
@@ -1411,12 +1424,36 @@ class OfflineTimerService {
       if (this.appState.match(/inactive|background/) && nextAppState === 'active') {
         // App came to foreground
         console.log('📱 App resumed from background');
-        
-        if (this.isRunning) {
-          // Sync elapsed seconds from native service immediately
+
+        if (this.isRunning || TimerService?.isRunning) {
+          // Step 1: Check if native service stopped the timer due to WiFi mismatch
           if (TimerModule) {
             try {
-              const { seconds } = await TimerModule.getElapsedSeconds();
+              const { seconds, isRunning: nativeRunning, stoppedDueToWifiInvalid } =
+                await TimerModule.getElapsedSeconds();
+
+              if (stoppedDueToWifiInvalid) {
+                // Native layer detected student left classroom while screen was off
+                console.warn('🚨 Native BSSID check stopped timer — student left classroom');
+                this.timerSeconds = Math.floor(seconds);
+                this.isRunning = false;
+                this.isPaused = false;
+                await this.saveState();
+                await this.syncToServer();
+                // Clear the flag so it doesn't fire again
+                TimerModule.clearWifiInvalidFlag().catch(() => {});
+                this.notifyListeners({
+                  type: 'timer_stopped',
+                  reason: 'wifi_left_classroom_background',
+                  finalSeconds: this.timerSeconds,
+                  canResume: false
+                });
+                this.backgroundStartTime = null;
+                this.appState = nextAppState;
+                return;
+              }
+
+              // Step 2: Native timer still running — sync elapsed seconds
               this.timerSeconds = Math.floor(seconds);
               console.log(`⏱️ Synced from native timer: ${this.timerSeconds}s`);
             } catch (e) {
@@ -1424,12 +1461,11 @@ class OfflineTimerService {
             }
           }
 
-          // Check if still connected to authorized WiFi using BSSIDStorage
+          // Step 3: Re-validate WiFi now that screen is on (APIs reliable again)
           const currentBSSID = await WiFiManager.getCurrentBSSID();
-          
+
           if (currentBSSID) {
             const validation = await BSSIDStorage.validateCurrentBSSID(currentBSSID);
-            
             if (validation.valid) {
               console.log('✅ Still in authorized WiFi - timer continued in background');
               await this.syncToServer();
@@ -1438,27 +1474,25 @@ class OfflineTimerService {
               await this.stopTimer('wifi_disconnected_background');
             }
           } else {
-            console.warn('⚠️ No WiFi connection - stopping timer');
+            console.warn('⚠️ No WiFi connection on foreground - stopping timer');
             await this.stopTimer('wifi_disconnected_background');
           }
         }
-        
+
         this.backgroundStartTime = null;
       } else if (nextAppState.match(/inactive|background/)) {
         // App went to background / screen off
-        console.log('📱 App going to background — native foreground service keeps timer alive');
-        
+        console.log('📱 App going to background — native foreground service keeps timer alive with BSSID checks');
+
         if (this.isRunning) {
-          // DO NOT check WiFi or stop timer here.
-          // The native TimerService holds a PARTIAL_WAKE_LOCK and will keep counting
-          // even with the screen off. WiFi APIs are unreliable when screen is off on
-          // OEM devices (MIUI, OneUI, etc.) and will falsely return null BSSID.
-          // BSSID validation happens again when the user returns to foreground.
+          // Native TimerService will check BSSID every 60s using Android WifiManager
+          // which works reliably in a foreground service even with screen off.
+          // JS-side WiFi APIs are unreliable when screen is off on OEM devices.
           this.backgroundStartTime = Date.now();
-          console.log('✅ Timer running in native service — screen-off safe');
+          console.log('✅ Timer running in native service — BSSID validated every 60s natively');
         }
       }
-      
+
       this.appState = nextAppState;
     });
   }
