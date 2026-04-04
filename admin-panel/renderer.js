@@ -3538,6 +3538,40 @@ async function editTeacher(id) {
         currentPhotoUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(teacher.name)}&background=7c3aed&color=fff&size=128`;
     }
 
+    // Load all subjects for multi-select
+    let allSubjects = [];
+    try {
+        const r = await calApiFetch(`${SERVER_URL}/api/subjects`);
+        if (r.success) allSubjects = r.subjects || [];
+    } catch (_) {}
+
+    // Existing subjects on this teacher (array or legacy single string)
+    const existingSubjects = Array.isArray(teacher.subjects) && teacher.subjects.length > 0
+        ? teacher.subjects
+        : (teacher.subject ? [teacher.subject] : []);
+
+    const subjectOptions = allSubjects.map(s => {
+        const selected = existingSubjects.includes(s.subjectName) ? 'selected' : '';
+        return `<option value="${s.subjectName}" ${selected}>${s.subjectName} (${s.branch} Sem ${s.semester})</option>`;
+    }).join('');
+
+    // Subjects that are in existingSubjects but NOT in allSubjects (manually entered)
+    const knownNames = allSubjects.map(s => s.subjectName);
+    const manualSubjects = existingSubjects.filter(s => !knownNames.includes(s)).join(', ');
+
+    const subjectsHtml = allSubjects.length > 0
+        ? `<select id="teacherSubjectsSelect" class="form-select" multiple size="5" style="height:auto">
+               ${subjectOptions}
+           </select>
+           <small style="color:var(--text-secondary);margin-top:4px;display:block">
+               Or type manually: <input type="text" id="teacherSubjectManual" class="form-input" style="margin-top:6px"
+               placeholder="e.g. Mathematics, Physics" value="${manualSubjects}">
+           </small>`
+        : `<input type="text" id="teacherSubjectManual" class="form-input"
+               placeholder="e.g., Data Structures, Mathematics"
+               value="${existingSubjects.join(', ')}" required>
+           <small style="color:var(--text-secondary)">No subjects configured yet — type manually (comma separated)</small>`;
+
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
         <h2>Edit Teacher</h2>
@@ -3565,12 +3599,10 @@ async function editTeacher(id) {
                 </select>
             </div>
             <div class="form-group">
-                <label>Subject *</label>
-                <input type="text" name="subject" class="form-input" value="${teacher.subject || ''}" required>
-            </div>
-            <div class="form-group">
-                <label>Semester</label>
-                <input type="text" name="semester" class="form-input" value="${teacher.semester || ''}">
+                <label>Subjects Taught *
+                    <small style="color:var(--text-secondary);font-weight:normal"> — hold Ctrl/Cmd to select multiple</small>
+                </label>
+                ${subjectsHtml}
             </div>
             <div class="form-group">
                 <label>Date of Birth *</label>
@@ -3621,6 +3653,21 @@ async function editTeacher(id) {
         const formData = new FormData(e.target);
         const teacherData = Object.fromEntries(formData);
         teacherData.canEditTimetable = formData.has('canEditTimetable');
+
+        // Collect subjects from multi-select + manual input
+        const selectEl = document.getElementById('teacherSubjectsSelect');
+        const manualEl = document.getElementById('teacherSubjectManual');
+        const selected = selectEl ? Array.from(selectEl.selectedOptions).map(o => o.value) : [];
+        const manual   = manualEl ? manualEl.value.split(',').map(s => s.trim()).filter(Boolean) : [];
+        const subjects = [...new Set([...selected, ...manual])];
+
+        if (subjects.length === 0) {
+            showNotification('Please select or enter at least one subject.', 'error');
+            return;
+        }
+
+        teacherData.subjects = subjects;
+        teacherData.subject  = subjects[0]; // keep legacy field
 
         // Remove password if empty
         if (!teacherData.password) {
