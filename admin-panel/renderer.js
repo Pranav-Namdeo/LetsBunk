@@ -7229,8 +7229,8 @@ async function loadAttendanceHistory() {
         // First, get the date range of available data
         await loadAttendanceDateRange();
 
-        // Get all students
-        const studentsResponse = await fetch(`${SERVER_URL}/api/students`);
+        // Get all students from student-management (has semester/branch fields)
+        const studentsResponse = await fetch(`${SERVER_URL}/api/student-management`);
         const studentsData = await studentsResponse.json();
 
         if (!studentsData.success) {
@@ -7431,10 +7431,10 @@ async function viewDetailedAttendance(enrollmentNo) {
     try {
         console.log(`📊 Loading attendance overview for ${enrollmentNo}...`);
 
-        // Get student info
-        const studentsResponse = await fetch(`${SERVER_URL}/api/students`);
+        // Get student info from student-management (has semester/branch)
+        const studentsResponse = await fetch(`${SERVER_URL}/api/student-management?enrollmentNo=${enrollmentNo}`);
         const studentsData = await studentsResponse.json();
-        const student = studentsData.students.find(s => s.enrollmentNo === enrollmentNo);
+        const student = studentsData.student || (studentsData.students || []).find(s => s.enrollmentNo === enrollmentNo);
 
         if (!student) {
             throw new Error('Student not found');
@@ -7564,10 +7564,10 @@ function renderStudentOverviewModal(student, summary, dates) {
             ${dates.map(d => {
         const date = new Date(d.date);
         const dateStr = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-        const attendedSec = Number(d.attended) || 0;
-        const totalSec    = Number(d.total)    || 0;
-        const attendedMin = Math.floor(attendedSec / 60);
-        const totalMin    = Math.floor(totalSec / 60);
+        const attendedSec = Number(d.attended) || 0;  // now in minutes
+        const totalSec    = Number(d.total)    || 0;  // now in minutes
+        const attendedMin = attendedSec;  // already minutes
+        const totalMin    = totalSec;     // already minutes
         const pct         = Number(d.percentage) || (d.status === 'present' ? 100 : 0);
         const timeStr     = totalMin > 0 ? `${attendedMin}/${totalMin} min` : (d.status === 'present' ? 'Present' : '—');
 
@@ -7612,8 +7612,8 @@ function renderDateDetailsModal(enrollmentNo, studentName, record) {
 
     const date = new Date(record.date);
     const dateStr = date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-    const attendedMin = Math.floor(record.totalAttended / 60);
-    const totalMin = Math.floor(record.totalClassTime / 60);
+    const attendedMin = Number(record.totalAttended) || 0;   // already minutes
+    const totalMin    = Number(record.totalClassTime) || 0;  // already minutes
 
     modalBody.innerHTML = `
         <div class="attendance-detail-header">

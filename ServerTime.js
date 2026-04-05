@@ -1,23 +1,38 @@
 /**
  * ServerTime - Secure time synchronization with server
- * Prevents time spoofing by using server time instead of device time
+ * Prevents time spoofing by using server time instead of device time.
+ *
+ * Anti-spoof strategy:
+ *   1. On sync: record lastServerTime (from server) + lastSyncBootMs (SystemClock.elapsedRealtime via TimerModule)
+ *   2. On now(): elapsed = currentBootMs - lastSyncBootMs  (boot-relative, cannot be spoofed)
+ *               serverNow = lastServerTime + elapsed
+ *   3. Falls back to Date.now() + offset only if native module unavailable
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NativeModules } from 'react-native';
 
-const SERVER_TIME_OFFSET_KEY = '@server_time_offset';
-const LAST_SYNC_TIME_KEY = '@last_sync_time';
+const { TimerModule } = NativeModules;
+
+const SERVER_TIME_OFFSET_KEY   = '@server_time_offset';
+const LAST_SYNC_TIME_KEY       = '@last_sync_time';
+const LAST_SERVER_TIME_KEY     = '@last_server_time';
+const LAST_SYNC_DEVICE_KEY     = '@last_sync_device_time';
+const LAST_SYNC_BOOT_MS_KEY    = '@last_sync_boot_ms';
 
 class ServerTime {
   constructor(socketUrl) {
     this.socketUrl = socketUrl;
-    this.serverTimeOffset = 0; // Difference between server and device time (for backward compatibility)
-    this.lastSyncTime = 0; // When we last synced (for storage)
-    this.lastServerTime = 0; // Last known server timestamp
-    this.lastSyncDeviceTime = 0; // Device time when we last synced
+    this.serverTimeOffset = 0;
+    this.lastSyncTime = 0;
+    this.lastServerTime = 0;
+    this.lastSyncDeviceTime = 0;
+    this.lastSyncBootMs = 0;   // boot-relative ms at last sync — spoof-proof anchor
+    this._cachedBootElapsedMs = 0; // updated every second via updateBootCache()
     this.syncInterval = null;
+    this.bootCacheInterval = null;
     this.isSynced = false;
-    this.deviceTimeManipulated = false; // Flag for time manipulation detection
+    this.deviceTimeManipulated = false;
   }
 
   /**
@@ -38,6 +53,12 @@ class ServerTime {
     this.syncInterval = setInterval(() => {
       this.syncTime();
     }, 5 * 60 * 1000);
+
+    // Update boot-elapsed cache every second so now() stays accurate
+    this.updateBootCache();
+    this.bootCacheInterval = setInterval(() => {
+      this.updateBootCache();
+    }, 1000);
   }
 
   /**
@@ -46,34 +67,22 @@ class ServerTime {
    */
   async loadOffsetFromStorage() {
     try {
-      const savedOffset = await AsyncStorage.getItem(SERVER_TIME_OFFSET_KEY);
-      const savedSyncTime = await AsyncStorage.getItem(LAST_SYNC_TIME_KEY);
+      const savedOffset      = await AsyncStorage.getItem(SERVER_TIME_OFFSET_KEY);
+      const savedSyncTime    = await AsyncStorage.getItem(LAST_SYNC_TIME_KEY);
+      const savedServerTime  = await AsyncStorage.getItem(LAST_SERVER_TIME_KEY);
+      const savedSyncDevice  = await AsyncStorage.getItem(LAST_SYNC_DEVICE_KEY);
+      const savedSyncBootMs  = await AsyncStorage.getItem(LAST_SYNC_BOOT_MS_KEY);
 
       if (savedOffset !== null) {
-        const offset = parseInt(savedOffset, 10);
-        this.lastSyncTime = savedSyncTime ? parseInt(savedSyncTime, 10) : 0;
+        this.serverTimeOffset   = parseInt(savedOffset, 10);
+        this.lastSyncTime       = savedSyncTime   ? parseInt(savedSyncTime, 10)   : 0;
+        this.lastServerTime     = savedServerTime ? parseInt(savedServerTime, 10) : 0;
+        this.lastSyncDeviceTime = savedSyncDevice ? parseInt(savedSyncDevice, 10) : 0;
+        this.lastSyncBootMs     = savedSyncBootMs ? parseInt(savedSyncBootMs, 10) : 0;
 
-        const timeSinceSync = Date.now() - this.lastSyncTime;
-        const hoursSinceSync = Math.floor(timeSinceSync / (1000 * 60 * 60));
-
-        // Accept any offset - the new method handles device time changes gracefully
-        this.serverTimeOffset = offset;
-
-        // Load the actual server time values
-        const savedServerTime = await AsyncStorage.getItem('@last_server_time');
-        const savedSyncDeviceTime = await AsyncStorage.getItem('@last_sync_device_time');
-
-        if (savedServerTime && savedSyncDeviceTime) {
-          this.lastServerTime = parseInt(savedServerTime, 10);
-          this.lastSyncDeviceTime = parseInt(savedSyncDeviceTime, 10);
-        }
-
+        const hoursSinceSync = Math.floor((Date.now() - this.lastSyncTime) / 3600000);
         console.log('📦 Loaded previous time offset from storage');
-        console.log(`   Offset: ${this.serverTimeOffset}ms`);
-        console.log(`   Last sync: ${hoursSinceSync} hours ago`);
-        console.log(`   Current time: ${new Date(this.now()).toISOString()}`);
-
-        // Mark as synced if offset was loaded (even if old)
+        console.log(`   Offset: ${this.serverTimeOffset}ms, Last sync: ${hoursSinceSync}h ago`);
         this.isSynced = true;
       }
     } catch (error) {
@@ -87,10 +96,11 @@ class ServerTime {
    */
   async saveOffsetToStorage() {
     try {
-      await AsyncStorage.setItem(SERVER_TIME_OFFSET_KEY, this.serverTimeOffset.toString());
-      await AsyncStorage.setItem(LAST_SYNC_TIME_KEY, this.lastSyncTime.toString());
-      await AsyncStorage.setItem('@last_server_time', this.lastServerTime.toString());
-      await AsyncStorage.setItem('@last_sync_device_time', this.lastSyncDeviceTime.toString());
+      await AsyncStorage.setItem(SERVER_TIME_OFFSET_KEY,  this.serverTimeOffset.toString());
+      await AsyncStorage.setItem(LAST_SYNC_TIME_KEY,      this.lastSyncTime.toString());
+      await AsyncStorage.setItem(LAST_SERVER_TIME_KEY,    this.lastServerTime.toString());
+      await AsyncStorage.setItem(LAST_SYNC_DEVICE_KEY,    this.lastSyncDeviceTime.toString());
+      await AsyncStorage.setItem(LAST_SYNC_BOOT_MS_KEY,   this.lastSyncBootMs.toString());
     } catch (error) {
       console.error('Error saving time offset:', error);
     }
@@ -118,43 +128,42 @@ class ServerTime {
       }
 
       if (samples.length > 0) {
-        // Use median offset to avoid outliers
         samples.sort((a, b) => a.offset - b.offset);
         const medianOffset = samples[Math.floor(samples.length / 2)].offset;
-
-        // Store previous offset for comparison
         const previousOffset = this.serverTimeOffset;
 
-        // No validation needed - we accept any offset now
-        // The new method uses server time + elapsed time, so device time doesn't matter
         this.deviceTimeManipulated = false;
         this.serverTimeOffset = medianOffset;
 
-        // Store the actual server time and when we got it
-        // This is the key to being independent of device time!
         const currentDeviceTime = Date.now();
-        this.lastServerTime = currentDeviceTime + medianOffset; // Actual server time
-        this.lastSyncDeviceTime = currentDeviceTime; // When we got it
-        this.lastSyncTime = currentDeviceTime; // For storage
-        this.isSynced = true;
+        this.lastServerTime     = currentDeviceTime + medianOffset; // actual server time
+        this.lastSyncDeviceTime = currentDeviceTime;
+        this.lastSyncTime       = currentDeviceTime;
 
-        // Save to storage for persistence
+        // ── Boot-relative anchor (spoof-proof) ────────────────────────────────
+        // Ask native layer for current boot-elapsed ms.
+        // If unavailable (e.g. iOS / web), fall back to device time (less secure).
+        try {
+          if (TimerModule && TimerModule.getBootElapsedMs) {
+            const { bootElapsedMs } = await TimerModule.getBootElapsedMs();
+            this.lastSyncBootMs = bootElapsedMs;
+            console.log(`   Boot-elapsed at sync: ${bootElapsedMs}ms`);
+          } else {
+            this.lastSyncBootMs = 0; // fallback — will use device time in now()
+          }
+        } catch (_) {
+          this.lastSyncBootMs = 0;
+        }
+
+        this.isSynced = true;
         await this.saveOffsetToStorage();
 
-        console.log('✅ Time synced with server');
+        console.log('✅ Time synced with server (boot-anchored)');
         console.log(`   Server time: ${new Date(this.lastServerTime).toISOString()}`);
-        console.log(`   Device time: ${new Date(currentDeviceTime).toISOString()}`);
-        console.log(`   Offset: ${medianOffset}ms (${Math.round(medianOffset / 1000)} seconds)`);
-        console.log(`   Previous offset: ${previousOffset}ms`);
-        console.log(`   Drift: ${Math.abs(medianOffset - previousOffset)}ms`);
-        console.log(`   💾 Time saved to storage`);
-
+        console.log(`   Offset: ${medianOffset}ms, Drift from prev: ${Math.abs(medianOffset - previousOffset)}ms`);
         return true;
       } else {
-        // No samples received, but keep previous offset
         console.warn('⚠️ Time sync failed, keeping previous offset');
-        console.log(`   Current offset: ${this.serverTimeOffset}ms`);
-        console.log(`   Continuing with: ${new Date(this.now()).toISOString()}`);
         return false;
       }
     } catch (error) {
@@ -217,24 +226,55 @@ class ServerTime {
   }
 
   /**
-   * Get current server time (in milliseconds)
-   * This is the secure time that should be used throughout the app
-   * 
-   * Uses server time as base + elapsed time since last sync
-   * This way device time changes don't affect the app
+   * Get current server time (in milliseconds).
+   *
+   * Priority:
+   *   1. Boot-elapsed (spoof-proof): lastServerTime + (currentBootMs - lastSyncBootMs)
+   *   2. Device-time fallback:       lastServerTime + (Date.now() - lastSyncDeviceTime)
+   *   3. No sync yet:                Date.now() + serverTimeOffset
    */
   now() {
-    if (!this.lastServerTime || !this.lastSyncDeviceTime) {
-      // No sync yet, return current estimate
+    if (!this.lastServerTime) {
+      // No server sync yet — use boot-elapsed + offset as best estimate
+      // Boot-elapsed is spoof-proof; offset defaults to 0 until first sync
+      if (this._cachedBootElapsedMs > 0) {
+        // We have a boot anchor but no server time yet — just return boot-relative ms
+        // (will be corrected on first sync)
+        return this._cachedBootElapsedMs + this.serverTimeOffset;
+      }
+      // Absolute last resort — native not available at all
       return Date.now() + this.serverTimeOffset;
     }
 
-    // Calculate elapsed time since last sync using device time
-    const elapsedSinceSync = Date.now() - this.lastSyncDeviceTime;
+    // ── Primary: boot-relative elapsed (cannot be spoofed) ───────────────────
+    if (this.lastSyncBootMs > 0 && TimerModule && TimerModule.getBootElapsedMs) {
+      try {
+        // Synchronous read from shared static field via a cached value
+        // We update _cachedBootElapsedMs every tick via updateBootCache()
+        if (this._cachedBootElapsedMs > 0) {
+          const elapsedSinceSync = this._cachedBootElapsedMs - this.lastSyncBootMs;
+          return this.lastServerTime + elapsedSinceSync;
+        }
+      } catch (_) {}
+    }
 
-    // Return: last known server time + elapsed time
-    // This way even if device time changes, we're still tracking from server time
+    // ── Fallback: device time elapsed (less secure but always available) ─────
+    const elapsedSinceSync = Date.now() - this.lastSyncDeviceTime;
     return this.lastServerTime + elapsedSinceSync;
+  }
+
+  /**
+   * Update the cached boot-elapsed ms from native.
+   * Call this periodically (e.g. every second) so now() stays accurate
+   * without making async calls.
+   */
+  async updateBootCache() {
+    try {
+      if (TimerModule && TimerModule.getBootElapsedMs) {
+        const { bootElapsedMs } = await TimerModule.getBootElapsedMs();
+        this._cachedBootElapsedMs = bootElapsedMs;
+      }
+    } catch (_) {}
   }
 
   /**
@@ -377,6 +417,10 @@ class ServerTime {
     if (this.syncInterval) {
       clearInterval(this.syncInterval);
       this.syncInterval = null;
+    }
+    if (this.bootCacheInterval) {
+      clearInterval(this.bootCacheInterval);
+      this.bootCacheInterval = null;
     }
   }
 }

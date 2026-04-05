@@ -1,12 +1,44 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView } from 'react-native';
-import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, NativeModules } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import WiFiManager from './WiFiManager';
 import NativeWiFiService from './NativeWiFiService';
 import BSSIDStorage from './BSSIDStorage';
 import { SERVER_BASE_URL } from './config';
+import { getServerTime } from './ServerTime';
 
-const { WifiModule } = NativeModules;
+const { WifiModule, TimerModule: _TestTimerModule } = NativeModules;
+
+// Boot-elapsed cache for spoof-proof timestamps in test results
+let _testBootCache = 0;
+let _testBootCacheAt = 0;
+async function _refreshTestBootCache() {
+  try {
+    if (_TestTimerModule && _TestTimerModule.getBootElapsedMs) {
+      const { bootElapsedMs } = await _TestTimerModule.getBootElapsedMs();
+      _testBootCache = bootElapsedMs;
+      _testBootCacheAt = Date.now();
+    }
+  } catch (_) {}
+}
+function _testGetNow() {
+  // 1. Server time (best)
+  try { return getServerTime().nowDate(); } catch (_) {}
+  // 2. Boot-elapsed
+  if (_testBootCache > 0) {
+    return new Date(_testBootCache + Math.max(0, Date.now() - _testBootCacheAt));
+  }
+  // 3. Device time fallback
+  return new Date();
+}
+function _testTimestamp() {
+  return _testGetNow().toLocaleTimeString();
+}
+function _testId() {
+  if (_testBootCache > 0) return _testBootCache + Math.max(0, Date.now() - _testBootCacheAt);
+  try { return getServerTime().now(); } catch (_) {}
+  return Date.now();
+}
 
 export default function TestBSSID({ theme }) {
   const [testResults, setTestResults] = useState([]);
@@ -16,9 +48,10 @@ export default function TestBSSID({ theme }) {
   const [isMonitoring, setIsMonitoring] = useState(false);
 
   const addResult = (test, result, success = true) => {
-    const timestamp = new Date().toLocaleTimeString();
+    _refreshTestBootCache(); // keep cache warm
+    const timestamp = _testTimestamp();
     setTestResults(prev => [...prev, {
-      id: Date.now(),
+      id: _testId(),
       test,
       result,
       success,

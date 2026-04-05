@@ -6363,6 +6363,17 @@ app.delete('/api/teachers/:id', async (req, res) => {
 // ATTENDANCE QUERY ENDPOINTS (Teacher Views)
 // ============================================
 
+// Helper: format seconds to "Xh Ym Zs" string
+function formatSecondsToTimeStr(seconds) {
+    const s = Math.floor(Number(seconds) || 0);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (h > 0) return `${h}h ${m}m ${sec}s`;
+    if (m > 0) return `${m}m ${sec}s`;
+    return `${sec}s`;
+}
+
 // Get all dates for a student (Level 1: Student Overview)
 app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
     try {
@@ -6412,8 +6423,8 @@ app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
                 totalMinutes: totalAttended % 60
             },
             dates: deduped.map(r => {
-                const attended   = Number(r.totalAttended)  || 0;
-                const total      = Number(r.totalClassTime) || 0;
+                const attended   = Number(r.totalAttended)  || 0; // minutes
+                const total      = Number(r.totalClassTime) || 0; // minutes
                 const percentage = total > 0
                     ? Math.round((attended / total) * 100)
                     : (Number(r.dayPercentage) || (r.status === 'present' ? 100 : 0));
@@ -6421,8 +6432,8 @@ app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
                     date:         r.date,
                     status:       r.status || 'absent',
                     lectureCount: r.lectures ? r.lectures.length : 0,
-                    attended:     attended * 60,
-                    total:        total * 60,
+                    attended,     // minutes — frontend divides by 60 for hours
+                    total,        // minutes
                     percentage
                 };
             })
@@ -6456,17 +6467,25 @@ app.get('/api/attendance/student/:enrollmentNo/date/:date', async (req, res) => 
             record: {
                 date: record.date,
                 status: record.status,
-                // Timer-based fields removed - period-based system uses discrete present/absent
+                dayPercentage: record.dayPercentage || 0,
+                totalAttended: record.totalAttended || 0,   // minutes
+                totalClassTime: record.totalClassTime || 0, // minutes
                 checkInTime: record.checkInTime,
                 checkOutTime: record.checkOutTime,
                 lectures: record.lectures.map(l => ({
                     period: l.period,
                     subject: l.subject,
                     teacher: l.teacher,
-                    teacherName: l.teacherName,
+                    teacherName: l.teacherName || l.teacher,
                     room: l.room,
                     startTime: l.startTime,
-                    endTime: l.endTime
+                    endTime: l.endTime,
+                    attended: l.attended || 0,
+                    total: l.total || 0,
+                    percentage: l.percentage || (l.present ? 100 : 0),
+                    present: l.present || false,
+                    attendedFormatted: formatSecondsToTimeStr(l.attended || 0),
+                    totalFormatted: formatSecondsToTimeStr(l.total || 0)
                 }))
             }
         });

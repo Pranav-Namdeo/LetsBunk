@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, ActivityIndicator,
-  Animated, TextInput, ScrollView, FlatList, AppState, useColorScheme, Image, Modal, RefreshControl, PermissionsAndroid, Platform, Alert
+  Animated, TextInput, ScrollView, FlatList, AppState, useColorScheme, Image, Modal, RefreshControl, PermissionsAndroid, Platform, Alert, NativeModules
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -82,6 +82,30 @@ const normalizeStudentUserData = (user) => {
     semester: normalizedSemester,
   };
 };
+
+// ── Spoof-proof monotonic clock (time since device boot) ─────────────────────
+// Uses SystemClock.elapsedRealtime() via TimerModule — cannot be changed by
+// adjusting device date/time. Falls back to Date.now() only if native unavailable.
+const { TimerModule: _NativeTimerModule } = NativeModules;
+let _appBootMsCache = 0;
+let _appBootMsCacheAt = 0;
+async function _refreshAppBootCache() {
+  try {
+    if (_NativeTimerModule && _NativeTimerModule.getBootElapsedMs) {
+      const { bootElapsedMs } = await _NativeTimerModule.getBootElapsedMs();
+      _appBootMsCache = bootElapsedMs;
+      _appBootMsCacheAt = Date.now();
+    }
+  } catch (_) {}
+}
+function _appGetBootMs() {
+  if (_appBootMsCache > 0) {
+    return _appBootMsCache + Math.max(0, Date.now() - _appBootMsCacheAt);
+  }
+  return Date.now(); // fallback only if native unavailable
+}
+// Warm up cache immediately on module load
+_refreshAppBootCache();
 
 // Theme colors
 const THEMES = {
@@ -288,8 +312,8 @@ export default function App() {
       const serverTime = getServerTime();
       return serverTime.getCurrentDay();
     } catch {
-      // Fallback to device time if server time not initialized yet
-      const dayIndex = new Date().getDay();
+      // Fallback to boot-anchored time if server time not initialized yet
+      const dayIndex = new Date(_appGetBootMs()).getDay();
       const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
       return days[dayIndex];
     }
@@ -308,7 +332,7 @@ export default function App() {
         const serverTime = getServerTime();
         return serverTime.nowDate().toDateString();
       } catch {
-        return new Date().toDateString();
+        return new Date(_appGetBootMs()).toDateString();
       }
     })(),
     lectures: [], // { subject, attended, total, present }
@@ -401,7 +425,7 @@ export default function App() {
         const serverTime = getServerTime();
         return serverTime.nowDate().toDateString();
       } catch {
-        return new Date().toDateString();
+        return new Date(_appGetBootMs()).toDateString();
       }
     })();
 
@@ -427,8 +451,8 @@ export default function App() {
           );
         }
       } catch (error) {
-        console.warn('⚠️ Server time not available, using device time');
-        const now = new Date();
+        console.warn('⚠️ Server time not available, using boot-anchored time');
+        const now = new Date(_appGetBootMs());
         const currentDate = now.toDateString();
         const dayIndex = now.getDay();
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -570,7 +594,7 @@ export default function App() {
         currentSeconds = now.getSeconds();
         currentTimeInSeconds = (currentHour * 3600) + (currentMinute * 60) + currentSeconds;
       } catch {
-        now = new Date();
+        now = new Date(_appGetBootMs());
         currentHour = now.getHours();
         currentMinute = now.getMinutes();
         currentSeconds = now.getSeconds();
@@ -1226,7 +1250,7 @@ export default function App() {
         const offlineSessionData = await AsyncStorage.getItem('offline_session');
         if (offlineSessionData) {
           const data = JSON.parse(offlineSessionData);
-          const offlineDuration = Math.floor((Date.now() - data.startTime) / 1000);
+          const offlineDuration = Math.floor((_appGetBootMs() - data.startTime) / 1000);
 
           console.log('🔄 Syncing offline attendance...');
           console.log(`   Offline duration: ${offlineDuration}s (${Math.floor(offlineDuration / 60)}m)`);
@@ -1238,7 +1262,7 @@ export default function App() {
             body: JSON.stringify({
               studentId,
               offlineStartTime: data.startTime,
-              offlineEndTime: Date.now(),
+              offlineEndTime: _appGetBootMs(),
               offlineDuration,
               lastKnownSeconds: data.lastKnownSeconds,
               lectureSubject: data.lectureSubject
@@ -1466,7 +1490,7 @@ export default function App() {
       if (selectedRoleRef.current === 'student' && studentIdRef.current === data.enrollmentNo) {
         console.log('✅ Random Ring is for this student!');
 
-        const ringPauseTime = Date.now();
+        const ringPauseTime = _appGetBootMs();
         OfflineTimerService.pauseTimer('random_ring');
         console.log('⏸️ Timer paused for random ring at', ringPauseTime);
 
@@ -1549,7 +1573,7 @@ export default function App() {
       if (selectedRoleRef.current === 'student' && studentIdRef.current === data.enrollmentNo) {
         setRandomRingData(prev => {
           if (prev) {
-            const pausedSeconds = prev.ringPauseTime ? (Date.now() - prev.ringPauseTime) / 1000 : 0;
+            const pausedSeconds = prev.ringPauseTime ? (_appGetBootMs() - prev.ringPauseTime) / 1000 : 0;
             console.log(`▶️ Resuming timer after teacher accept, adding back ${pausedSeconds.toFixed(1)}s`);
             OfflineTimerService.resumeTimer('random_ring_accepted', pausedSeconds);
           }
@@ -1568,7 +1592,7 @@ export default function App() {
           teacherId: data.teacherId,
           expiresAt: data.expiresAt,
           isRejection: true,
-          ringPauseTime: prev?.ringPauseTime || Date.now(),
+          ringPauseTime: prev?.ringPauseTime || _appGetBootMs(),
         }));
         alert('❌ Teacher rejected your presence.\n\nYou have 5 minutes to verify your face.');
       }
@@ -1601,7 +1625,7 @@ export default function App() {
       if (selectedRoleRef.current === 'student' && studentIdRef.current === data.enrollmentNo) {
         setRandomRingData(prev => {
           if (prev) {
-            const pausedSeconds = prev.ringPauseTime ? (Date.now() - prev.ringPauseTime) / 1000 : 0;
+            const pausedSeconds = prev.ringPauseTime ? (_appGetBootMs() - prev.ringPauseTime) / 1000 : 0;
             console.log(`▶️ Resuming timer after face verify success, adding back ${pausedSeconds.toFixed(1)}s`);
             OfflineTimerService.resumeTimer('random_ring_face_verified', pausedSeconds);
           }
@@ -1755,7 +1779,7 @@ export default function App() {
         const serverTime = getServerTime();
         clientDate = serverTime.nowDate().toISOString();
       } catch {
-        clientDate = new Date().toISOString();
+        clientDate = new Date(_appGetBootMs()).toISOString();
       }
 
       // Get current timer state from OfflineTimerService if available
@@ -2330,7 +2354,7 @@ export default function App() {
           const serverTime = getServerTime();
           offlineId = 'offline_' + serverTime.now();
         } catch {
-          offlineId = 'offline_' + Date.now();
+          offlineId = 'offline_' + _appGetBootMs();
         }
         await AsyncStorage.setItem(STUDENT_ID_KEY, offlineId);
         await AsyncStorage.setItem(STUDENT_NAME_KEY, studentName.trim());
@@ -2345,7 +2369,7 @@ export default function App() {
         const serverTime = getServerTime();
         offlineId = 'offline_' + serverTime.now();
       } catch {
-        offlineId = 'offline_' + Date.now();
+        offlineId = 'offline_' + _appGetBootMs();
       }
       await AsyncStorage.setItem(STUDENT_ID_KEY, offlineId);
       await AsyncStorage.setItem(STUDENT_NAME_KEY, studentName.trim());
@@ -2422,7 +2446,7 @@ export default function App() {
           const serverTime = getServerTime();
           clientDate = serverTime.nowDate().toISOString();
         } catch {
-          clientDate = new Date().toISOString();
+          clientDate = new Date(_appGetBootMs()).toISOString();
         }
 
         await fetch(`${SOCKET_URL}/api/attendance/record`, {
@@ -2880,7 +2904,7 @@ export default function App() {
         lectureDuration: currentClassInfo?.duration || 60,
         wifiValidated: true,
         faceVerified: true,
-        validationTimestamp: new Date().toISOString()
+        validationTimestamp: new Date(_appGetBootMs()).toISOString()
       });
       console.log('⏱️ Sent start_timer to server with full validations');
     } else {
@@ -3539,7 +3563,7 @@ export default function App() {
     setTimetable(null);
     setStudents([]);
     setTodayAttendance({
-      date: new Date().toDateString(),
+      date: new Date(_appGetBootMs()).toDateString(),
       lectures: [], totalAttended: 0, totalClassTime: 0, dayPresent: false
     });
     setOfflineTimerState({
@@ -5089,7 +5113,7 @@ export default function App() {
                           body: JSON.stringify({
                             studentId,
                             randomRingId: randomRingData.randomRingId,
-                            responseTime: new Date().toISOString(),
+                            responseTime: new Date(_appGetBootMs()).toISOString(),
                           })
                         });
                         const result = await res.json();

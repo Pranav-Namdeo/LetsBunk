@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 
@@ -26,23 +27,33 @@ class TimerService : Service() {
         const val ACTION_START = "ACTION_START"
         const val ACTION_STOP = "ACTION_STOP"
 
-        // Shared state — readable from the module without binding
+        // ── Shared state (readable from TimerModule without binding) ──────────
         @Volatile var elapsedSeconds: Long = 0L
         @Volatile var isRunning: Boolean = false
         @Volatile var lectureSubject: String = ""
 
-        // WiFi validation state — JS reads this on foreground resume
+        // WiFi validation state
         @Volatile var stoppedDueToWifiInvalid: Boolean = false
-        @Volatile var authorizedBSSID: String = ""   // set by JS via startTimer
+        @Volatile var authorizedBSSID: String = ""
+
+        /**
+         * Boot-relative elapsed time in milliseconds.
+         * SystemClock.elapsedRealtime() counts from device boot and CANNOT be
+         * changed by the user adjusting the device clock or date/time settings.
+         * Exposed so JS can use it as a spoof-proof time source.
+         */
+        @Volatile var bootElapsedMs: Long = 0L
     }
 
     private val binder = LocalBinder()
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
-    private var startEpoch: Long = 0L
+
+    // Anchor: boot-relative ms when this timer run started
+    private var startBootMs: Long = 0L
+    // Accumulated seconds from previous runs (resume support)
     private var baseSeconds: Long = 0L
 
-    // BSSID check every 60 seconds
     private val BSSID_CHECK_INTERVAL_MS = 60_000L
     private var bssidCheckCounter = 0L
 
@@ -60,12 +71,11 @@ class TimerService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildNotification())
-
         when (intent?.action) {
             ACTION_START -> {
-                val subject = intent.getStringExtra("subject") ?: ""
+                val subject   = intent.getStringExtra("subject") ?: ""
                 val resumeFrom = intent.getLongExtra("resumeFrom", 0L)
-                val bssid = intent.getStringExtra("authorizedBSSID") ?: ""
+                val bssid     = intent.getStringExtra("authorizedBSSID") ?: ""
                 startTimer(subject, resumeFrom, bssid)
             }
             ACTION_STOP -> stopTimer()
@@ -74,18 +84,19 @@ class TimerService : Service() {
     }
 
     private fun startTimer(subject: String, resumeFrom: Long, bssid: String) {
-        lectureSubject = subject
-        baseSeconds = resumeFrom
-        startEpoch = System.currentTimeMillis()
-        isRunning = true
-        elapsedSeconds = resumeFrom
-        authorizedBSSID = bssid
+        lectureSubject        = subject
+        baseSeconds           = resumeFrom
+        // ── KEY CHANGE: anchor to boot-relative clock, not wall clock ─────────
+        startBootMs           = SystemClock.elapsedRealtime()
+        isRunning             = true
+        elapsedSeconds        = resumeFrom
+        authorizedBSSID       = bssid
         stoppedDueToWifiInvalid = false
-        bssidCheckCounter = 0L
+        bssidCheckCounter     = 0L
 
         updateNotification()
         handler.post(tickRunnable)
-        Log.d(TAG, "Timer started: subject=$subject resumeFrom=${resumeFrom}s authorizedBSSID=$bssid")
+        Log.d(TAG, "Timer started (boot-anchored): subject=$subject resumeFrom=${resumeFrom}s")
     }
 
     fun stopTimer() {
@@ -98,7 +109,6 @@ class TimerService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         stopTimer()
-        Log.d(TAG, "onTaskRemoved — stopping timer")
         super.onTaskRemoved(rootIntent)
     }
 
@@ -106,11 +116,16 @@ class TimerService : Service() {
         override fun run() {
             if (!isRunning) return
 
-            // Timestamp-based elapsed — never drifts
-            elapsedSeconds = baseSeconds + (System.currentTimeMillis() - startEpoch) / 1000L
+            // ── Boot-relative elapsed — immune to device clock changes ────────
+            val bootNow = SystemClock.elapsedRealtime()
+            elapsedSeconds = baseSeconds + (bootNow - startBootMs) / 1000L
+
+            // Expose current boot-elapsed for JS to read
+            bootElapsedMs = bootNow
+
             updateNotification()
 
-            // Periodic BSSID check every 60 seconds
+            // Periodic BSSID check every 60 s
             bssidCheckCounter += 1000L
             if (bssidCheckCounter >= BSSID_CHECK_INTERVAL_MS) {
                 bssidCheckCounter = 0L
@@ -121,26 +136,12 @@ class TimerService : Service() {
         }
     }
 
-    /**
-     * Check WiFi BSSID directly from native layer.
-     * This works reliably in a foreground service even when the screen is off,
-     * unlike JS-side WiFi APIs which return null on OEM devices (MIUI, OneUI).
-     *
-     * If the authorized BSSID is set and the current BSSID doesn't match,
-     * the timer is stopped and stoppedDueToWifiInvalid is set to true so JS
-     * can handle it when the app comes back to foreground.
-     */
     private fun checkBSSIDInBackground() {
         try {
-            // If no authorized BSSID was configured, skip validation
-            if (authorizedBSSID.isBlank()) {
-                Log.d(TAG, "BSSID check skipped — no authorized BSSID configured")
-                return
-            }
+            if (authorizedBSSID.isBlank()) return
 
-            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-
-            if (!wifiManager.isWifiEnabled) {
+            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+            if (!wm.isWifiEnabled) {
                 Log.w(TAG, "BSSID check: WiFi disabled — stopping timer")
                 stoppedDueToWifiInvalid = true
                 stopTimer()
@@ -148,37 +149,26 @@ class TimerService : Service() {
             }
 
             @Suppress("DEPRECATION")
-            val wifiInfo = wifiManager.connectionInfo
-            val currentBSSID = wifiInfo?.bssid
+            val currentBSSID = wm.connectionInfo?.bssid
 
-            Log.d(TAG, "BSSID check: current=$currentBSSID authorized=$authorizedBSSID")
-
-            if (currentBSSID == null || currentBSSID == "02:00:00:00:00:00" || currentBSSID == "null") {
-                // BSSID is null/fake — WiFi disconnected or screen-off API limitation.
-                // On some OEMs (MIUI) BSSID returns 02:00:00:00:00:00 when screen is off.
-                // We give benefit of the doubt here — only stop if we get a REAL different BSSID.
-                Log.w(TAG, "BSSID check: null/fake BSSID detected — skipping (OEM screen-off limitation)")
+            // Null / OEM fake value when screen off — give benefit of the doubt
+            if (currentBSSID == null ||
+                currentBSSID == "02:00:00:00:00:00" ||
+                currentBSSID == "null") {
+                Log.w(TAG, "BSSID check: null/fake — skipping (OEM screen-off limitation)")
                 return
             }
 
-            // Normalize both BSSIDs to lowercase for comparison
             val normalizedCurrent = currentBSSID.lowercase().trim()
+            val authorizedList = authorizedBSSID.lowercase()
+                .split(",").map { it.trim() }.filter { it.isNotBlank() }
 
-            // authorizedBSSID may be a comma-separated list (multiple BSSIDs per room)
-            val authorizedList = authorizedBSSID.lowercase().split(",").map { it.trim() }.filter { it.isNotBlank() }
-
-            val isAuthorized = authorizedList.any { it == normalizedCurrent }
-
-            if (!isAuthorized) {
-                Log.w(TAG, "BSSID MISMATCH — student left classroom. current=$normalizedCurrent authorized=$authorizedList")
+            if (!authorizedList.any { it == normalizedCurrent }) {
+                Log.w(TAG, "BSSID MISMATCH — student left classroom. current=$normalizedCurrent")
                 stoppedDueToWifiInvalid = true
                 stopTimer()
-            } else {
-                Log.d(TAG, "BSSID check passed ✅ current=$normalizedCurrent")
             }
-
         } catch (e: Exception) {
-            // Never crash the service on a BSSID check failure
             Log.e(TAG, "BSSID check error (non-fatal): ${e.message}")
         }
     }
@@ -194,50 +184,37 @@ class TimerService : Service() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                CHANNEL_ID,
-                "Attendance Timer",
-                NotificationManager.IMPORTANCE_DEFAULT
+                CHANNEL_ID, "Attendance Timer", NotificationManager.IMPORTANCE_DEFAULT
             ).apply {
                 description = "Shows attendance timer while class is in progress"
-                setShowBadge(false)
-                setSound(null, null)
-                enableVibration(false)
+                setShowBadge(false); setSound(null, null); enableVibration(false)
             }
-            val nm = getSystemService(NotificationManager::class.java)
-            nm.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
 
     private fun buildNotification(): Notification {
-        val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
         val pi = PendingIntent.getActivity(
-            this, 0, launchIntent,
+            this, 0, packageManager.getLaunchIntentForPackage(packageName),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val formatted = formatSeconds(elapsedSeconds)
         val title = if (lectureSubject.isNotEmpty()) "Attending: $lectureSubject" else "Attendance Timer"
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
-            .setContentText("Time: $formatted")
+            .setContentText("Time: ${formatSeconds(elapsedSeconds)}")
             .setSmallIcon(android.R.drawable.ic_menu_recent_history)
             .setContentIntent(pi)
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
+            .setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
             .build()
     }
 
     private fun updateNotification() {
-        val nm = getSystemService(NotificationManager::class.java)
-        nm.notify(NOTIFICATION_ID, buildNotification())
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification())
     }
 
     private fun formatSeconds(s: Long): String {
-        val h = s / 3600
-        val m = (s % 3600) / 60
-        val sec = s % 60
-        return if (h > 0) "%d:%02d:%02d".format(h, m, sec)
-        else "%02d:%02d".format(m, sec)
+        val h = s / 3600; val m = (s % 3600) / 60; val sec = s % 60
+        return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%02d:%02d".format(m, sec)
     }
 
     override fun onDestroy() {
