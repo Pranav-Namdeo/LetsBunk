@@ -598,7 +598,9 @@ class OfflineTimerService {
           studentId: this.studentId,
           timerSeconds: this.previousLectureData.timerSeconds,
           lecture: this.previousLectureData.lecture,
-          timestamp: this.previousLectureData.disconnectionTime || Date.now(),
+          timestamp: this.previousLectureData.disconnectionTime || (() => {
+            try { const { getServerTime } = require('./ServerTime'); return getServerTime().now(); } catch { return Date.now(); }
+          })(),
           isRunning: false, // Mark as stopped since we're switching lectures
           isPaused: false,
           finalSync: true, // Flag to indicate this is a final sync
@@ -751,8 +753,8 @@ class OfflineTimerService {
     }
     
     this.isPaused = false;
-    // Re-anchor timestamp so elapsed calculation starts fresh from current value
-    this._countingStartedAt = Date.now();
+    // Re-anchor with monotonic clock — immune to device time changes
+    this._countingStartedAt = performance.now();
     this._countingBaseSeconds = this.timerSeconds;
     this.startCounting();
     
@@ -798,7 +800,7 @@ class OfflineTimerService {
       }
     } else {
       console.warn('⚠️ TimerModule not available — falling back to JS timer');
-      this._countingStartedAt = Date.now();
+      this._countingStartedAt = performance.now(); // monotonic — spoof-proof
       this._countingBaseSeconds = this.timerSeconds;
     }
 
@@ -811,17 +813,17 @@ class OfflineTimerService {
           const { seconds } = await TimerModule.getElapsedSeconds();
           this.timerSeconds = Math.floor(seconds);
         } catch (_) {
-          // Native call failed — fall back to JS elapsed
+          // Native call failed — fall back to monotonic JS elapsed
           if (this._countingStartedAt) {
             this.timerSeconds = this._countingBaseSeconds +
-              Math.floor((Date.now() - this._countingStartedAt) / 1000);
+              Math.floor((performance.now() - this._countingStartedAt) / 1000);
           }
         }
       } else {
-        // Pure JS fallback
+        // Pure JS fallback — monotonic clock
         if (this._countingStartedAt) {
           this.timerSeconds = this._countingBaseSeconds +
-            Math.floor((Date.now() - this._countingStartedAt) / 1000);
+            Math.floor((performance.now() - this._countingStartedAt) / 1000);
         }
       }
 
@@ -1273,16 +1275,24 @@ class OfflineTimerService {
   async syncToServer() {
     try {
       this.lastSyncAttempt = Date.now();
-      
+
+      // Always use server time for timestamps — never device time
+      let serverNow;
+      try {
+        const { getServerTime } = require('./ServerTime');
+        serverNow = getServerTime().now();
+      } catch {
+        serverNow = Date.now();
+      }
+
       console.log('🔄 Syncing offline timer to server...');
       console.log('   Timer seconds:', this.timerSeconds);
       console.log('   Is Running:', this.isRunning);
       console.log('   Is Paused:', this.isPaused);
       console.log('   Lecture:', this.currentLecture?.subject);
-      
-      // Get current BSSID for validation
+
       const currentBSSID = await WiFiManager.getCurrentBSSID();
-      
+
       const response = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1290,14 +1300,14 @@ class OfflineTimerService {
           studentId: this.studentId,
           timerSeconds: this.timerSeconds,
           lecture: this.currentLecture,
-          timestamp: Date.now(),
+          timestamp: serverNow,           // server time — not device time
           isRunning: this.isRunning,
           isPaused: this.isPaused,
           currentBSSID: currentBSSID,
           attendedMinutes: Math.floor(this.timerSeconds / 60),
           sessionStartTime: this.lectureStartTime
         }),
-        timeout: 5000 // 5 second timeout
+        timeout: 5000
       });
 
       if (!response.ok) {
@@ -1326,7 +1336,7 @@ class OfflineTimerService {
       if (result.success) {
         this.isOnline = true;
         this.hasInternetConnection = true;
-        this.lastSyncTime = Date.now();
+        this.lastSyncTime = serverNow; // server time
         
         // Store server-computed attendance status
         if (result.attendanceStatus) {
@@ -1385,11 +1395,11 @@ class OfflineTimerService {
       this.hasInternetConnection = false;
       this.isOnline = false;
       
-      // Add to sync queue
+      // Add to sync queue with server time
       this.syncQueue.push({
         timerSeconds: this.timerSeconds,
         lecture: this.currentLecture,
-        timestamp: Date.now(),
+        timestamp: serverNow,
         isRunning: this.isRunning,
         isPaused: this.isPaused,
         attendedMinutes: Math.floor(this.timerSeconds / 60)
@@ -1512,14 +1522,15 @@ class OfflineTimerService {
         lectureStartTime: this.lectureStartTime,
         authorizedBSSID: this.authorizedBSSID,
         lastSyncTime: this.lastSyncTime,
-        // Disconnection tracking
         wasRunningBeforeDisconnect: this.wasRunningBeforeDisconnect,
         disconnectionTime: this.disconnectionTime,
         pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
         previousLectureData: this.previousLectureData,
-        timestamp: Date.now()
+        // Use wall time only as a rough age check — actual elapsed uses monotonic
+        timestamp: Date.now(),
+        // Monotonic anchor: wall time at save, used to re-anchor on restore
+        savedWallTime: Date.now(),
       };
-      
       await AsyncStorage.setItem(OFFLINE_TIMER_KEY, JSON.stringify(state));
     } catch (error) {
       console.error('❌ Failed to save timer state:', error);
@@ -1532,13 +1543,25 @@ class OfflineTimerService {
   async loadState() {
     try {
       const savedState = await AsyncStorage.getItem(OFFLINE_TIMER_KEY);
-      
+
       if (savedState) {
         const state = JSON.parse(savedState);
+
+        // Use server time for age check — immune to device clock changes
+        let nowMs;
+        try {
+          const { getServerTime } = require('./ServerTime');
+          nowMs = getServerTime().now();
+        } catch {
+          nowMs = Date.now();
+        }
+
+        // Age check: use server time vs saved wall time
+        // If device time was manipulated, savedWallTime may be wrong — cap at 2 hours max
+        const savedWall = state.savedWallTime || state.timestamp || 0;
+        const stateAge = Math.abs(nowMs - savedWall); // abs() handles clock going backwards
         
-        // Check if state is recent (within 1 hour)
-        const stateAge = Date.now() - state.timestamp;
-        if (stateAge < 3600000) { // 1 hour
+        if (stateAge < 7200000) { // 2 hours max
           this.isRunning = state.isRunning;
           this.isPaused = state.isPaused;
           this.timerSeconds = state.timerSeconds;
@@ -1546,21 +1569,18 @@ class OfflineTimerService {
           this.lectureStartTime = state.lectureStartTime;
           this.authorizedBSSID = state.authorizedBSSID;
           this.lastSyncTime = state.lastSyncTime;
-          
-          // Load disconnection tracking
           this.wasRunningBeforeDisconnect = state.wasRunningBeforeDisconnect || false;
           this.disconnectionTime = state.disconnectionTime || null;
           this.pausedDueToWiFiLoss = state.pausedDueToWiFiLoss || false;
           this.previousLectureData = state.previousLectureData || null;
-          
-          console.log('📦 Loaded timer state from storage:', {
+
+          console.log('📦 Loaded timer state:', {
             timerSeconds: this.timerSeconds,
             isRunning: this.isRunning,
             pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
             lecture: this.currentLecture?.subject
           });
-          
-          // Resume counting if was running and not paused due to WiFi loss
+
           if (this.isRunning && !this.isPaused && !this.pausedDueToWiFiLoss) {
             this.startCounting();
           }

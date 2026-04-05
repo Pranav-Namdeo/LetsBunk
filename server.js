@@ -2604,11 +2604,39 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         }
 
         // 2b. Guard: reject sync if student has no verified check-in for today
-        const syncDate = new Date(timestamp);
-        const todayStart = new Date(syncDate);
-        todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(todayStart);
-        todayEnd.setDate(todayEnd.getDate() + 1);
+        // Use server's IST time — never trust client timestamp for date calculation
+        const istOffset = 5.5 * 60 * 60 * 1000;
+        const serverNow = Date.now();
+        const istNow = new Date(serverNow + istOffset);
+        const todayIST = istNow.toISOString().slice(0, 10); // YYYY-MM-DD in IST
+
+        const todayStart = new Date(todayIST + 'T00:00:00+05:30');
+        const todayEnd   = new Date(todayIST + 'T23:59:59+05:30');
+
+        // Validate timerSeconds is not unreasonably large (max 24h = 86400s)
+        const MAX_TIMER_SECONDS = 86400;
+        if (timerSeconds > MAX_TIMER_SECONDS || timerSeconds < 0) {
+            console.warn(`⚠️ [OFFLINE-SYNC] Suspicious timerSeconds=${timerSeconds} from ${studentId}`);
+            return res.status(400).json({ success: false, error: 'Invalid timer value' });
+        }
+
+        // Validate timestamp is not more than 10 minutes in the future (clock spoof detection)
+        const clientTimestamp = Number(timestamp);
+        if (clientTimestamp > serverNow + 600000) {
+            console.warn(`⚠️ [OFFLINE-SYNC] Future timestamp from ${studentId}: client=${clientTimestamp} server=${serverNow}`);
+            return res.status(400).json({ success: false, error: 'Invalid timestamp — device clock may be incorrect' });
+        }
+
+        // Cap timerSeconds to lecture duration if lecture info provided
+        if (lecture && lecture.startTime && lecture.endTime) {
+            const [sh, sm] = lecture.startTime.split(':').map(Number);
+            const [eh, em] = lecture.endTime.split(':').map(Number);
+            const maxLectureSecs = ((eh * 60 + em) - (sh * 60 + sm)) * 60;
+            if (maxLectureSecs > 0 && timerSeconds > maxLectureSecs) {
+                console.warn(`⚠️ [OFFLINE-SYNC] timerSeconds(${timerSeconds}) > lecture duration(${maxLectureSecs}) — capping`);
+                req.body.timerSeconds = maxLectureSecs;
+            }
+        }
 
         const hasCheckedIn = await PeriodAttendance.exists({
             enrollmentNo: studentId,

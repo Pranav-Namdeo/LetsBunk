@@ -1445,7 +1445,7 @@ export default function App() {
       if (selectedRoleRef.current === 'student' && studentIdRef.current === data.enrollmentNo) {
         console.log('✅ Random Ring is for this student!');
 
-        const ringPauseTime = Date.now();
+        const ringPauseTime = performance.now(); // monotonic — spoof-proof
         OfflineTimerService.pauseTimer('random_ring');
         console.log('⏸️ Timer paused for random ring at', ringPauseTime);
 
@@ -1528,7 +1528,8 @@ export default function App() {
       if (selectedRoleRef.current === 'student' && studentIdRef.current === data.enrollmentNo) {
         setRandomRingData(prev => {
           if (prev) {
-            const pausedSeconds = prev.ringPauseTime ? (Date.now() - prev.ringPauseTime) / 1000 : 0;
+            // Use monotonic clock — ringPauseTime was set with performance.now()
+            const pausedSeconds = prev.ringPauseTime ? (performance.now() - prev.ringPauseTime) / 1000 : 0;
             console.log(`▶️ Resuming timer after teacher accept, adding back ${pausedSeconds.toFixed(1)}s`);
             OfflineTimerService.resumeTimer('random_ring_accepted', pausedSeconds);
           }
@@ -1547,7 +1548,7 @@ export default function App() {
           teacherId: data.teacherId,
           expiresAt: data.expiresAt,
           isRejection: true,
-          ringPauseTime: prev?.ringPauseTime || Date.now(),
+          ringPauseTime: prev?.ringPauseTime || performance.now(),
         }));
         alert('❌ Teacher rejected your presence.\n\nYou have 5 minutes to verify your face.');
       }
@@ -1580,7 +1581,7 @@ export default function App() {
       if (selectedRoleRef.current === 'student' && studentIdRef.current === data.enrollmentNo) {
         setRandomRingData(prev => {
           if (prev) {
-            const pausedSeconds = prev.ringPauseTime ? (Date.now() - prev.ringPauseTime) / 1000 : 0;
+            const pausedSeconds = prev.ringPauseTime ? (performance.now() - prev.ringPauseTime) / 1000 : 0;
             console.log(`▶️ Resuming timer after face verify success, adding back ${pausedSeconds.toFixed(1)}s`);
             OfflineTimerService.resumeTimer('random_ring_face_verified', pausedSeconds);
           }
