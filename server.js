@@ -363,7 +363,10 @@ const periodAttendanceSchema = new mongoose.Schema({
 
     // ── Audit ─────────────────────────────────────────────────────────────────
     markedBy: { type: String },
-    reason:   { type: String }
+    reason:   { type: String },
+
+    // ── Timer progress (updated by offline-sync) ──────────────────────────────
+    timerSeconds: { type: Number, default: null }   // seconds attended in this period
 }, { timestamps: true });
 
 periodAttendanceSchema.index({ enrollmentNo: 1, date: 1, period: 1 }, { unique: true });
@@ -1516,23 +1519,118 @@ io.on('connection', (socket) => {
     });
 });
 
-// ─── Helper: sync AttendanceRecord.status from PeriodAttendance ──────────────
+// ─── Helper: sync AttendanceRecord from PeriodAttendance (status + lectures) ──
 async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, branch, threshold = 75) {
     try {
         const midnight = new Date(date); midnight.setHours(0, 0, 0, 0);
         const nextDay  = new Date(midnight); nextDay.setDate(nextDay.getDate() + 1);
-        const periods  = await PeriodAttendance.find({ enrollmentNo, date: { $gte: midnight, $lt: nextDay } }).lean();
+
+        const periods = await PeriodAttendance.find({
+            enrollmentNo, date: { $gte: midnight, $lt: nextDay }
+        }).lean();
+
         const presentCount  = periods.filter(p => p.status === 'present').length;
         const totalCount    = periods.length;
         const dayPercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
         const dayStatus     = dayPercentage >= threshold ? 'present' : 'absent';
+
+        // Build lectures array with attended/total/percentage/present
+        // Pull period start/end times from timetable so Level 3 has real data
+        let lecturesWithTime = [];
+        try {
+            const tt = await Timetable.findOne({ semester, branch });
+            const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+            const dayName = days[midnight.getDay()];
+            const daySchedule = tt ? (tt.timetable[dayName] || []) : [];
+
+            lecturesWithTime = periods.map(p => {
+                // Match period by id (P1, P2 …)
+                const periodIndex = parseInt(p.period.replace('P', ''), 10) - 1;
+                const periodInfo  = tt && tt.periods ? tt.periods[periodIndex] : null;
+                const startTime   = periodInfo ? periodInfo.startTime : '';
+                const endTime     = periodInfo ? periodInfo.endTime   : '';
+
+                // Duration in seconds
+                const durationSec = (startTime && endTime)
+                    ? (timeToMinutes(endTime) - timeToMinutes(startTime)) * 60
+                    : 0;
+
+                // Attended seconds: use timerSeconds if stored, else full duration if present
+                const attendedSec = p.timerSeconds != null
+                    ? Math.floor(p.timerSeconds)
+                    : (p.status === 'present' ? durationSec : 0);
+
+                const pct = durationSec > 0
+                    ? Math.min(100, Math.round((attendedSec / durationSec) * 100))
+                    : (p.status === 'present' ? 100 : 0);
+
+                return {
+                    period:      p.period,
+                    subject:     p.subject,
+                    teacher:     p.teacher,
+                    teacherName: p.teacherName || p.teacher,
+                    room:        p.room || '',
+                    startTime,
+                    endTime,
+                    lectureStartedAt: periodInfo ? new Date(`${midnight.toISOString().split('T')[0]}T${startTime}:00`) : null,
+                    lectureEndedAt:   periodInfo ? new Date(`${midnight.toISOString().split('T')[0]}T${endTime}:00`)   : null,
+                    studentCheckIn:   p.checkInTime || null,
+                    attended:    attendedSec,   // seconds
+                    total:       durationSec,   // seconds
+                    percentage:  pct,
+                    present:     p.status === 'present',
+                    verifications: p.checkInTime ? [{
+                        time:    p.checkInTime,
+                        type:    'face',
+                        success: p.faceVerified !== false,
+                        event:   'check_in'
+                    }] : []
+                };
+            });
+        } catch (_) {
+            // Fallback: no timetable data — still store basic info
+            lecturesWithTime = periods.map(p => ({
+                period:      p.period,
+                subject:     p.subject,
+                teacher:     p.teacher,
+                teacherName: p.teacherName || p.teacher,
+                room:        p.room || '',
+                startTime:   '',
+                endTime:     '',
+                attended:    p.timerSeconds || (p.status === 'present' ? 3600 : 0),
+                total:       3600,
+                percentage:  p.status === 'present' ? 100 : 0,
+                present:     p.status === 'present',
+                studentCheckIn: p.checkInTime || null,
+                verifications: []
+            }));
+        }
+
+        // Total attended/class minutes from lectures
+        const totalAttendedSec  = lecturesWithTime.reduce((s, l) => s + (l.attended || 0), 0);
+        const totalClassSec     = lecturesWithTime.reduce((s, l) => s + (l.total    || 0), 0);
+        const totalAttendedMin  = Math.floor(totalAttendedSec / 60);
+        const totalClassMin     = Math.floor(totalClassSec    / 60);
+
         await AttendanceRecord.findOneAndUpdate(
             { $or: [{ enrollmentNo }, { studentId: enrollmentNo }], date: midnight },
-            { $set: { studentId: enrollmentNo, enrollmentNo, studentName: studentName || enrollmentNo,
-                      semester: semester?.toString() || '', branch: branch || '',
-                      status: dayStatus, dayPercentage, updatedAt: new Date() } },
+            { $set: {
+                studentId:     enrollmentNo,
+                enrollmentNo,
+                studentName:   studentName || enrollmentNo,
+                semester:      semester?.toString() || '',
+                branch:        branch || '',
+                status:        dayStatus,
+                dayPercentage,
+                totalAttended:  totalAttendedMin,
+                totalClassTime: totalClassMin,
+                timerValue:     totalAttendedSec,
+                lectures:       lecturesWithTime,
+                updatedAt:      new Date()
+            }},
             { upsert: true }
         );
+
         return { dayStatus, dayPercentage, presentCount, totalCount };
     } catch (err) {
         console.error('❌ syncAttendanceRecord error:', err.message);
@@ -2252,31 +2350,10 @@ app.post('/api/attendance/check-in', checkInLimiter, async (req, res) => {
         const duration = Date.now() - startTime;
         console.log(`✅ [CHECK-IN] Success - Student: ${enrollmentNo} (${student.name}), Period: ${currentPeriod}, Marked: ${markedPeriods.join(', ')}, Missed: ${missedPeriods.join(', ')}, Duration: ${duration}ms`);
 
-        // Sync AttendanceRecord daily summary from PeriodAttendance
+        // Sync AttendanceRecord daily summary from PeriodAttendance (full — includes lectures with attended/total/percentage)
         syncAttendanceRecord(enrollmentNo, today, student.name, student.semester, student.branch).catch(() => {});
 
-        // Also populate lectures in AttendanceRecord from PeriodAttendance
-        try {
-            const periodRecs = await PeriodAttendance.find({
-                enrollmentNo,
-                date: { $gte: today, $lt: new Date(today.getTime() + 86400000) }
-            }).sort({ period: 1 }).lean();
-
-            if (periodRecs.length > 0) {
-                await AttendanceRecord.findOneAndUpdate(
-                    { $or: [{ enrollmentNo }, { studentId: enrollmentNo }], date: today },
-                    { $set: {
-                        lectures: periodRecs.map(p => ({
-                            period: p.period, subject: p.subject,
-                            teacher: p.teacher, teacherName: p.teacherName || p.teacher,
-                            room: p.room || '', studentCheckIn: p.checkInTime
-                        })),
-                        updatedAt: new Date()
-                    }},
-                    { upsert: false }
-                );
-            }
-        } catch (_) {}
+        // Remove the old partial lecture write — syncAttendanceRecord handles it now
 
         res.json({
             success: true,
@@ -2808,30 +2885,16 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 } catch (_) {}
             }
 
-            // Populate lectures from PeriodAttendance so history page shows detail
-            try {
-                const periodRecs = await PeriodAttendance.find({
-                    enrollmentNo: student.enrollmentNo,
-                    date: { $gte: today, $lt: new Date(today.getTime() + 86400000) }
-                }).sort({ period: 1 }).lean();
-
-                if (periodRecs.length > 0) {
-                    attendanceRecord.lectures = periodRecs.map(p => ({
-                        period:      p.period,
-                        subject:     p.subject,
-                        teacher:     p.teacher,
-                        teacherName: p.teacherName || p.teacher,
-                        room:        p.room || '',
-                        startTime:   '',
-                        endTime:     '',
-                        studentCheckIn: p.checkInTime,
-                        verifications: p.checkInTime ? [{ time: p.checkInTime, type: 'face', success: p.faceVerified, event: 'check_in' }] : []
-                    }));
-                }
-            } catch (_) {}
-
-            await attendanceRecord.save();
-            console.log(`📊 [OFFLINE-SYNC] Updated AttendanceRecord - Student: ${studentId}, Attended: ${attendedMinutes}min, ClassTime: ${attendanceRecord.totalClassTime}min`);
+            // Use syncAttendanceRecord to fully populate lectures with attended/total/percentage/present
+            // This replaces the partial write above and ensures Level 3 history has all fields
+            await syncAttendanceRecord(
+                student.enrollmentNo,
+                today,
+                student.name,
+                student.semester,
+                student.branch
+            );
+            console.log(`📊 [OFFLINE-SYNC] Synced full AttendanceRecord - Student: ${studentId}`);
 
         } catch (recordError) {
             console.error(`❌ [OFFLINE-SYNC] Error updating AttendanceRecord:`, recordError);
