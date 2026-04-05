@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
@@ -76,7 +77,7 @@ class TimerService : Service() {
     private fun startTimer(subject: String, resumeFrom: Long, bssid: String) {
         lectureSubject = subject
         baseSeconds = resumeFrom
-        startEpoch = System.currentTimeMillis()
+        startEpoch = SystemClock.elapsedRealtime() // monotonic — immune to clock changes
         isRunning = true
         elapsedSeconds = resumeFrom
         authorizedBSSID = bssid
@@ -106,8 +107,8 @@ class TimerService : Service() {
         override fun run() {
             if (!isRunning) return
 
-            // Timestamp-based elapsed — never drifts
-            elapsedSeconds = baseSeconds + (System.currentTimeMillis() - startEpoch) / 1000L
+            // Monotonic elapsed — SystemClock.elapsedRealtime() cannot be changed by user
+            elapsedSeconds = baseSeconds + (SystemClock.elapsedRealtime() - startEpoch) / 1000L
             updateNotification()
 
             // Periodic BSSID check every 60 seconds
