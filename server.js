@@ -2757,12 +2757,19 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             console.error(`❌ [OFFLINE-SYNC] Error checking random rings:`, ringError);
         }
 
-        // 5. Compute attendance status using threshold
+        // 5. Compute attendance status using threshold — use server timetable for period duration
         let computedStatus = 'absent';
         try {
-            if (lecture && lecture.startTime && lecture.endTime) {
-                const lectureDurationSeconds = (timeToMinutes(lecture.endTime) - timeToMinutes(lecture.startTime)) * 60;
-                if (lectureDurationSeconds > 0) {
+            // Always fetch current period from server timetable (immune to client sending wrong times)
+            const currentPeriodInfo = await getCurrentLectureInfo(student.semester, student.branch);
+            const periodStart = currentPeriodInfo?.startTime || lecture?.startTime;
+            const periodEnd   = currentPeriodInfo?.endTime   || lecture?.endTime;
+
+            if (periodStart && periodEnd) {
+                const durationMin = timeToMinutes(periodEnd) - timeToMinutes(periodStart);
+                // Sanity: reject if > 3 hours (full-day span from bad client data)
+                if (durationMin > 0 && durationMin <= 180) {
+                    const lectureDurationSeconds = durationMin * 60;
                     const attendedPct = (timerSeconds / lectureDurationSeconds) * 100;
                     if (attendedPct >= ATTENDANCE_THRESHOLD) {
                         computedStatus = 'present';
@@ -2770,7 +2777,6 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                         computedStatus = 'active';
                     }
                 } else if (Boolean(isRunning)) {
-                    // lectureDurationSeconds is 0 or invalid — still mark active if running
                     computedStatus = 'active';
                 }
             } else if (Boolean(isRunning)) {
@@ -2944,9 +2950,27 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             // Tell student app their current status and how far to threshold
             attendanceStatus: computedStatus,
             attendanceThreshold: ATTENDANCE_THRESHOLD,
-            thresholdSeconds: lecture?.startTime && lecture?.endTime
-                ? Math.ceil((timeToMinutes(lecture.endTime) - timeToMinutes(lecture.startTime)) * 60 * ATTENDANCE_THRESHOLD / 100)
-                : null
+            // thresholdSeconds = 75% of the CURRENT PERIOD duration from server timetable
+            // We fetch the current period from the timetable server-side so it's always accurate
+            thresholdSeconds: await (async () => {
+                try {
+                    const lectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
+                    if (lectureInfo && lectureInfo.startTime && lectureInfo.endTime) {
+                        const durationMin = timeToMinutes(lectureInfo.endTime) - timeToMinutes(lectureInfo.startTime);
+                        if (durationMin > 0) {
+                            return Math.ceil(durationMin * 60 * ATTENDANCE_THRESHOLD / 100);
+                        }
+                    }
+                    // Fallback: use client lecture if server lookup fails, but sanity-check duration
+                    if (lecture?.startTime && lecture?.endTime) {
+                        const durationMin = timeToMinutes(lecture.endTime) - timeToMinutes(lecture.startTime);
+                        if (durationMin > 0 && durationMin <= 180) {
+                            return Math.ceil(durationMin * 60 * ATTENDANCE_THRESHOLD / 100);
+                        }
+                    }
+                    return null;
+                } catch (_) { return null; }
+            })()
         });
 
     } catch (error) {
