@@ -7229,8 +7229,10 @@ async function loadAttendanceHistory() {
         // First, get the date range of available data
         await loadAttendanceDateRange();
 
-        // Get all students from student-management (has semester/branch fields)
-        const studentsResponse = await fetch(`${SERVER_URL}/api/student-management`);
+        // Get all students filtered by semester/branch server-side
+        const studentsResponse = await fetch(
+            `${SERVER_URL}/api/students?semester=${encodeURIComponent(semesterFilter)}&branch=${encodeURIComponent(courseFilter)}`
+        );
         const studentsData = await studentsResponse.json();
 
         if (!studentsData.success) {
@@ -7245,9 +7247,8 @@ async function loadAttendanceHistory() {
         const searchQuery = document.getElementById('attendanceStudentSearch').value.toLowerCase();
 
         // Filter students
+        // Server already filtered by semester/branch — only apply search filter client-side
         let filteredStudents = students.filter(student => {
-            if (semesterFilter && student.semester !== semesterFilter) return false;
-            if (courseFilter && student.branch !== courseFilter) return false;
             if (searchQuery && !student.name.toLowerCase().includes(searchQuery) &&
                 !student.enrollmentNo.toLowerCase().includes(searchQuery)) return false;
             return true;
@@ -7431,10 +7432,10 @@ async function viewDetailedAttendance(enrollmentNo) {
     try {
         console.log(`📊 Loading attendance overview for ${enrollmentNo}...`);
 
-        // Get student info from student-management (has semester/branch)
-        const studentsResponse = await fetch(`${SERVER_URL}/api/student-management?enrollmentNo=${enrollmentNo}`);
+        // Get student info
+        const studentsResponse = await fetch(`${SERVER_URL}/api/students?enrollmentNo=${enrollmentNo}`);
         const studentsData = await studentsResponse.json();
-        const student = studentsData.student || (studentsData.students || []).find(s => s.enrollmentNo === enrollmentNo);
+        const student = (studentsData.students || []).find(s => s.enrollmentNo === enrollmentNo) || studentsData.student;
 
         if (!student) {
             throw new Error('Student not found');

@@ -5339,18 +5339,20 @@ const StudentManagement = mongoose.model('StudentManagement', studentManagementS
 
 app.get('/api/students', async (req, res) => {
     try {
-        const { enrollmentNo } = req.query;
+        const { enrollmentNo, semester, branch } = req.query;
         
         if (mongoose.connection.readyState === 1) {
-            // If enrollmentNo is provided, filter by it
-            const query = enrollmentNo ? { enrollmentNo } : {};
+            const query = {};
+            if (enrollmentNo) query.enrollmentNo = enrollmentNo;
+            if (semester)     query.semester = semester;
+            if (branch)       query.branch = branch;
             const students = await StudentManagement.find(query).lean();
             res.json({ success: true, students });
         } else {
-            // Filter from memory if enrollmentNo is provided
-            const students = enrollmentNo 
-                ? studentManagementMemory.filter(s => s.enrollmentNo === enrollmentNo)
-                : studentManagementMemory;
+            let students = studentManagementMemory;
+            if (enrollmentNo) students = students.filter(s => s.enrollmentNo === enrollmentNo);
+            if (semester)     students = students.filter(s => s.semester === semester);
+            if (branch)       students = students.filter(s => s.branch === branch);
             res.json({ success: true, students });
         }
     } catch (error) {
