@@ -1,4 +1,4 @@
-// Deployment trigger - Updated March 20, 2026 - v2.10 - Fix student socket room rejoin after server restart.
+// Deployment trigger - Updated April 6, 2026 - v2.11 - Rollback to stable native timer fix.
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
