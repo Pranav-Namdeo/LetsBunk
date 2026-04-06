@@ -702,6 +702,31 @@ export default function App() {
     const fetchOfflinePeriod = async () => {
       const period = await BSSIDStorage.getCurrentPeriodBSSID();
       setOfflinePeriod(period);
+
+      // If timer is running, update currentLecture in offlineTimerState
+      // so the Offline Timer box always shows the correct current period subject
+      if (period) {
+        setOfflineTimerState(prev => {
+          if (!prev.isRunning) return prev;
+          // Only update if subject actually changed (period boundary crossed)
+          if (prev.currentLecture?.subject === period.subject &&
+              prev.currentLecture?.startTime === period.startTime) return prev;
+          const updatedLecture = {
+            ...prev.currentLecture,
+            subject:   period.subject   || prev.currentLecture?.subject,
+            teacher:   period.teacher   || period.teacherName || prev.currentLecture?.teacher,
+            room:      period.room      || prev.currentLecture?.room,
+            startTime: period.startTime || prev.currentLecture?.startTime,
+            endTime:   period.endTime   || prev.currentLecture?.endTime,
+            period:    period.period    || prev.currentLecture?.period,
+          };
+          // Also update OfflineTimerService's internal currentLecture
+          if (OfflineTimerService.isRunning) {
+            OfflineTimerService.currentLecture = updatedLecture;
+          }
+          return { ...prev, currentLecture: updatedLecture };
+        });
+      }
     };
     fetchOfflinePeriod();
     const interval = setInterval(fetchOfflinePeriod, 60000);
@@ -1042,14 +1067,13 @@ export default function App() {
         return;
       }
       
-      // Create lecture info — use offlinePeriod for accurate per-period start/end times
+      // Create lecture info from current class
       const lectureInfo = {
-        subject: offlinePeriod?.subject || currentClassInfo.subject || currentClassInfo.currentLecture,
-        teacher: offlinePeriod?.teacher || offlinePeriod?.teacherName || currentClassInfo.teacher || 'Unknown',
-        room: offlinePeriod?.room || currentClassInfo.room || 'Unknown',
-        startTime: offlinePeriod?.startTime || currentClassInfo.startTime,
-        endTime: offlinePeriod?.endTime || currentClassInfo.endTime,
-        period: offlinePeriod?.period || null
+        subject: currentClassInfo.subject || currentClassInfo.currentLecture,
+        teacher: currentClassInfo.teacher || 'Unknown',
+        room: currentClassInfo.room || 'Unknown',
+        startTime: currentClassInfo.startTime,
+        endTime: currentClassInfo.endTime
       };
       
       console.log('📚 Attempting WiFi reconnection with lecture info:', lectureInfo);
@@ -1142,16 +1166,21 @@ export default function App() {
         { cancelable: false }
       );
       
-      // Extract current lecture info — use offlinePeriod for accurate per-period start/end times
-      // offlinePeriod comes from BSSIDStorage which has the real period schedule
-      const lectureInfo = {
-        subject: offlinePeriod?.subject || currentClassInfo.subject,
-        teacher: offlinePeriod?.teacher || offlinePeriod?.teacherName || currentClassInfo.teacher || 'Unknown',
-        room: offlinePeriod?.room || currentClassInfo.room || 'Unknown',
-        // Use per-period times from offline schedule — NOT the full-day span from currentClassInfo
-        startTime: offlinePeriod?.startTime || currentClassInfo.startTime,
-        endTime: offlinePeriod?.endTime || currentClassInfo.endTime,
-        period: offlinePeriod?.period || null
+      // Extract current lecture info — prefer offline schedule (BSSIDStorage) as source of truth
+      // offlinePeriod has the correct subject/teacher/room/time for the current period
+      const lectureInfo = offlinePeriod ? {
+        subject:   offlinePeriod.subject   || currentClassInfo.subject,
+        teacher:   offlinePeriod.teacher   || offlinePeriod.teacherName || currentClassInfo.teacher || 'Unknown',
+        room:      offlinePeriod.room      || currentClassInfo.room || 'Unknown',
+        startTime: offlinePeriod.startTime || currentClassInfo.startTime,
+        endTime:   offlinePeriod.endTime   || currentClassInfo.endTime,
+        period:    offlinePeriod.period    || null,
+      } : {
+        subject:   currentClassInfo.subject,
+        teacher:   currentClassInfo.teacher || 'Unknown',
+        room:      currentClassInfo.room || 'Unknown',
+        startTime: currentClassInfo.startTime,
+        endTime:   currentClassInfo.endTime
       };
       
       const result = await OfflineTimerService.startTimer(lectureInfo);
@@ -1734,6 +1763,26 @@ export default function App() {
           // Immediately refresh offlinePeriod state so banner updates without waiting 60s
           const updatedPeriod = await BSSIDStorage.getCurrentPeriodBSSID();
           setOfflinePeriod(updatedPeriod);
+
+          // Also update currentLecture in offlineTimerState if timer is running
+          if (updatedPeriod) {
+            setOfflineTimerState(prev => {
+              if (!prev.isRunning) return prev;
+              const updatedLecture = {
+                ...prev.currentLecture,
+                subject:   updatedPeriod.subject   || prev.currentLecture?.subject,
+                teacher:   updatedPeriod.teacher   || updatedPeriod.teacherName || prev.currentLecture?.teacher,
+                room:      updatedPeriod.room      || prev.currentLecture?.room,
+                startTime: updatedPeriod.startTime || prev.currentLecture?.startTime,
+                endTime:   updatedPeriod.endTime   || prev.currentLecture?.endTime,
+                period:    updatedPeriod.period    || prev.currentLecture?.period,
+              };
+              if (OfflineTimerService.isRunning) {
+                OfflineTimerService.currentLecture = updatedLecture;
+              }
+              return { ...prev, currentLecture: updatedLecture };
+            });
+          }
           
           // Show notification to user
           if (data.reason === 'classroom_bssid_updated') {
@@ -5209,133 +5258,131 @@ export default function App() {
                 </Text>
               </View>
 
-              {/* Attendance Threshold Progress */}
-              {offlineTimerState.thresholdSeconds > 0 && (
-                <View style={{
-                  backgroundColor: theme.background,
-                  borderRadius: 10,
-                  padding: 12,
-                  marginBottom: 15,
-                }}>
-                  {(() => {
-                    const pct = Math.min(100, Math.round((offlineTimerState.timerSeconds / offlineTimerState.thresholdSeconds) * 100));
-                    const reached = offlineTimerState.attendanceStatus === 'present';
-                    const remaining = Math.max(0, offlineTimerState.thresholdSeconds - offlineTimerState.timerSeconds);
-                    return (
-                      <>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
-                          <Text style={{ fontSize: 12, color: theme.textSecondary }}>
-                            Attendance ({offlineTimerState.attendanceThreshold}% required)
-                          </Text>
-                          <Text style={{ fontSize: 12, fontWeight: 'bold', color: reached ? '#22c55e' : '#f59e0b' }}>
-                            {reached ? '✅ Present' : `${pct}%`}
-                          </Text>
-                        </View>
-                        <View style={{ height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: 'hidden' }}>
-                          <View style={{
-                            height: 8,
-                            width: `${pct}%`,
-                            backgroundColor: reached ? '#22c55e' : '#f59e0b',
-                            borderRadius: 4,
-                          }} />
-                        </View>
-                        {!reached && remaining > 0 && (
-                          <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 4, textAlign: 'center' }}>
-                            {Math.ceil(remaining / 60)} min more to mark present
-                          </Text>
-                        )}
-                      </>
-                    );
-                  })()}
-                </View>
-              )}
-              <View style={{
-                backgroundColor: theme.background,
-                borderRadius: 10,
-                padding: 12,
-                marginBottom: 15,
-              }}>
+              {/* Attendance Threshold Progress — uses offline period duration as local fallback */}
+              {(() => {
+                // Compute thresholdSeconds locally from offline schedule if server hasn't sent it yet
+                const threshold = offlineTimerState.thresholdSeconds || (() => {
+                  const p = offlinePeriod || offlineTimerState.currentLecture;
+                  if (p?.startTime && p?.endTime) {
+                    const [sh, sm] = p.startTime.split(':').map(Number);
+                    const [eh, em] = p.endTime.split(':').map(Number);
+                    const durationMin = (eh * 60 + em) - (sh * 60 + sm);
+                    if (durationMin > 0 && durationMin <= 180) {
+                      return Math.ceil(durationMin * 60 * (offlineTimerState.attendanceThreshold || 75) / 100);
+                    }
+                  }
+                  return 0;
+                })();
+
+                if (threshold <= 0) return null;
+
+                const pct = Math.min(100, Math.round((offlineTimerState.timerSeconds / threshold) * 100));
+                const reached = offlineTimerState.attendanceStatus === 'present' || pct >= 100;
+                const remaining = Math.max(0, threshold - offlineTimerState.timerSeconds);
+
+                return (
+                  <View style={{ backgroundColor: theme.background, borderRadius: 10, padding: 12, marginBottom: 15 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <Text style={{ fontSize: 12, color: theme.textSecondary }}>
+                        Attendance ({offlineTimerState.attendanceThreshold || 75}% required)
+                      </Text>
+                      <Text style={{ fontSize: 12, fontWeight: 'bold', color: reached ? '#22c55e' : '#f59e0b' }}>
+                        {reached ? '✅ Present' : `${pct}%`}
+                      </Text>
+                    </View>
+                    <View style={{ height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: 'hidden' }}>
+                      <View style={{ height: 8, width: `${pct}%`, backgroundColor: reached ? '#22c55e' : '#f59e0b', borderRadius: 4 }} />
+                    </View>
+                    {!reached && remaining > 0 && (
+                      <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 4, textAlign: 'center' }}>
+                        {Math.ceil(remaining / 60)} min more to mark present
+                      </Text>
+                    )}
+                  </View>
+                );
+              })()}
+              <View style={{ backgroundColor: theme.background, borderRadius: 10, padding: 12, marginBottom: 15 }}>
+
+                {/* Status row */}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ fontSize: 12, color: theme.textSecondary }}>Status:</Text>
-                  <Text style={{
-                    fontSize: 12,
-                    fontWeight: 'bold',
-                    color: offlineTimerState.isRunning 
-                      ? (offlineTimerState.isPaused ? '#f59e0b' : '#22c55e')
-                      : '#ef4444'
-                  }}>
-                    {offlineTimerState.isRunning 
-                      ? (offlineTimerState.isPaused ? '⏸️ Paused' : '▶️ Running')
-                      : '⏹️ Stopped'
-                    }
+                  <Text style={{ fontSize: 12, fontWeight: 'bold',
+                    color: offlineTimerState.isRunning
+                      ? (offlineTimerState.isPaused ? '#f59e0b' : '#22c55e') : '#ef4444' }}>
+                    {offlineTimerState.isRunning
+                      ? (offlineTimerState.isPaused ? '⏸️ Paused' : '▶️ Running') : '⏹️ Stopped'}
                   </Text>
                 </View>
-                
+
+                {/* Connection row */}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 }}>
                   <Text style={{ fontSize: 12, color: theme.textSecondary }}>Connection:</Text>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{
-                      fontSize: 12,
-                      fontWeight: 'bold',
-                      color: offlineTimerState.hasInternetConnection && offlineTimerState.isConnectedToAuthorizedWiFi 
-                        ? '#22c55e' 
-                        : offlineTimerState.isConnectedToAuthorizedWiFi 
-                          ? '#f59e0b' 
-                          : '#ef4444'
-                    }}>
-                      {offlineTimerState.hasInternetConnection && offlineTimerState.isConnectedToAuthorizedWiFi 
-                        ? '🌐 Online' 
-                        : offlineTimerState.isConnectedToAuthorizedWiFi 
-                          ? '📱 Offline' 
-                          : '❌ No WiFi'
-                      }
+                    <Text style={{ fontSize: 12, fontWeight: 'bold',
+                      color: offlineTimerState.hasInternetConnection && offlineTimerState.isConnectedToAuthorizedWiFi
+                        ? '#22c55e' : offlineTimerState.isConnectedToAuthorizedWiFi ? '#f59e0b' : '#ef4444' }}>
+                      {offlineTimerState.hasInternetConnection && offlineTimerState.isConnectedToAuthorizedWiFi
+                        ? '🌐 Online' : offlineTimerState.isConnectedToAuthorizedWiFi ? '📱 Offline' : '❌ No WiFi'}
                     </Text>
                     {offlineTimerState.pendingSyncCount > 0 && (
-                      <Text style={{
-                        fontSize: 10,
-                        color: '#f59e0b',
-                        marginTop: 2
-                      }}>
+                      <Text style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>
                         {offlineTimerState.pendingSyncCount} pending sync{offlineTimerState.pendingSyncCount > 1 ? 's' : ''}
-                      </Text>
-                    )}
-                    {offlineTimerState.syncError && (
-                      <Text style={{ fontSize: 10, color: '#ef4444', marginTop: 2 }}>
-                        ⚠️ {offlineTimerState.syncError}
                       </Text>
                     )}
                   </View>
                 </View>
 
-                {/* Verification Status */}
+                {/* Security Status — from actual verification state */}
                 {offlineTimerState.isRunning && (
                   <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.border }}>
                     <Text style={{ fontSize: 11, color: theme.textSecondary, textAlign: 'center', marginBottom: 4 }}>
                       Security Status
                     </Text>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-around' }}>
-                      <Text style={{ fontSize: 10, color: '#22c55e' }}>📶 WiFi ✓</Text>
+                      <Text style={{ fontSize: 10, color: offlineTimerState.isConnectedToAuthorizedWiFi ? '#22c55e' : '#ef4444' }}>
+                        📶 WiFi {offlineTimerState.isConnectedToAuthorizedWiFi ? '✓' : '✗'}
+                      </Text>
                       <Text style={{ fontSize: 10, color: '#22c55e' }}>👤 Face ✓</Text>
-                      <Text style={{ fontSize: 10, color: '#22c55e' }}>📍 Location ✓</Text>
+                      <Text style={{ fontSize: 10, color: offlineTimerState.isConnectedToAuthorizedWiFi ? '#22c55e' : '#ef4444' }}>
+                        📍 Location {offlineTimerState.isConnectedToAuthorizedWiFi ? '✓' : '✗'}
+                      </Text>
                     </View>
                   </View>
                 )}
 
-                {offlineTimerState.queuedSyncs > 0 && (
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 }}>
-                    <Text style={{ fontSize: 12, color: theme.textSecondary }}>Queued:</Text>
-                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#f59e0b' }}>
-                      📤 {offlineTimerState.queuedSyncs} syncs pending
-                    </Text>
-                  </View>
-                )}
+                {/* Current period info from offline schedule */}
+                {(() => {
+                  const p = offlinePeriod || offlineTimerState.currentLecture;
+                  if (!p) return null;
+                  return (
+                    <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.border }}>
+                      <Text style={{ fontSize: 12, fontWeight: '600', color: theme.text, textAlign: 'center' }}>
+                        📚 {p.subject}{p.period ? ` (Period ${p.period})` : ''}
+                      </Text>
+                      <Text style={{ fontSize: 11, color: theme.textSecondary, textAlign: 'center', marginTop: 2 }}>
+                        {[
+                          p.room && `🚪 ${p.room}`,
+                          (p.teacher || p.teacherName) && `👤 ${p.teacher || p.teacherName}`,
+                          p.startTime && p.endTime && `⏰ ${p.startTime}–${p.endTime}`,
+                        ].filter(Boolean).join('  ')}
+                      </Text>
+                    </View>
+                  );
+                })()}
 
-                {offlineTimerState.currentLecture && (
-                  <View style={{ marginTop: 8, paddingTop: 8, borderTopWidth: 1, borderTopColor: theme.border }}>
-                    <Text style={{ fontSize: 11, color: theme.textSecondary, textAlign: 'center' }}>
-                      📚 {offlineTimerState.currentLecture.subject} • {offlineTimerState.currentLecture.room}
-                    </Text>
-                  </View>
+                {/* Last sync time */}
+                {offlineTimerState.lastSyncTime > 0 && (
+                  <Text style={{ fontSize: 10, color: theme.textSecondary, textAlign: 'center', marginTop: 6 }}>
+                    Last sync: {(() => {
+                      try {
+                        // lastSyncTime is boot-elapsed ms — convert to wall clock
+                        const bootNow = _appGetBootMs();
+                        const elapsedSinceSync = bootNow - offlineTimerState.lastSyncTime;
+                        const wallTime = new Date(Date.now() - elapsedSinceSync);
+                        return wallTime.toLocaleTimeString();
+                      } catch { return '—'; }
+                    })()}
+                  </Text>
                 )}
               </View>
 
