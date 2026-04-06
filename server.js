@@ -1658,10 +1658,17 @@ async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
         if (!daySchedule) return null;
 
         // Find the period whose window contains currentTime
+        // Match by period NUMBER not array index — breaks/empty slots can shift index
         for (let i = 0; i < daySchedule.length; i++) {
             const period = daySchedule[i];
-            const periodInfo = timetable.periods[i];
-            if (!periodInfo || period.isBreak || !period.subject) continue;
+            if (!period || period.isBreak || !period.subject) continue;
+
+            // Match period timing by period number (P1=1, P2=2...) not array position
+            const periodNumber = period.period || (i + 1);
+            const periodInfo = timetable.periods.find(p => p.number === periodNumber)
+                            || timetable.periods[i]; // fallback to index if number not set
+
+            if (!periodInfo) continue;
 
             const periodStart = timeToMinutes(periodInfo.startTime);
             const periodEnd   = timeToMinutes(periodInfo.endTime);
@@ -1671,7 +1678,7 @@ async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
                     subject:          period.subject,
                     teacher:          period.teacher,
                     room:             period.room,
-                    period:           period.period || (i + 1),
+                    period:           periodNumber,
                     startTime:        periodInfo.startTime,
                     endTime:          periodInfo.endTime,
                     totalSeconds:     (periodEnd - periodStart) * 60,
@@ -1684,19 +1691,23 @@ async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
         }
 
         // No exact match — find the most recent period that has already started
-        // (student checked in late, after a period ended)
         let latestStarted = null;
         for (let i = 0; i < daySchedule.length; i++) {
             const period = daySchedule[i];
-            const periodInfo = timetable.periods[i];
-            if (!periodInfo || period.isBreak || !period.subject) continue;
+            if (!period || period.isBreak || !period.subject) continue;
+
+            const periodNumber = period.period || (i + 1);
+            const periodInfo = timetable.periods.find(p => p.number === periodNumber)
+                            || timetable.periods[i];
+
+            if (!periodInfo) continue;
             const periodStart = timeToMinutes(periodInfo.startTime);
             if (periodStart <= currentTime) {
                 latestStarted = {
                     subject:   period.subject,
                     teacher:   period.teacher,
                     room:      period.room,
-                    period:    period.period || (i + 1),
+                    period:    periodNumber,
                     startTime: periodInfo.startTime,
                     endTime:   periodInfo.endTime,
                     periodStart,
@@ -2255,14 +2266,18 @@ app.post('/api/attendance/check-in', checkInLimiter, async (req, res) => {
 
         for (let i = 0; i < daySchedule.length; i++) {
             const period = daySchedule[i];
-            const periodInfo = timetable.periods[i];
+            if (!period || period.isBreak || !period.subject) continue;
 
-            if (!period || period.isBreak || !period.subject || !periodInfo) continue;
+            // Match by period number, not array index (breaks can shift index)
+            const periodNumber = period.period || (i + 1);
+            const periodInfo = timetable.periods.find(p => p.number === periodNumber)
+                            || timetable.periods[i];
 
-            const periodNumber = i + 1;
-            const periodId     = `P${periodNumber}`;
-            const periodStart  = timeToMinutes(periodInfo.startTime);
-            const periodEnd    = timeToMinutes(periodInfo.endTime);
+            if (!periodInfo) continue;
+
+            const periodId    = `P${periodNumber}`;
+            const periodStart = timeToMinutes(periodInfo.startTime);
+            const periodEnd   = timeToMinutes(periodInfo.endTime);
 
             // Determine relationship of this period to current server time (IST)
             const isCurrentPeriod = serverMinutes >= periodStart && serverMinutes < periodEnd;
@@ -2879,8 +2894,10 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                         let classMinutes = 0;
                         for (let i = 0; i < sched.length; i++) {
                             const slot = sched[i];
-                            const pInfo = tt.periods[i];
-                            if (!slot || slot.isBreak || !slot.subject || !pInfo) continue;
+                            if (!slot || slot.isBreak || !slot.subject) continue;
+                            const periodNumber = slot.period || (i + 1);
+                            const pInfo = tt.periods.find(p => p.number === periodNumber) || tt.periods[i];
+                            if (!pInfo) continue;
                             classMinutes += timeToMinutes(pInfo.endTime) - timeToMinutes(pInfo.startTime);
                         }
                         if (classMinutes > 0) {

@@ -1042,13 +1042,14 @@ export default function App() {
         return;
       }
       
-      // Create lecture info from current class
+      // Create lecture info — use offlinePeriod for accurate per-period start/end times
       const lectureInfo = {
-        subject: currentClassInfo.subject || currentClassInfo.currentLecture,
-        teacher: currentClassInfo.teacher || 'Unknown',
-        room: currentClassInfo.room || 'Unknown',
-        startTime: currentClassInfo.startTime,
-        endTime: currentClassInfo.endTime
+        subject: offlinePeriod?.subject || currentClassInfo.subject || currentClassInfo.currentLecture,
+        teacher: offlinePeriod?.teacher || offlinePeriod?.teacherName || currentClassInfo.teacher || 'Unknown',
+        room: offlinePeriod?.room || currentClassInfo.room || 'Unknown',
+        startTime: offlinePeriod?.startTime || currentClassInfo.startTime,
+        endTime: offlinePeriod?.endTime || currentClassInfo.endTime,
+        period: offlinePeriod?.period || null
       };
       
       console.log('📚 Attempting WiFi reconnection with lecture info:', lectureInfo);
@@ -1141,13 +1142,16 @@ export default function App() {
         { cancelable: false }
       );
       
-      // Extract current lecture info
+      // Extract current lecture info — use offlinePeriod for accurate per-period start/end times
+      // offlinePeriod comes from BSSIDStorage which has the real period schedule
       const lectureInfo = {
-        subject: currentClassInfo.subject,
-        teacher: currentClassInfo.teacher || 'Unknown',
-        room: currentClassInfo.room || 'Unknown',
-        startTime: currentClassInfo.startTime,
-        endTime: currentClassInfo.endTime
+        subject: offlinePeriod?.subject || currentClassInfo.subject,
+        teacher: offlinePeriod?.teacher || offlinePeriod?.teacherName || currentClassInfo.teacher || 'Unknown',
+        room: offlinePeriod?.room || currentClassInfo.room || 'Unknown',
+        // Use per-period times from offline schedule — NOT the full-day span from currentClassInfo
+        startTime: offlinePeriod?.startTime || currentClassInfo.startTime,
+        endTime: offlinePeriod?.endTime || currentClassInfo.endTime,
+        period: offlinePeriod?.period || null
       };
       
       const result = await OfflineTimerService.startTimer(lectureInfo);

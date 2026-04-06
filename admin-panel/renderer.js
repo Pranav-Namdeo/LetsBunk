@@ -6748,45 +6748,46 @@ initializePeriods();
 
 async function loadPeriods() {
     try {
-        // Try to get periods from any existing timetable, or use defaults
         let periodsLoaded = false;
 
-        // First, try to get periods from localStorage (saved custom periods)
-        const savedPeriods = localStorage.getItem('defaultPeriods');
-        if (savedPeriods) {
-            try {
-                currentPeriods = JSON.parse(savedPeriods);
-                periodsLoaded = true;
-            } catch (e) {
-                console.warn('Invalid saved periods in localStorage');
-            }
-        }
-
-        // If no saved periods, try to fetch from any available timetable
-        if (!periodsLoaded) {
-            try {
-                // Prefer currently loaded timetable periods (if any)
-                if (currentTimetable?.periods?.length > 0) {
-                    currentPeriods = currentTimetable.periods;
+        // Always fetch from server first — this is the source of truth
+        try {
+            const res = await fetch(`${SERVER_URL}/api/periods`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && Array.isArray(data.periods) && data.periods.length > 0) {
+                    currentPeriods = data.periods;
                     periodsLoaded = true;
-                } else {
-                    // Otherwise, pull periods from the first available timetable on server
-                    const allRes = await fetch(`${SERVER_URL}/api/timetables`);
-                    if (allRes.ok) {
-                        const allData = await allRes.json();
-                        const first = allData?.timetables?.find(tt => tt?.periods?.length > 0);
-                        if (first?.periods?.length > 0) {
-                            currentPeriods = first.periods;
-                            periodsLoaded = true;
-                        }
-                    }
+                    // Keep localStorage in sync with server
+                    localStorage.setItem('defaultPeriods', JSON.stringify(currentPeriods));
+                    console.log(`✅ Loaded ${currentPeriods.length} periods from server`);
                 }
-            } catch (fetchError) {
-                console.warn('Could not fetch periods from timetables:', fetchError);
+            }
+        } catch (fetchError) {
+            console.warn('Could not fetch periods from server:', fetchError);
+        }
+
+        // Fallback 1: localStorage (last known good config)
+        if (!periodsLoaded) {
+            const savedPeriods = localStorage.getItem('defaultPeriods');
+            if (savedPeriods) {
+                try {
+                    currentPeriods = JSON.parse(savedPeriods);
+                    periodsLoaded = true;
+                    console.log('⚠️ Using cached periods from localStorage');
+                } catch (e) {
+                    console.warn('Invalid saved periods in localStorage');
+                }
             }
         }
 
-        // If still no periods loaded, use system defaults
+        // Fallback 2: currently loaded timetable
+        if (!periodsLoaded && currentTimetable?.periods?.length > 0) {
+            currentPeriods = currentTimetable.periods;
+            periodsLoaded = true;
+        }
+
+        // Fallback 3: system defaults
         if (!periodsLoaded) {
             currentPeriods = getDefaultPeriods();
         }
@@ -7041,8 +7042,8 @@ async function savePeriodsConfig() {
         console.log('Response data:', data);
 
         if (response.ok && data.success) {
-            // Persist as local default so UI does not fall back to old hardcoded values
-            saveDefaultPeriods(currentPeriods);
+            // Update localStorage so it stays in sync with server
+            localStorage.setItem('defaultPeriods', JSON.stringify(currentPeriods));
 
             // Keep currently loaded timetable (if any) in sync with new period config
             if (currentTimetable) {
@@ -7051,7 +7052,7 @@ async function savePeriodsConfig() {
             }
 
             showNotification(`✅ Successfully updated ${data.updatedCount} timetables!`, 'success');
-            loadPeriods(); // Reload to confirm
+            loadPeriods(); // Reload from server to confirm
         } else {
             showNotification('Failed to update periods: ' + (data.error || data.message || 'Unknown error'), 'error');
         }
