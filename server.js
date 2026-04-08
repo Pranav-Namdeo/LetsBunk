@@ -1683,28 +1683,9 @@ async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
             }
         }
 
-        // No exact match — find the most recent period that has already started
-        // (student checked in late, after a period ended)
-        let latestStarted = null;
-        for (let i = 0; i < daySchedule.length; i++) {
-            const period = daySchedule[i];
-            const periodInfo = timetable.periods[i];
-            if (!periodInfo || period.isBreak || !period.subject) continue;
-            const periodStart = timeToMinutes(periodInfo.startTime);
-            if (periodStart <= currentTime) {
-                latestStarted = {
-                    subject:   period.subject,
-                    teacher:   period.teacher,
-                    room:      period.room,
-                    period:    period.period || (i + 1),
-                    startTime: periodInfo.startTime,
-                    endTime:   periodInfo.endTime,
-                    periodStart,
-                    periodEnd: timeToMinutes(periodInfo.endTime)
-                };
-            }
-        }
-        return latestStarted;
+        // No exact match — only return a period if it's currently active (not ended)
+        // Do NOT return latestStarted if it has already ended — that causes wrong threshold
+        return null;
 
     } catch (error) {
         console.error('❌ Error getting lecture info:', error);
@@ -2760,14 +2741,12 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         // 5. Compute attendance status using threshold — use server timetable for period duration
         let computedStatus = 'absent';
         try {
-            // Always fetch current period from server timetable (immune to client sending wrong times)
             const currentPeriodInfo = await getCurrentLectureInfo(student.semester, student.branch);
-            const periodStart = currentPeriodInfo?.startTime || lecture?.startTime;
-            const periodEnd   = currentPeriodInfo?.endTime   || lecture?.endTime;
+            const periodStart = currentPeriodInfo?.startTime;
+            const periodEnd   = currentPeriodInfo?.endTime;
 
             if (periodStart && periodEnd) {
                 const durationMin = timeToMinutes(periodEnd) - timeToMinutes(periodStart);
-                // Sanity: reject if > 3 hours (full-day span from bad client data)
                 if (durationMin > 0 && durationMin <= 180) {
                     const lectureDurationSeconds = durationMin * 60;
                     const attendedPct = (timerSeconds / lectureDurationSeconds) * 100;
@@ -2780,6 +2759,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     computedStatus = 'active';
                 }
             } else if (Boolean(isRunning)) {
+                // No active period on server — still mark active if timer is running
                 computedStatus = 'active';
             }
         } catch (statusErr) {
@@ -2951,24 +2931,17 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             attendanceStatus: computedStatus,
             attendanceThreshold: ATTENDANCE_THRESHOLD,
             // thresholdSeconds = 75% of the CURRENT PERIOD duration from server timetable
-            // We fetch the current period from the timetable server-side so it's always accurate
+            // getCurrentLectureInfo returns null if no period is currently active — returns null in that case
             thresholdSeconds: await (async () => {
                 try {
                     const lectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
                     if (lectureInfo && lectureInfo.startTime && lectureInfo.endTime) {
                         const durationMin = timeToMinutes(lectureInfo.endTime) - timeToMinutes(lectureInfo.startTime);
-                        if (durationMin > 0) {
-                            return Math.ceil(durationMin * 60 * ATTENDANCE_THRESHOLD / 100);
-                        }
-                    }
-                    // Fallback: use client lecture if server lookup fails, but sanity-check duration
-                    if (lecture?.startTime && lecture?.endTime) {
-                        const durationMin = timeToMinutes(lecture.endTime) - timeToMinutes(lecture.startTime);
                         if (durationMin > 0 && durationMin <= 180) {
                             return Math.ceil(durationMin * 60 * ATTENDANCE_THRESHOLD / 100);
                         }
                     }
-                    return null;
+                    return null; // no active period — frontend uses offlinePeriod instead
                 } catch (_) { return null; }
             })()
         });

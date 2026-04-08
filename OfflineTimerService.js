@@ -260,6 +260,10 @@ class OfflineTimerService {
         this.lectureStartTime = _getBootMs() || Date.now();
         this.authorizedBSSID = bssidCheck.expectedBSSID;
 
+        // Reset threshold so it's recomputed for this period (not carried from previous)
+        this.thresholdSeconds = null;
+        this.attendanceStatus = 'absent';
+
         // Start timer
         this.isRunning = true;
         this.isPaused = false;
@@ -703,13 +707,15 @@ class OfflineTimerService {
         this.pausedDueToWiFiLoss = false;
         this.previousLectureData = null;
       } else if (reason === 'lecture_ended') {
-        // Lecture ended - clear all tracking and context
+        // Lecture ended - clear all tracking and context including threshold
         console.log('⏰ Lecture period ended - clearing all tracking');
         this.wasManuallyStoppedInSameLecture = false;
         this.wasRunningBeforeDisconnect = false;
         this.disconnectionTime = null;
         this.pausedDueToWiFiLoss = false;
         this.previousLectureData = null;
+        this.thresholdSeconds = null;  // reset so next period gets fresh threshold
+        this.attendanceStatus = 'absent';
       } else {
         // Other reasons - clear all tracking
         this.wasRunningBeforeDisconnect = false;
@@ -717,6 +723,8 @@ class OfflineTimerService {
         this.pausedDueToWiFiLoss = false;
         this.previousLectureData = null;
         this.wasManuallyStoppedInSameLecture = false;
+        this.thresholdSeconds = null;  // reset threshold on any stop
+        this.attendanceStatus = 'absent';
       }
       
       // Stop counting

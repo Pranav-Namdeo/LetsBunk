@@ -696,6 +696,37 @@ export default function App() {
     return () => clearInterval(progressInterval);
   }, [timetable, currentDay, selectedRole]);
 
+  // If timetable hasn't loaded or has no schedule but offline period is active,
+  // synthesize currentClassInfo from offlinePeriod so the timer box shows
+  useEffect(() => {
+    if (selectedRole !== 'student') return;
+
+    if (offlinePeriod) {
+      // Active period in offline schedule — synthesize currentClassInfo if timetable hasn't provided it
+      setCurrentClassInfo(prev => {
+        if (prev && !prev.isFromOfflineSchedule) return prev; // timetable already provided — don't override
+        return {
+          subject: offlinePeriod.subject,
+          teacher: offlinePeriod.teacher || offlinePeriod.teacherName || 'Unknown',
+          room: offlinePeriod.room || 'Unknown',
+          startTime: offlinePeriod.startTime,
+          endTime: offlinePeriod.endTime,
+          currentLecture: `${offlinePeriod.subject} (${offlinePeriod.startTime}-${offlinePeriod.endTime})`,
+          isFromOfflineSchedule: true,
+          isWithinLectureHours: true,
+          elapsedMinutes: 0,
+          remainingMinutes: 0,
+        };
+      });
+    } else {
+      // No active period — clear synthesized info (but keep timetable-provided info)
+      setCurrentClassInfo(prev => {
+        if (prev && !prev.isFromOfflineSchedule) return prev;
+        return null;
+      });
+    }
+  }, [offlinePeriod, selectedRole]);
+
   // Refresh offline period data from BSSIDStorage every minute
   useEffect(() => {
     if (selectedRole !== 'student') return;
@@ -876,7 +907,9 @@ export default function App() {
                     ...prev,
                     isRunning: false,
                     isPaused: false,
-                    currentLecture: null
+                    currentLecture: null,
+                    thresholdSeconds: null,   // reset so next period gets fresh threshold
+                    attendanceStatus: 'absent'
                   }));
                   // Alert if stopped because student left classroom while screen was off
                   if (event.reason === 'wifi_left_classroom_background') {
@@ -5260,12 +5293,26 @@ export default function App() {
 
               {/* Attendance Threshold Progress — uses offline period duration as local fallback */}
               {(() => {
-                // Compute thresholdSeconds locally from offline schedule if server hasn't sent it yet
-                const threshold = offlineTimerState.thresholdSeconds || (() => {
-                  const p = offlinePeriod || offlineTimerState.currentLecture;
+                // ALWAYS compute threshold from offlinePeriod first — it's the current period
+                // offlineTimerState.thresholdSeconds from server may be stale (previous period)
+                const threshold = (() => {
+                  // Priority 1: current offline period (always accurate)
+                  const p = offlinePeriod;
                   if (p?.startTime && p?.endTime) {
                     const [sh, sm] = p.startTime.split(':').map(Number);
                     const [eh, em] = p.endTime.split(':').map(Number);
+                    const durationMin = (eh * 60 + em) - (sh * 60 + sm);
+                    if (durationMin > 0 && durationMin <= 180) {
+                      return Math.ceil(durationMin * 60 * (offlineTimerState.attendanceThreshold || 75) / 100);
+                    }
+                  }
+                  // Priority 2: server-synced value (only if offline period unavailable)
+                  if (offlineTimerState.thresholdSeconds > 0) return offlineTimerState.thresholdSeconds;
+                  // Priority 3: currentLecture times (set at timer start)
+                  const cl = offlineTimerState.currentLecture;
+                  if (cl?.startTime && cl?.endTime) {
+                    const [sh, sm] = cl.startTime.split(':').map(Number);
+                    const [eh, em] = cl.endTime.split(':').map(Number);
                     const durationMin = (eh * 60 + em) - (sh * 60 + sm);
                     if (durationMin > 0 && durationMin <= 180) {
                       return Math.ceil(durationMin * 60 * (offlineTimerState.attendanceThreshold || 75) / 100);
