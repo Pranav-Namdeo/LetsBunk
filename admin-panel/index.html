@@ -616,148 +616,109 @@
 
                 <!-- Attendance History Section -->
                 <section id="attendance-section" class="section">
+
+                    <!-- Header -->
                     <div class="section-header">
                         <h2 class="section-title">📊 Attendance History</h2>
                         <div class="action-buttons">
-                            <button class="btn btn-success" id="addAttendanceBtn">➕ Add Attendance</button>
-                            <button class="btn btn-warning" id="bulkEditAttendanceBtn">✏️ Bulk Edit</button>
-                            <button class="btn btn-info" id="manageAttendanceBtn">⚙️ Manage</button>
-                            <button class="btn btn-secondary" id="exportAttendanceBtn">📤 Export Report</button>
-                            <button class="btn btn-primary" id="refreshAttendanceBtn">🔄 Refresh</button>
+                            <button class="btn btn-secondary" id="exportAttendanceBtn">📤 Export CSV</button>
+                            <button class="btn btn-primary" id="refreshAttendanceBtn">� Refresh</button>
                         </div>
                     </div>
 
-                    <div class="primary-filters">
-                        <div class="filter-group-required">
-                            <label class="filter-label">
-                                <span class="required-star">*</span> Select Branch:
-                            </label>
-                            <select id="attendanceCourseFilter" class="filter-select filter-required">
-                                <option value="">-- Select Branch --</option>
-                                <!-- Populated dynamically -->
-                            </select>
-                        </div>
-                        <div class="filter-group-required">
-                            <label class="filter-label">
-                                <span class="required-star">*</span> Select Semester:
-                            </label>
-                            <select id="attendanceSemesterFilter" class="filter-select filter-required">
-                                <option value="">-- Select Semester --</option>
-                                <!-- Populated dynamically -->
-                            </select>
-                        </div>
-                        <button class="btn btn-primary" id="fetchAttendanceBtn" disabled>
-                            📊 Fetch Attendance Data
-                        </button>
-                    </div>
-
-                    <div class="secondary-filters" style="display: none;" id="secondaryFilters">
-                        <div class="date-filter-group">
-                            <label>From:</label>
-                            <input type="date" id="attendanceStartDate" class="filter-select"
-                                title="Start date (auto-set to earliest available data)" readonly>
-                        </div>
-                        <div class="date-filter-group">
-                            <label>To:</label>
-                            <input type="date" id="attendanceEndDate" class="filter-select"
-                                title="End date (auto-set to latest available data)" readonly>
-                        </div>
-                        <input type="text" id="attendanceStudentSearch" class="search-input"
-                            placeholder="Search by name or enrollment...">
-                    </div>
-
-                    <div class="data-range-info">
-                        <div class="info-card">
-                            <span class="info-icon">📅</span>
-                            <div class="info-content">
-                                <strong>Data Available From:</strong>
-                                <span id="dataStartDate">Loading...</span>
+                    <!-- Filter Bar -->
+                    <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:20px;margin-bottom:20px;">
+                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:14px;align-items:end;">
+                            <div>
+                                <label style="display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">Branch <span style="color:#ef4444;">*</span></label>
+                                <select id="attendanceCourseFilter" class="filter-select" style="width:100%;">
+                                    <option value="">-- Select Branch --</option>
+                                </select>
                             </div>
-                        </div>
-                        <div class="info-card">
-                            <span class="info-icon">📆</span>
-                            <div class="info-content">
-                                <strong>Data Available To:</strong>
-                                <span id="dataEndDate">Loading...</span>
+                            <div>
+                                <label style="display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">Semester <span style="color:#ef4444;">*</span></label>
+                                <select id="attendanceSemesterFilter" class="filter-select" style="width:100%;">
+                                    <option value="">-- Select Semester --</option>
+                                </select>
                             </div>
-                        </div>
-                        <div class="info-card">
-                            <span class="info-icon">📊</span>
-                            <div class="info-content">
-                                <strong>Total Records:</strong>
-                                <span id="totalRecordsCount">0</span>
+                            <div>
+                                <label style="display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">From Date</label>
+                                <input type="date" id="attendanceStartDate" class="filter-select" style="width:100%;" onchange="loadAttendanceHistory()">
                             </div>
+                            <div>
+                                <label style="display:block;font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px;">To Date</label>
+                                <input type="date" id="attendanceEndDate" class="filter-select" style="width:100%;" onchange="loadAttendanceHistory()">
+                            </div>
+                            <button class="btn btn-primary" id="fetchAttendanceBtn" disabled style="height:40px;padding:0 24px;white-space:nowrap;">
+                                📊 Fetch
+                            </button>
+                        </div>
+                        <div style="margin-top:14px;">
+                            <input type="text" id="attendanceStudentSearch" class="filter-select"
+                                style="width:100%;max-width:360px;"
+                                placeholder="🔍  Search by name or enrollment number...">
                         </div>
                     </div>
 
-                    <div class="attendance-summary-cards">
-                        <div class="summary-card">
-                            <div class="summary-icon">👥</div>
-                            <div class="summary-info">
-                                <h3 id="totalStudentsAttendance">0</h3>
-                                <p>Total Students</p>
+                    <!-- Summary Cards -->
+                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px;">
+                        <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px;">
+                            <div style="font-size:32px;">👥</div>
+                            <div>
+                                <div id="totalStudentsAttendance" style="font-size:26px;font-weight:700;color:var(--text-primary);">0</div>
+                                <div style="font-size:12px;color:var(--text-secondary);">Total Students</div>
                             </div>
                         </div>
-                        <div class="summary-card">
-                            <div class="summary-icon">✅</div>
-                            <div class="summary-info">
-                                <h3 id="avgAttendanceRate">0%</h3>
-                                <p>Average Attendance</p>
+                        <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px;">
+                            <div style="font-size:32px;">✅</div>
+                            <div>
+                                <div id="avgAttendanceRate" style="font-size:26px;font-weight:700;color:#22c55e;">0%</div>
+                                <div style="font-size:12px;color:var(--text-secondary);">Avg Attendance</div>
                             </div>
                         </div>
-                        <div class="summary-card">
-                            <div class="summary-icon">📅</div>
-                            <div class="summary-info">
-                                <h3 id="totalDaysTracked">0</h3>
-                                <p>Days Tracked</p>
+                        <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px;">
+                            <div style="font-size:32px;">📅</div>
+                            <div>
+                                <div id="totalDaysTracked" style="font-size:26px;font-weight:700;color:var(--text-primary);">0</div>
+                                <div style="font-size:12px;color:var(--text-secondary);">Days Tracked</div>
                             </div>
                         </div>
-                        <div class="summary-card">
-                            <div class="summary-icon">⏰</div>
-                            <div class="summary-info">
-                                <h3 id="avgPeriodsPerDay">0</h3>
-                                <p>Avg Periods/Day</p>
+                        <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;padding:18px;display:flex;align-items:center;gap:14px;">
+                            <div style="font-size:32px;">⏱️</div>
+                            <div>
+                                <div id="avgPeriodsPerDay" style="font-size:26px;font-weight:700;color:var(--text-primary);">0h</div>
+                                <div style="font-size:12px;color:var(--text-secondary);">Total Hours</div>
                             </div>
                         </div>
                     </div>
 
-                    <div class="table-container" style="min-height: 200px;">
-                        <table class="data-table">
+                    <!-- Table -->
+                    <div style="background:var(--card-bg);border:1px solid var(--border-color);border-radius:12px;overflow:hidden;">
+                        <table style="width:100%;border-collapse:collapse;">
                             <thead>
-                                <tr>
-                                    <th>Enrollment No</th>
-                                    <th>Name</th>
-                                    <th>Course</th>
-                                    <th>Semester</th>
-                                    <th>Total Days</th>
-                                    <th>Present Days</th>
-                                    <th>Attendance %</th>
-                                    <th>Avg Periods/Day</th>
-                                    <th>Daily Status</th>
-                                    <th>Actions</th>
+                                <tr style="background:var(--bg-secondary,rgba(0,0,0,.15));border-bottom:1px solid var(--border-color);">
+                                    <th style="padding:12px 16px;text-align:left;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;width:40px;">#</th>
+                                    <th style="padding:12px 16px;text-align:left;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Student</th>
+                                    <th style="padding:12px 16px;text-align:center;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Days</th>
+                                    <th style="padding:12px 16px;text-align:center;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Present</th>
+                                    <th style="padding:12px 16px;text-align:center;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Absent</th>
+                                    <th style="padding:12px 16px;text-align:left;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;min-width:160px;">Attendance %</th>
+                                    <th style="padding:12px 16px;text-align:left;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Subjects</th>
+                                    <th style="padding:12px 16px;text-align:center;font-size:12px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;">Status</th>
                                 </tr>
                             </thead>
                             <tbody id="attendanceHistoryTableBody">
                                 <tr>
-                                    <td colspan="10" style="text-align: center; padding: 60px;">
-                                        <div style="font-size: 48px; margin-bottom: 20px;">📊</div>
-                                        <h3 style="color: var(--text-primary); margin-bottom: 10px;">Welcome to
-                                            Attendance History</h3>
-                                        <p style="color: var(--text-secondary); margin-bottom: 20px;">Select a branch
-                                            and semester above to view detailed attendance records</p>
-                                        <div
-                                            style="display: flex; gap: 10px; justify-content: center; align-items: center; color: var(--text-secondary); font-size: 14px;">
-                                            <span>1️⃣ Select Branch</span>
-                                            <span>→</span>
-                                            <span>2️⃣ Select Semester</span>
-                                            <span>→</span>
-                                            <span>3️⃣ Click Fetch</span>
-                                        </div>
+                                    <td colspan="8" style="text-align:center;padding:60px 20px;">
+                                        <div style="font-size:48px;margin-bottom:16px;">📊</div>
+                                        <div style="font-size:16px;font-weight:600;color:var(--text-primary);margin-bottom:8px;">Select Branch &amp; Semester</div>
+                                        <div style="font-size:13px;color:var(--text-secondary);">Choose filters above and click Fetch to load attendance data</div>
                                     </td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
+
                 </section>
 
                 <!-- Period Reports Section -->

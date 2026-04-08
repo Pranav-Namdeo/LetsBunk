@@ -511,6 +511,20 @@ function setupEventListeners() {
     document.getElementById('saveServerBtn').addEventListener('click', saveServerSettings);
     document.getElementById('saveThresholdBtn').addEventListener('click', saveAttendanceThreshold);
 
+    // Attendance History buttons
+    const fetchAttendanceBtn = document.getElementById('fetchAttendanceBtn');
+    if (fetchAttendanceBtn) fetchAttendanceBtn.addEventListener('click', loadAttendanceHistory);
+    const refreshAttendanceBtn = document.getElementById('refreshAttendanceBtn');
+    if (refreshAttendanceBtn) refreshAttendanceBtn.addEventListener('click', loadAttendanceHistory);
+    const exportAttendanceBtn = document.getElementById('exportAttendanceBtn');
+    if (exportAttendanceBtn) exportAttendanceBtn.addEventListener('click', exportAttendanceReport);
+    const attendanceSemFilter = document.getElementById('attendanceSemesterFilter');
+    if (attendanceSemFilter) attendanceSemFilter.addEventListener('change', onAttendanceFilterChange);
+    const attendanceCrsFilter = document.getElementById('attendanceCourseFilter');
+    if (attendanceCrsFilter) attendanceCrsFilter.addEventListener('change', onAttendanceFilterChange);
+    const attendanceSearch = document.getElementById('attendanceStudentSearch');
+    if (attendanceSearch) attendanceSearch.addEventListener('input', debounce(loadAttendanceHistory, 400));
+
     // Setup threshold slider/input sync
     setupThresholdSync();
 
@@ -573,6 +587,7 @@ function switchSection(sectionName) {
             });
             break;
         case 'settings': loadAttendanceThresholdSetting(); break;
+        case 'attendance': initAttendanceHistory(); break;
     }
 }
 
@@ -12033,3 +12048,250 @@ document.addEventListener('DOMContentLoaded', () => {
         if (isLoggedIn()) startWalkthrough(false);
     }, 800);
 });
+
+// ============================================================
+// ATTENDANCE HISTORY SECTION
+// ============================================================
+
+function debounce(fn, delay) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
+}
+
+let _attendanceSocket = null;
+
+function initAttendanceHistory() {
+    // Set default date range: last 30 days
+    const today = new Date();
+    const from  = new Date(today); from.setDate(from.getDate() - 30);
+    const fmt = d => d.toISOString().split('T')[0];
+    const startEl = document.getElementById('attendanceStartDate');
+    const endEl   = document.getElementById('attendanceEndDate');
+    if (startEl && !startEl.value) startEl.value = fmt(from);
+    if (endEl   && !endEl.value)   endEl.value   = fmt(today);
+
+    // Enable fetch button when both filters are selected
+    onAttendanceFilterChange();
+
+    // Subscribe to live timer_broadcast for real-time row updates
+    _subscribeAttendanceLiveUpdates();
+}
+
+function onAttendanceFilterChange() {
+    const sem = document.getElementById('attendanceSemesterFilter')?.value;
+    const crs = document.getElementById('attendanceCourseFilter')?.value;
+    const btn = document.getElementById('fetchAttendanceBtn');
+    if (btn) btn.disabled = !(sem && crs);
+}
+
+function _subscribeAttendanceLiveUpdates() {
+    if (typeof io === 'undefined') return;
+    if (_attendanceSocket) return; // already subscribed
+    try {
+        _attendanceSocket = io(SERVER_URL, { transports: ['websocket'], reconnection: true });
+        _attendanceSocket.on('timer_broadcast', (data) => {
+            _updateAttendanceRowLive(data);
+        });
+    } catch (_) {}
+}
+
+function _updateAttendanceRowLive(data) {
+    // Find the row for this student and update the status cell in real-time
+    const row = document.querySelector(`tr[data-enrollment="${data.enrollmentNo}"]`);
+    if (!row) return;
+    const statusCell = row.querySelector('.live-status-cell');
+    if (statusCell) {
+        const color = data.status === 'present' ? '#22c55e' : data.status === 'active' ? '#f59e0b' : '#ef4444';
+        statusCell.innerHTML = `<span style="color:${color};font-weight:600;">${data.status || 'absent'}</span>`;
+    }
+    const timerCell = row.querySelector('.live-timer-cell');
+    if (timerCell && data.timerValue != null) {
+        const m = Math.floor(data.timerValue / 60);
+        const s = data.timerValue % 60;
+        timerCell.textContent = `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+    }
+}
+
+async function loadAttendanceHistory() {
+    const semesterFilter = document.getElementById('attendanceSemesterFilter')?.value;
+    const courseFilter   = document.getElementById('attendanceCourseFilter')?.value;
+    const tbody = document.getElementById('attendanceHistoryTableBody');
+    if (!tbody) return;
+
+    if (!semesterFilter || !courseFilter) {
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;">
+            <div style="font-size:40px;margin-bottom:12px;">📊</div>
+            <h3>Select Branch and Semester</h3></td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;">
+        <div style="font-size:40px;margin-bottom:12px;">⏳</div>
+        <h3>Loading...</h3></td></tr>`;
+
+    try {
+        const startDate = document.getElementById('attendanceStartDate')?.value || '';
+        const endDate   = document.getElementById('attendanceEndDate')?.value   || '';
+        const search    = document.getElementById('attendanceStudentSearch')?.value?.toLowerCase() || '';
+
+        // 1. Get students for this semester/branch
+        const studRes  = await fetch(`${SERVER_URL}/api/students?semester=${encodeURIComponent(semesterFilter)}&branch=${encodeURIComponent(courseFilter)}`);
+        const studData = await studRes.json();
+        if (!studData.success) throw new Error('Failed to load students');
+
+        let students = (studData.students || []).filter(s => {
+            if (!search) return true;
+            return s.name?.toLowerCase().includes(search) || s.enrollmentNo?.toLowerCase().includes(search);
+        });
+
+        // 2. Fetch summary for each student in parallel
+        const withSummary = await Promise.all(students.map(async s => {
+            try {
+                let url = `${SERVER_URL}/api/attendance/summary/${s.enrollmentNo}`;
+                const params = [];
+                if (startDate) params.push(`startDate=${startDate}`);
+                if (endDate)   params.push(`endDate=${endDate}`);
+                if (params.length) url += '?' + params.join('&');
+                const r = await fetch(url);
+                const d = await r.json();
+                return { ...s, summary: d.success ? d.summary : _emptySummary() };
+            } catch { return { ...s, summary: _emptySummary() }; }
+        }));
+
+        // 3. Update summary cards
+        const total   = withSummary.length;
+        const avgPct  = total > 0 ? Math.round(withSummary.reduce((a, s) => a + s.summary.overallPercentage, 0) / total) : 0;
+        const maxDays = Math.max(0, ...withSummary.map(s => s.summary.totalDays));
+        const totalHrs = Math.floor(withSummary.reduce((a, s) => a + s.summary.totalAttendedMinutes, 0) / 60);
+
+        _setEl('totalStudentsAttendance', total);
+        _setEl('avgAttendanceRate', `${avgPct}%`);
+        _setEl('totalDaysTracked', maxDays);
+        const hEl = document.getElementById('totalHoursAttended') || document.getElementById('avgPeriodsPerDay');
+        if (hEl) hEl.textContent = `${totalHrs}h`;
+
+        // 4. Render table
+        renderAttendanceHistoryTable(withSummary);
+
+        // 5. Join live socket room for real-time updates
+        if (_attendanceSocket) {
+            _attendanceSocket.emit('join_class_room', { semester: semesterFilter, branch: courseFilter });
+        }
+
+    } catch (err) {
+        console.error('❌ loadAttendanceHistory:', err);
+        tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:#ef4444;">
+            ❌ Failed to load: ${err.message}</td></tr>`;
+        showNotification('Failed to load attendance history', 'error');
+    }
+}
+
+function _emptySummary() {
+    return { totalDays: 0, presentDays: 0, totalAttendedMinutes: 0, totalClassMinutes: 0, overallPercentage: 0, subjects: [] };
+}
+
+function _setEl(id, val) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = val;
+}
+
+function renderAttendanceHistoryTable(students) {
+    const tbody = document.getElementById('attendanceHistoryTableBody');
+    if (!tbody) return;
+
+    if (students.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;padding:48px;color:var(--text-secondary);">
+            No students found for the selected filters.</td></tr>`;
+        return;
+    }
+
+    tbody.innerHTML = students.map((s, i) => {
+        const sum = s.summary;
+        const pct = sum.overallPercentage || 0;
+        const pctColor = pct >= 75 ? '#22c55e' : pct >= 50 ? '#f59e0b' : '#ef4444';
+        const absentDays = Math.max(0, sum.totalDays - sum.presentDays);
+        const statusLabel = pct >= 75 ? 'Present' : 'Absent';
+        const statusBg    = pct >= 75 ? 'rgba(34,197,94,.15)' : 'rgba(239,68,68,.15)';
+        const statusColor = pct >= 75 ? '#22c55e' : '#ef4444';
+
+        // Subject pills — max 3 shown
+        const subjectPills = (sum.subjects || []).slice(0, 3).map(sub => {
+            const c = sub.percentage >= 75 ? '#22c55e' : sub.percentage >= 50 ? '#f59e0b' : '#ef4444';
+            return `<span title="${sub.subject}: ${sub.present}/${sub.total} (${sub.percentage}%)"
+                style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:20px;
+                font-size:11px;font-weight:600;background:rgba(0,217,255,.08);color:var(--text-secondary);
+                border:1px solid var(--border-color);white-space:nowrap;">
+                <span style="width:6px;height:6px;border-radius:50%;background:${c};flex-shrink:0;"></span>
+                ${sub.subject.length > 10 ? sub.subject.slice(0,10)+'…' : sub.subject}
+                <span style="color:${c};">${sub.percentage}%</span>
+            </span>`;
+        }).join('');
+        const extraSubjects = (sum.subjects || []).length > 3
+            ? `<span style="font-size:11px;color:var(--text-secondary);">+${sum.subjects.length - 3} more</span>` : '';
+
+        return `<tr data-enrollment="${s.enrollmentNo}"
+            style="border-bottom:1px solid var(--border-color);cursor:pointer;transition:background .15s;"
+            onmouseover="this.style.background='rgba(0,217,255,.04)'"
+            onmouseout="this.style.background=''"
+            onclick="showStudentAttendance('${s.enrollmentNo}','${s.name.replace(/'/g,"\\'")}')">
+
+            <td style="padding:14px 16px;font-size:13px;color:var(--text-secondary);">${i + 1}</td>
+
+            <td style="padding:14px 16px;">
+                <div style="font-weight:600;font-size:14px;color:var(--text-primary);">${s.name}</div>
+                <div style="font-size:11px;color:var(--text-secondary);margin-top:2px;">${s.enrollmentNo}</div>
+            </td>
+
+            <td style="padding:14px 16px;text-align:center;">
+                <span style="font-size:15px;font-weight:700;color:var(--text-primary);">${sum.totalDays}</span>
+            </td>
+
+            <td style="padding:14px 16px;text-align:center;">
+                <span style="font-size:15px;font-weight:700;color:#22c55e;">${sum.presentDays}</span>
+            </td>
+
+            <td style="padding:14px 16px;text-align:center;">
+                <span style="font-size:15px;font-weight:700;color:#ef4444;">${absentDays}</span>
+            </td>
+
+            <td style="padding:14px 16px;min-width:160px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="flex:1;height:7px;background:var(--border-color);border-radius:4px;overflow:hidden;position:relative;">
+                        <div style="position:absolute;left:0;top:0;height:100%;width:${Math.min(pct,100)}%;
+                            background:${pctColor};border-radius:4px;transition:width .4s;"></div>
+                        <!-- 75% marker -->
+                        <div style="position:absolute;left:75%;top:-2px;width:2px;height:11px;
+                            background:#ef4444;border-radius:1px;opacity:.7;"></div>
+                    </div>
+                    <span style="font-size:13px;font-weight:700;color:${pctColor};min-width:38px;text-align:right;">${pct}%</span>
+                </div>
+            </td>
+
+            <td style="padding:14px 16px;">
+                <div style="display:flex;flex-wrap:wrap;gap:4px;">
+                    ${subjectPills || '<span style="font-size:11px;color:var(--text-secondary);">—</span>'}
+                    ${extraSubjects}
+                </div>
+            </td>
+
+            <td style="padding:14px 16px;text-align:center;" class="live-status-cell">
+                <span style="display:inline-block;padding:4px 12px;border-radius:20px;font-size:12px;
+                    font-weight:600;background:${statusBg};color:${statusColor};">
+                    ${statusLabel}
+                </span>
+            </td>
+        </tr>`;
+    }).join('');
+}
+
+async function exportAttendanceReport() {
+    const sem = document.getElementById('attendanceSemesterFilter')?.value;
+    const crs = document.getElementById('attendanceCourseFilter')?.value;
+    if (!sem || !crs) { showNotification('Select branch and semester first', 'warning'); return; }
+    const start = document.getElementById('attendanceStartDate')?.value || '';
+    const end   = document.getElementById('attendanceEndDate')?.value   || '';
+    let url = `${SERVER_URL}/api/attendance/export?semester=${encodeURIComponent(sem)}&branch=${encodeURIComponent(crs)}`;
+    if (start) url += `&startDate=${start}`;
+    if (end)   url += `&endDate=${end}`;
+    window.open(url, '_blank');
+}

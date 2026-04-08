@@ -2747,7 +2747,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
             if (periodStart && periodEnd) {
                 const durationMin = timeToMinutes(periodEnd) - timeToMinutes(periodStart);
-                if (durationMin > 0 && durationMin <= 180) {
+                // Removed <= 180 cap — periods can be any valid duration
+                if (durationMin > 0) {
                     const lectureDurationSeconds = durationMin * 60;
                     const attendedPct = (timerSeconds / lectureDurationSeconds) * 100;
                     if (attendedPct >= ATTENDANCE_THRESHOLD) {
@@ -2937,7 +2938,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     const lectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
                     if (lectureInfo && lectureInfo.startTime && lectureInfo.endTime) {
                         const durationMin = timeToMinutes(lectureInfo.endTime) - timeToMinutes(lectureInfo.startTime);
-                        if (durationMin > 0 && durationMin <= 180) {
+                        // Removed <= 180 cap — accept any valid period duration
+                        if (durationMin > 0) {
                             return Math.ceil(durationMin * 60 * ATTENDANCE_THRESHOLD / 100);
                         }
                     }
@@ -7669,131 +7671,92 @@ app.get('/api/attendance/date-range', async (req, res) => {
 });
 
 // Get attendance summary for a student
+// Primary source: DailyAttendance (accurate daily aggregation) + PeriodAttendance (per-subject breakdown)
+// Falls back to AttendanceRecord only if DailyAttendance has no data
 app.get('/api/attendance/summary/:enrollmentNo', async (req, res) => {
     try {
         const { enrollmentNo } = req.params;
         const { startDate, endDate } = req.query;
 
-        console.log(`📊 Fetching attendance summary for ${enrollmentNo}`);
-
         if (!enrollmentNo) {
             return res.status(400).json({ success: false, error: 'Enrollment number required' });
         }
 
-        // Build date filter
-        let dateFilter = {};
-        if (startDate && endDate) {
-            dateFilter = {
-                date: {
-                    $gte: new Date(startDate),
-                    $lte: new Date(endDate)
-                }
-            };
+        const dateFilter = {};
+        if (startDate) dateFilter.$gte = new Date(startDate);
+        if (endDate)   dateFilter.$lte = new Date(endDate);
+        const hasDateFilter = startDate || endDate;
+
+        if (mongoose.connection.readyState !== 1) {
+            return res.json({ success: true, summary: { totalDays: 0, presentDays: 0, totalAttendedMinutes: 0, totalClassMinutes: 0, overallPercentage: 0, subjects: [] } });
         }
 
-        if (mongoose.connection.readyState === 1) {
-            // Get student info
-            const student = await StudentManagement.findOne({ enrollmentNo });
-            if (!student) {
-                return res.json({
-                    success: true,
-                    summary: {
-                        totalDays: 0,
-                        presentDays: 0,
-                        totalAttendedMinutes: 0,
-                        totalClassMinutes: 0,
-                        overallPercentage: 0,
-                        subjects: []
-                    }
-                });
+        const student = await StudentManagement.findOne({ enrollmentNo });
+        if (!student) {
+            return res.json({ success: true, summary: { totalDays: 0, presentDays: 0, totalAttendedMinutes: 0, totalClassMinutes: 0, overallPercentage: 0, subjects: [] } });
+        }
+
+        // ── Primary: DailyAttendance ──────────────────────────────────────────
+        const dailyQuery = { enrollmentNo };
+        if (hasDateFilter) dailyQuery.date = dateFilter;
+        const dailyRecords = await DailyAttendance.find(dailyQuery).lean();
+
+        let totalDays = 0, presentDays = 0, totalAttendedMinutes = 0, totalClassMinutes = 0;
+
+        if (dailyRecords.length > 0) {
+            totalDays = dailyRecords.length;
+            presentDays = dailyRecords.filter(r => r.dailyStatus === 'present').length;
+            // DailyAttendance stores period counts — derive minutes from AttendanceRecord for accuracy
+            const arQuery = { $or: [{ studentId: enrollmentNo }, { enrollmentNo }] };
+            if (hasDateFilter) arQuery.date = dateFilter;
+            const arRecords = await AttendanceRecord.find(arQuery).lean();
+            totalAttendedMinutes = arRecords.reduce((s, r) => s + (r.totalAttended || 0), 0);
+            totalClassMinutes    = arRecords.reduce((s, r) => s + (r.totalClassTime || 0), 0);
+            // If AttendanceRecord has no minutes, estimate from period counts
+            if (totalClassMinutes === 0) {
+                const totalPeriods  = dailyRecords.reduce((s, r) => s + (r.totalPeriods   || 0), 0);
+                const presentPeriods = dailyRecords.reduce((s, r) => s + (r.presentPeriods || 0), 0);
+                totalClassMinutes    = totalPeriods   * 50;
+                totalAttendedMinutes = presentPeriods * 50;
             }
-
-            // Get attendance records - use enrollmentNumber field (note: different from enrollmentNo)
-            const records = await AttendanceRecord.find({
-                $or: [
-                    { studentId: enrollmentNo },
-                    { enrollmentNo: enrollmentNo }
-                ],
-                ...dateFilter
-            }).lean();
-
-            console.log(`   Found ${records.length} attendance records`);
-
-            // Calculate summary
-            const uniqueDates = [...new Set(records.map(r => new Date(r.date).toDateString()))];
-            const presentRecords = records.filter(r => r.status === 'present');
-
-            // Use totalAttended/totalClassTime if available, otherwise calculate from lectures
-            let totalAttendedMinutes = records.reduce((sum, r) => sum + (r.totalAttended || 0), 0);
-            let totalClassMinutes = records.reduce((sum, r) => sum + (r.totalClassTime || 0), 0);
-
-            // If totalAttended/totalClassTime are 0, calculate from lectures (assuming 50 min per lecture)
-            if (totalAttendedMinutes === 0 && totalClassMinutes === 0) {
-                const totalLecturesAttended = records.reduce((sum, r) => sum + (r.lecturesAttended || 0), 0);
-                const totalLecturesTotal = records.reduce((sum, r) => sum + (r.totalLectures || 0), 0);
-                totalAttendedMinutes = totalLecturesAttended * 50; // 50 minutes per lecture
-                totalClassMinutes = totalLecturesTotal * 50;
-            }
-
-            const overallPercentage = totalClassMinutes > 0
-                ? Math.round((totalAttendedMinutes / totalClassMinutes) * 100)
-                : 0;
-
-            res.json({
-                success: true,
-                summary: {
-                    totalDays: uniqueDates.length,
-                    presentDays: presentRecords.length,
-                    totalAttendedMinutes,
-                    totalClassMinutes,
-                    overallPercentage,
-                    subjects: []
-                }
-            });
         } else {
-            // Memory fallback
-            const records = attendanceRecordsMemory.filter(r => {
-                const matchesStudent = r.enrollmentNo === enrollmentNo || r.studentId === enrollmentNo;
-                if (!matchesStudent) return false;
-
-                if (startDate && endDate) {
-                    const recordDate = new Date(r.date);
-                    return recordDate >= new Date(startDate) && recordDate <= new Date(endDate);
-                }
-                return true;
-            });
-
-            const uniqueDates = [...new Set(records.map(r => new Date(r.date).toDateString()))];
-            const presentRecords = records.filter(r => r.status === 'present');
-
-            // Use totalAttended/totalClassTime if available, otherwise calculate from lectures
-            let totalAttendedMinutes = records.reduce((sum, r) => sum + (r.totalAttended || 0), 0);
-            let totalClassMinutes = records.reduce((sum, r) => sum + (r.totalClassTime || 0), 0);
-
-            // If totalAttended/totalClassTime are 0, calculate from lectures (assuming 50 min per lecture)
-            if (totalAttendedMinutes === 0 && totalClassMinutes === 0) {
-                const totalLecturesAttended = records.reduce((sum, r) => sum + (r.lecturesAttended || 0), 0);
-                const totalLecturesTotal = records.reduce((sum, r) => sum + (r.totalLectures || 0), 0);
-                totalAttendedMinutes = totalLecturesAttended * 50; // 50 minutes per lecture
-                totalClassMinutes = totalLecturesTotal * 50;
-            }
-
-            const overallPercentage = totalClassMinutes > 0
-                ? Math.round((totalAttendedMinutes / totalClassMinutes) * 100)
-                : 0;
-
-            res.json({
-                success: true,
-                summary: {
-                    totalDays: uniqueDates.length,
-                    presentDays: presentRecords.length,
-                    totalAttendedMinutes,
-                    totalClassMinutes,
-                    overallPercentage,
-                    subjects: []
-                }
-            });
+            // ── Fallback: AttendanceRecord ────────────────────────────────────
+            const arQuery = { $or: [{ studentId: enrollmentNo }, { enrollmentNo }] };
+            if (hasDateFilter) arQuery.date = dateFilter;
+            const arRecords = await AttendanceRecord.find(arQuery).lean();
+            const uniqueDates = [...new Set(arRecords.map(r => new Date(r.date).toDateString()))];
+            totalDays            = uniqueDates.length;
+            presentDays          = arRecords.filter(r => r.status === 'present').length;
+            totalAttendedMinutes = arRecords.reduce((s, r) => s + (r.totalAttended || 0), 0);
+            totalClassMinutes    = arRecords.reduce((s, r) => s + (r.totalClassTime || 0), 0);
         }
+
+        const overallPercentage = totalClassMinutes > 0
+            ? Math.round((totalAttendedMinutes / totalClassMinutes) * 100)
+            : (totalDays > 0 ? Math.round((presentDays / totalDays) * 100) : 0);
+
+        // ── Per-subject breakdown from PeriodAttendance ───────────────────────
+        const periodQuery = { enrollmentNo };
+        if (hasDateFilter) periodQuery.date = dateFilter;
+        const periodRecords = await PeriodAttendance.find(periodQuery).lean();
+
+        const subjectMap = {};
+        for (const pr of periodRecords) {
+            const subj = pr.subject || 'Unknown';
+            if (!subjectMap[subj]) subjectMap[subj] = { subject: subj, present: 0, total: 0 };
+            subjectMap[subj].total++;
+            if (pr.status === 'present') subjectMap[subj].present++;
+        }
+        const subjects = Object.values(subjectMap).map(s => ({
+            ...s,
+            percentage: s.total > 0 ? Math.round((s.present / s.total) * 100) : 0
+        }));
+
+        res.json({
+            success: true,
+            summary: { totalDays, presentDays, totalAttendedMinutes, totalClassMinutes, overallPercentage, subjects }
+        });
+
     } catch (error) {
         console.error('❌ Error fetching attendance summary:', error);
         res.status(500).json({ success: false, error: error.message });
