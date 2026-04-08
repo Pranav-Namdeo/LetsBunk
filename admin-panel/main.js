@@ -1,19 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
-const fs = require('fs');
-
-// Load SERVER_URL from root .env (one level up from admin-panel/)
-function loadServerUrl() {
-  try {
-    const envPath = path.join(__dirname, '..', '.env');
-    const content = fs.readFileSync(envPath, 'utf8');
-    const match = content.match(/^SERVER_URL=(.+)$/m);
-    return match ? match[1].trim() : '';
-  } catch (e) {
-    return '';
-  }
-}
-const SERVER_URL_FROM_ENV = loadServerUrl();
 
 // Handle Squirrel events for Windows installer
 try {
@@ -46,7 +32,7 @@ function createWindow() {
 
   mainWindow.loadFile('index.html');
 
-  // Show window when ready and inject SERVER_URL from .env
+  // Show window when ready
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
   });
@@ -646,8 +632,6 @@ Built with Electron & Node.js
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
 }
-
-// Synchronous IPC: no longer needed — preload reads .env directly
 
 app.whenReady().then(createWindow);
 

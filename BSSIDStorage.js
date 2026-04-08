@@ -1,5 +1,66 @@
 // BSSIDStorage.js - Secure storage for daily BSSID schedule in React Native
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { NativeModules } from 'react-native';
+
+const { TimerModule: _BSSIDTimerModule } = NativeModules;
+
+// Boot-elapsed cache for spoof-proof time (same pattern as OfflineTimerService)
+let _bssidBootMsCache = 0;
+let _bssidBootMsCacheAt = 0;
+async function _bssidRefreshBootCache() {
+  try {
+    if (_BSSIDTimerModule && _BSSIDTimerModule.getBootElapsedMs) {
+      const { bootElapsedMs } = await _BSSIDTimerModule.getBootElapsedMs();
+      _bssidBootMsCache = bootElapsedMs;
+      _bssidBootMsCacheAt = Date.now();
+    }
+  } catch (_) {}
+}
+function _bssidGetBootMs() {
+  if (_bssidBootMsCache > 0) {
+    return _bssidBootMsCache + Math.max(0, Date.now() - _bssidBootMsCacheAt);
+  }
+  return 0; // 0 = not available yet
+}
+
+/**
+ * Get today's date string (YYYY-MM-DD) using server time.
+ * Falls back to boot-elapsed, then device time.
+ */
+function _getTodayString() {
+  try {
+    const { getServerTime } = require('./ServerTime');
+    return getServerTime().nowDate().toISOString().split('T')[0];
+  } catch (_) {}
+  const bootMs = _bssidGetBootMs();
+  if (bootMs > 0) return new Date(bootMs).toISOString().split('T')[0];
+  return new Date().toISOString().split('T')[0];
+}
+
+/**
+ * Get current time in minutes since midnight using server time.
+ * Falls back to boot-elapsed, then device time as last resort.
+ */
+function _getCurrentMinutes() {
+  // 1. Try server time (synced, spoof-proof)
+  try {
+    const { getServerTime } = require('./ServerTime');
+    const st = getServerTime();
+    const now = st.nowDate();
+    return now.getHours() * 60 + now.getMinutes();
+  } catch (_) {}
+
+  // 2. Try boot-elapsed (spoof-proof monotonic clock)
+  const bootMs = _bssidGetBootMs();
+  if (bootMs > 0) {
+    const now = new Date(bootMs);
+    return now.getHours() * 60 + now.getMinutes();
+  }
+
+  // 3. Last resort — device time (spoofable, but better than nothing)
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
 
 const KEYS = {
   BSSID_SCHEDULE: '@letsbunk_bssid_schedule',
@@ -22,11 +83,18 @@ class BSSIDStorage {
 
       // Convert schedule to JSON string for storage
       const scheduleString = JSON.stringify(schedule);
-      const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+      const today = _getTodayString();
       
       await AsyncStorage.setItem(KEYS.BSSID_SCHEDULE, scheduleString);
       await AsyncStorage.setItem(KEYS.BSSID_DATE, today);
-      await AsyncStorage.setItem(KEYS.BSSID_CACHED_AT, new Date().toISOString());
+      let cachedAtStr;
+      try {
+        const { getServerTime } = require('./ServerTime');
+        cachedAtStr = getServerTime().nowISO();
+      } catch (_) {
+        cachedAtStr = new Date(_bssidGetBootMs() || Date.now()).toISOString();
+      }
+      await AsyncStorage.setItem(KEYS.BSSID_CACHED_AT, cachedAtStr);
       
       console.log(`✅ BSSID schedule saved for ${today} (${schedule.length} periods)`);
       return true;
@@ -44,7 +112,7 @@ class BSSIDStorage {
     try {
       const scheduleString = await AsyncStorage.getItem(KEYS.BSSID_SCHEDULE);
       const savedDate = await AsyncStorage.getItem(KEYS.BSSID_DATE);
-      const today = new Date().toISOString().split('T')[0];
+      const today = _getTodayString();
       
       if (!scheduleString || !savedDate) {
         console.log('📭 No BSSID schedule found in storage');
@@ -79,19 +147,9 @@ class BSSIDStorage {
         return null;
       }
 
-      // Use server time (IST) — immune to device time spoofing
-      let currentTime;
-      try {
-        const { getServerTime } = require('./ServerTime');
-        currentTime = getServerTime().getISTTimeInMinutes();
-        console.log(`⏰ IST time for period check: ${Math.floor(currentTime/60)}:${String(currentTime%60).padStart(2,'0')} (${currentTime} min)`);
-      } catch {
-        // Fallback: always apply IST offset (UTC+5:30) regardless of device timezone
-        const istMs = Date.now() + (5.5 * 60 * 60 * 1000);
-        const istDate = new Date(istMs);
-        currentTime = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
-        console.log(`⏰ IST fallback time: ${Math.floor(currentTime/60)}:${String(currentTime%60).padStart(2,'0')} (${currentTime} min)`);
-      }
+      // Refresh boot cache so _getCurrentMinutes() has fresh data
+      await _bssidRefreshBootCache();
+      const currentTime = _getCurrentMinutes(); // spoof-proof
 
       // Find current period
       for (const period of schedule) {
@@ -210,7 +268,7 @@ class BSSIDStorage {
   static async needsRefresh() {
     try {
       const savedDate = await AsyncStorage.getItem(KEYS.BSSID_DATE);
-      const today = new Date().toISOString().split('T')[0];
+      const today = _getTodayString();
       
       if (!savedDate) {
         console.log('🔄 BSSID schedule needs refresh: No data');
@@ -258,7 +316,7 @@ class BSSIDStorage {
       const schedule = await this.getDailySchedule();
       const savedDate = await AsyncStorage.getItem(KEYS.BSSID_DATE);
       const cachedAt = await AsyncStorage.getItem(KEYS.BSSID_CACHED_AT);
-      const today = new Date().toISOString().split('T')[0];
+      const today = _getTodayString();
 
       return {
         hasSchedule: !!schedule,

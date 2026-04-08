@@ -173,11 +173,15 @@ export default function TimetableScreen({
   // Get current day index based on available days
   const getCurrentDayIndex = () => {
     try {
-      const dayOfWeek = getServerTime().getISTDayOfWeek();
+      const dayOfWeek = getServerTime().nowDate().getDay();
       const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
       const currentDayName = dayNames[dayOfWeek];
+
+      // Find index in available days
       const dayKeys = timetable?.timetable ? Object.keys(timetable.timetable) : [];
       const index = dayKeys.indexOf(currentDayName);
+
+      // If current day not in timetable, default to first available day
       return index >= 0 ? index : 0;
     } catch {
       return 0;
@@ -559,11 +563,18 @@ export default function TimetableScreen({
 
   const getCurrentPeriod = () => {
     try {
-      const istMin = getServerTime().getISTTimeInMinutes();
-      const hour = Math.floor(istMin / 60);
-      if (hour >= 9 && hour < 17) return hour - 8;
+      const now = getServerTime().nowDate();
+      const hour = now.getHours();
+      if (hour >= 9 && hour < 17) {
+        return hour - 8; // Period 1 starts at 9 AM
+      }
       return null;
     } catch {
+      const now = new Date();
+      const hour = now.getHours();
+      if (hour >= 9 && hour < 17) {
+        return hour - 8;
+      }
       return null;
     }
   };

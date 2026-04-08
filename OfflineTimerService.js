@@ -18,6 +18,49 @@ const OFFLINE_TIMER_KEY = '@offline_timer_state';
 const SYNC_QUEUE_KEY = '@sync_queue';
 const LECTURE_CONTEXT_KEY = '@lecture_context';
 
+/**
+ * Module-level boot-elapsed cache.
+ * Updated every second by the JS tick loop via TimerModule.getElapsedSeconds().
+ * Used by _getBootMs() for synchronous spoof-proof time reads.
+ * Value = SystemClock.elapsedRealtime() from Kotlin — time since device boot.
+ */
+let _bootMsCache = 0;
+let _bootMsCacheUpdatedAt = 0; // Date.now() when cache was last set
+
+/**
+ * Update the boot-ms cache. Called every second from the tick loop.
+ * Also called on initialize so the cache is warm before the timer starts.
+ */
+async function _refreshBootMsCache() {
+  try {
+    if (TimerModule && TimerModule.getBootElapsedMs) {
+      const { bootElapsedMs } = await TimerModule.getBootElapsedMs();
+      _bootMsCache = bootElapsedMs;
+      _bootMsCacheUpdatedAt = Date.now();
+    }
+  } catch (_) {}
+}
+
+/**
+ * Get a spoof-proof monotonic timestamp in milliseconds (time since device boot).
+ * SystemClock.elapsedRealtime() CANNOT be changed by adjusting device date/time.
+ *
+ * If the cache is stale (>2s old) we extrapolate using Date.now() delta —
+ * this is still safe because we only use it for short elapsed-time math,
+ * not for absolute wall-clock comparisons.
+ */
+function _getBootMs() {
+  if (_bootMsCache > 0) {
+    // Extrapolate from last known boot-ms using device-time delta
+    // Even if device time is spoofed, the delta since _bootMsCacheUpdatedAt
+    // is bounded by the cache refresh interval (≤1s normally), so error is tiny.
+    const deviceDelta = Date.now() - _bootMsCacheUpdatedAt;
+    return _bootMsCache + Math.max(0, deviceDelta);
+  }
+  // Cache not yet populated — return 0 so callers fall back gracefully
+  return 0;
+}
+
 class OfflineTimerService {
   constructor() {
     this.isRunning = false;
@@ -76,6 +119,10 @@ class OfflineTimerService {
       
       this.studentId = studentId;
       this.serverUrl = serverUrl;
+
+      // Warm up the boot-ms cache immediately so _getBootMs() is accurate
+      // before any timing operations happen
+      await _refreshBootMsCache();
       
       // Initialize WiFiManager (already initialized in offline-bssid system)
       console.log('📶 WiFiManager already initialized in offline-bssid system');
@@ -196,7 +243,7 @@ class OfflineTimerService {
           console.log('✅ Face verification passed');
 
           // Update face verification tracking
-          this.lastFaceVerificationTime = Date.now();
+          this.lastFaceVerificationTime = _getBootMs() || Date.now();
           this.lastVerifiedLecture = { ...lectureInfo };
 
           // Reset timer for new lecture
@@ -210,8 +257,12 @@ class OfflineTimerService {
 
         // Step 3: Set lecture context and start timer
         this.currentLecture = lectureInfo;
-        this.lectureStartTime = Date.now();
+        this.lectureStartTime = _getBootMs() || Date.now();
         this.authorizedBSSID = bssidCheck.expectedBSSID;
+
+        // Reset threshold so it's recomputed for this period (not carried from previous)
+        this.thresholdSeconds = null;
+        this.attendanceStatus = 'absent';
 
         // Start timer
         this.isRunning = true;
@@ -398,7 +449,7 @@ class OfflineTimerService {
         const { getServerTime } = require('./ServerTime');
         timestamp = getServerTime().nowISO();
       } catch {
-        timestamp = new Date().toISOString();
+        timestamp = new Date(_getBootMs() || Date.now()).toISOString();
       }
 
       const response = await fetch(`${this.serverUrl}/api/attendance/check-in`, {
@@ -481,27 +532,24 @@ class OfflineTimerService {
         this.timerSeconds = 0;
       }
       
-      // Step 3: Face re-verification — only required for different lecture
-      if (!isSameLecture) {
-        console.log('👤 Step 3: Different lecture - performing face re-verification...');
-        const faceVerificationResult = await this.performFaceVerification();
-
-        if (!faceVerificationResult.success) {
-          console.error('❌ Face re-verification failed:', faceVerificationResult.error);
-          return {
-            success: false,
-            error: 'Face re-verification failed on reconnection',
-            reason: faceVerificationResult.reason,
-            step: 'face_verification'
-          };
-        }
-        console.log('✅ Face re-verification passed');
-      } else {
-        console.log('🔄 Step 3: Same lecture WiFi reconnect - skipping face re-verification');
+      // Step 3: Face re-verification (mandatory for all reconnections)
+      console.log('👤 Step 3: Performing mandatory face re-verification...');
+      const faceVerificationResult = await this.performFaceVerification();
+      
+      if (!faceVerificationResult.success) {
+        console.error('❌ Face re-verification failed:', faceVerificationResult.error);
+        return {
+          success: false,
+          error: 'Face re-verification failed on reconnection',
+          reason: faceVerificationResult.reason,
+          step: 'face_verification'
+        };
       }
       
+      console.log('✅ Face re-verification passed');
+      
       // Step 4: Handle timer resumption based on scenario
-      if (isSameLecture && (this.wasRunningBeforeDisconnect || this.pausedDueToWiFiLoss)) {
+      if (isSameLecture && this.wasRunningBeforeDisconnect) {
         // Scenario 1: Same lecture - resume from paused state
         console.log('▶️ Same lecture - resuming timer from paused state');
         console.log(`   Resuming from: ${this.timerSeconds} seconds`);
@@ -533,7 +581,7 @@ class OfflineTimerService {
         
         // Set new lecture context
         this.currentLecture = newLectureInfo;
-        this.lectureStartTime = Date.now();
+        this.lectureStartTime = _getBootMs() || Date.now();
         this.authorizedBSSID = bssidCheck.expectedBSSID;
         
         // Start fresh timer
@@ -598,9 +646,7 @@ class OfflineTimerService {
           studentId: this.studentId,
           timerSeconds: this.previousLectureData.timerSeconds,
           lecture: this.previousLectureData.lecture,
-          timestamp: this.previousLectureData.disconnectionTime || (() => {
-            try { const { getServerTime } = require('./ServerTime'); return getServerTime().now(); } catch { return Date.now(); }
-          })(),
+          timestamp: this.previousLectureData.disconnectionTime || _getBootMs() || Date.now(),
           isRunning: false, // Mark as stopped since we're switching lectures
           isPaused: false,
           finalSync: true, // Flag to indicate this is a final sync
@@ -638,7 +684,7 @@ class OfflineTimerService {
       if (reason === 'wifi_disconnected' || reason === 'bssid_changed') {
         console.log('📶 Timer stopped due to WiFi issue - tracking disconnection state');
         this.wasRunningBeforeDisconnect = this.isRunning;
-        this.disconnectionTime = Date.now();
+        this.disconnectionTime = _getBootMs() || Date.now();
         this.pausedDueToWiFiLoss = true;
         
         // Don't reset lecture context on WiFi disconnection - keep for potential resume
@@ -661,13 +707,15 @@ class OfflineTimerService {
         this.pausedDueToWiFiLoss = false;
         this.previousLectureData = null;
       } else if (reason === 'lecture_ended') {
-        // Lecture ended - clear all tracking and context
+        // Lecture ended - clear all tracking and context including threshold
         console.log('⏰ Lecture period ended - clearing all tracking');
         this.wasManuallyStoppedInSameLecture = false;
         this.wasRunningBeforeDisconnect = false;
         this.disconnectionTime = null;
         this.pausedDueToWiFiLoss = false;
         this.previousLectureData = null;
+        this.thresholdSeconds = null;  // reset so next period gets fresh threshold
+        this.attendanceStatus = 'absent';
       } else {
         // Other reasons - clear all tracking
         this.wasRunningBeforeDisconnect = false;
@@ -675,6 +723,8 @@ class OfflineTimerService {
         this.pausedDueToWiFiLoss = false;
         this.previousLectureData = null;
         this.wasManuallyStoppedInSameLecture = false;
+        this.thresholdSeconds = null;  // reset threshold on any stop
+        this.attendanceStatus = 'absent';
       }
       
       // Stop counting
@@ -753,8 +803,8 @@ class OfflineTimerService {
     }
     
     this.isPaused = false;
-    // Re-anchor with monotonic clock — immune to device time changes
-    this._countingStartedAt = performance.now();
+    // Re-anchor timestamp so elapsed calculation starts fresh from current value
+    this._countingStartedAt = _getBootMs() || Date.now();
     this._countingBaseSeconds = this.timerSeconds;
     this.startCounting();
     
@@ -773,6 +823,10 @@ class OfflineTimerService {
    * running even when the screen is off or JS is throttled.
    * JS polls every second only to update the UI.
    */
+  /**
+   * (Removed — replaced by module-level _getBootMs() function above)
+   */
+
   startCounting() {
     if (this.timerInterval) {
       clearInterval(this.timerInterval);
@@ -800,7 +854,9 @@ class OfflineTimerService {
       }
     } else {
       console.warn('⚠️ TimerModule not available — falling back to JS timer');
-      this._countingStartedAt = performance.now(); // monotonic — spoof-proof
+      // Use boot-elapsed (spoof-proof). If cache not yet warm, will be 0
+      // and we anchor on first tick once cache is populated.
+      this._countingStartedAt = _getBootMs() || Date.now();
       this._countingBaseSeconds = this.timerSeconds;
     }
 
@@ -808,22 +864,27 @@ class OfflineTimerService {
     this.timerInterval = setInterval(async () => {
       if (!this.isRunning || this.isPaused) return;
 
+      // Refresh boot-ms cache every tick so _getBootMs() stays accurate
+      await _refreshBootMsCache();
+
       if (TimerModule) {
         try {
           const { seconds } = await TimerModule.getElapsedSeconds();
           this.timerSeconds = Math.floor(seconds);
         } catch (_) {
-          // Native call failed — fall back to monotonic JS elapsed
-          if (this._countingStartedAt) {
+          // Native call failed — fall back to boot-elapsed
+          const nowMs = _getBootMs();
+          if (this._countingStartedAt && nowMs > 0) {
             this.timerSeconds = this._countingBaseSeconds +
-              Math.floor((performance.now() - this._countingStartedAt) / 1000);
+              Math.floor((nowMs - this._countingStartedAt) / 1000);
           }
         }
       } else {
-        // Pure JS fallback — monotonic clock
-        if (this._countingStartedAt) {
+        // Pure JS fallback — use boot-elapsed
+        const nowMs = _getBootMs();
+        if (this._countingStartedAt && nowMs > 0) {
           this.timerSeconds = this._countingBaseSeconds +
-            Math.floor((performance.now() - this._countingStartedAt) / 1000);
+            Math.floor((nowMs - this._countingStartedAt) / 1000);
         }
       }
 
@@ -943,25 +1004,34 @@ class OfflineTimerService {
    */
   isLectureEnded() {
     if (!this.currentLecture || !this.currentLecture.endTime) {
+      console.log('🔍 Lecture end check: No lecture or endTime available');
       return false;
     }
 
-    // Use server time (IST) — immune to device time spoofing
-    let currentTimeInMinutes;
+    // Use server time (spoof-proof) — falls back to device time only if not synced
+    let now;
     try {
       const { getServerTime } = require('./ServerTime');
-      currentTimeInMinutes = getServerTime().getISTTimeInMinutes();
+      now = getServerTime().nowDate();
     } catch {
-      const istMs = Date.now() + (5.5 * 60 * 60 * 1000);
-      const istDate = new Date(istMs);
-      currentTimeInMinutes = istDate.getUTCHours() * 60 + istDate.getUTCMinutes();
+      now = new Date(_getBootMs() || Date.now());
     }
 
+    const currentHour   = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTimeInMinutes = currentHour * 60 + currentMinute;
+    
+    // Parse lecture end time (format: "HH:MM")
     const [endHour, endMinute] = this.currentLecture.endTime.split(':').map(Number);
     const endTimeInMinutes = endHour * 60 + endMinute;
-
+    
     const isEnded = currentTimeInMinutes >= endTimeInMinutes;
-    console.log(`🔍 Lecture end: current=${currentTimeInMinutes}m end=${endTimeInMinutes}m ended=${isEnded}`);
+    
+    console.log('🔍 Lecture end check:');
+    console.log(`   Current time: ${currentHour.toString().padStart(2, '0')}:${currentMinute.toString().padStart(2, '0')} (${currentTimeInMinutes} minutes)`);
+    console.log(`   Lecture end: ${this.currentLecture.endTime} (${endTimeInMinutes} minutes)`);
+    console.log(`   Is ended: ${isEnded}`);
+    
     return isEnded;
   }
 
@@ -1274,24 +1344,20 @@ class OfflineTimerService {
    */
   async syncToServer() {
     try {
-      this.lastSyncAttempt = Date.now();
-
-      // Always use server time for timestamps — never device time
-      let serverNow;
-      try {
-        const { getServerTime } = require('./ServerTime');
-        serverNow = getServerTime().now();
-      } catch {
-        serverNow = Date.now();
-      }
-
+      this.lastSyncAttempt = _getBootMs() || Date.now();
+      
       console.log('🔄 Syncing offline timer to server...');
       console.log('   Timer seconds:', this.timerSeconds);
       console.log('   Is Running:', this.isRunning);
       console.log('   Is Paused:', this.isPaused);
       console.log('   Lecture:', this.currentLecture?.subject);
-
+      
+      // Get current BSSID for validation
       const currentBSSID = await WiFiManager.getCurrentBSSID();
+      
+      // Use server-synced time for the timestamp sent to server (spoof-proof)
+      let syncTimestamp;
+      try { syncTimestamp = getServerTime().now(); } catch { syncTimestamp = _getBootMs() || Date.now(); }
 
       const response = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
         method: 'POST',
@@ -1300,7 +1366,7 @@ class OfflineTimerService {
           studentId: this.studentId,
           timerSeconds: this.timerSeconds,
           lecture: this.currentLecture,
-          timestamp: serverNow,           // server time — not device time
+          timestamp: syncTimestamp,
           isRunning: this.isRunning,
           isPaused: this.isPaused,
           currentBSSID: currentBSSID,
@@ -1336,7 +1402,7 @@ class OfflineTimerService {
       if (result.success) {
         this.isOnline = true;
         this.hasInternetConnection = true;
-        this.lastSyncTime = serverNow; // server time
+        this.lastSyncTime = _getBootMs() || Date.now();
         
         // Store server-computed attendance status
         if (result.attendanceStatus) {
@@ -1395,11 +1461,11 @@ class OfflineTimerService {
       this.hasInternetConnection = false;
       this.isOnline = false;
       
-      // Add to sync queue with server time
+      // Add to sync queue
       this.syncQueue.push({
         timerSeconds: this.timerSeconds,
         lecture: this.currentLecture,
-        timestamp: serverNow,
+        timestamp: _getBootMs() || Date.now(),
         isRunning: this.isRunning,
         isPaused: this.isPaused,
         attendedMinutes: Math.floor(this.timerSeconds / 60)
@@ -1500,7 +1566,7 @@ class OfflineTimerService {
           // Native TimerService will check BSSID every 60s using Android WifiManager
           // which works reliably in a foreground service even with screen off.
           // JS-side WiFi APIs are unreliable when screen is off on OEM devices.
-          this.backgroundStartTime = Date.now();
+          this.backgroundStartTime = _getBootMs() || Date.now();
           console.log('✅ Timer running in native service — BSSID validated every 60s natively');
         }
       }
@@ -1522,15 +1588,15 @@ class OfflineTimerService {
         lectureStartTime: this.lectureStartTime,
         authorizedBSSID: this.authorizedBSSID,
         lastSyncTime: this.lastSyncTime,
+        // Disconnection tracking
         wasRunningBeforeDisconnect: this.wasRunningBeforeDisconnect,
         disconnectionTime: this.disconnectionTime,
         pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
         previousLectureData: this.previousLectureData,
-        // Use wall time only as a rough age check — actual elapsed uses monotonic
-        timestamp: Date.now(),
-        // Monotonic anchor: wall time at save, used to re-anchor on restore
-        savedWallTime: Date.now(),
+        timestamp: _getBootMs() || Date.now(),
+        bootMs: _getBootMs()  // spoof-proof anchor for age check on restore
       };
+      
       await AsyncStorage.setItem(OFFLINE_TIMER_KEY, JSON.stringify(state));
     } catch (error) {
       console.error('❌ Failed to save timer state:', error);
@@ -1543,25 +1609,19 @@ class OfflineTimerService {
   async loadState() {
     try {
       const savedState = await AsyncStorage.getItem(OFFLINE_TIMER_KEY);
-
+      
       if (savedState) {
         const state = JSON.parse(savedState);
-
-        // Use server time for age check — immune to device clock changes
-        let nowMs;
-        try {
-          const { getServerTime } = require('./ServerTime');
-          nowMs = getServerTime().now();
-        } catch {
-          nowMs = Date.now();
-        }
-
-        // Age check: use server time vs saved wall time
-        // If device time was manipulated, savedWallTime may be wrong — cap at 2 hours max
-        const savedWall = state.savedWallTime || state.timestamp || 0;
-        const stateAge = Math.abs(nowMs - savedWall); // abs() handles clock going backwards
         
-        if (stateAge < 7200000) { // 2 hours max
+        // Check if state is recent (within 1 hour)
+        // Use boot-elapsed diff if available (spoof-proof), else wall-clock diff
+        let stateAge;
+        if (state.bootMs && state.bootMs > 0) {
+          stateAge = _getBootMs() - state.bootMs;
+        } else {
+          stateAge = Date.now() - state.timestamp;
+        }
+        if (stateAge < 3600000) { // 1 hour
           this.isRunning = state.isRunning;
           this.isPaused = state.isPaused;
           this.timerSeconds = state.timerSeconds;
@@ -1569,18 +1629,21 @@ class OfflineTimerService {
           this.lectureStartTime = state.lectureStartTime;
           this.authorizedBSSID = state.authorizedBSSID;
           this.lastSyncTime = state.lastSyncTime;
+          
+          // Load disconnection tracking
           this.wasRunningBeforeDisconnect = state.wasRunningBeforeDisconnect || false;
           this.disconnectionTime = state.disconnectionTime || null;
           this.pausedDueToWiFiLoss = state.pausedDueToWiFiLoss || false;
           this.previousLectureData = state.previousLectureData || null;
-
-          console.log('📦 Loaded timer state:', {
+          
+          console.log('📦 Loaded timer state from storage:', {
             timerSeconds: this.timerSeconds,
             isRunning: this.isRunning,
             pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
             lecture: this.currentLecture?.subject
           });
-
+          
+          // Resume counting if was running and not paused due to WiFi loss
           if (this.isRunning && !this.isPaused && !this.pausedDueToWiFiLoss) {
             this.startCounting();
           }

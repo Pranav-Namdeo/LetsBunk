@@ -158,7 +158,15 @@ function togglePasswordVisibility() {
 // Server URL - can be changed in Settings
 // Priority: 1. Saved in localStorage, 2. Production URL (default)
 
-const SERVER_URL = 'https://letsbunk-server.azurewebsites.net';
+// Clear any stale URLs that are no longer valid
+const savedUrl = localStorage.getItem('serverUrl');
+if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') || savedUrl.includes('azurewebsites.net'))) {
+    console.log('🔄 Clearing old server URL, switching to current server');
+    localStorage.removeItem('serverUrl');
+}
+
+const DEFAULT_SERVER_URL = 'https://letsbunk-omqs.onrender.com';
+let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
 console.log('🌐 Admin Panel Server URL:', SERVER_URL);
 
@@ -3176,11 +3184,18 @@ function formatDate(dateString) {
 }
 
 function loadSettings() {
-    document.getElementById('serverUrl').value = SERVER_URL;
+    const savedUrl = localStorage.getItem('serverUrl');
+    if (savedUrl) {
+        SERVER_URL = savedUrl;
+        document.getElementById('serverUrl').value = savedUrl;
+    }
 }
 
 function saveServerSettings() {
-    showNotification('Server URL is set via .env file and cannot be changed here', 'info');
+    const url = document.getElementById('serverUrl').value;
+    SERVER_URL = url;
+    localStorage.setItem('serverUrl', url);
+    showNotification('Settings saved', 'success');
     checkServerConnection();
 }
 
@@ -6733,45 +6748,46 @@ initializePeriods();
 
 async function loadPeriods() {
     try {
-        // Try to get periods from any existing timetable, or use defaults
         let periodsLoaded = false;
 
-        // First, try to get periods from localStorage (saved custom periods)
-        const savedPeriods = localStorage.getItem('defaultPeriods');
-        if (savedPeriods) {
-            try {
-                currentPeriods = JSON.parse(savedPeriods);
-                periodsLoaded = true;
-            } catch (e) {
-                console.warn('Invalid saved periods in localStorage');
-            }
-        }
-
-        // If no saved periods, try to fetch from any available timetable
-        if (!periodsLoaded) {
-            try {
-                // Prefer currently loaded timetable periods (if any)
-                if (currentTimetable?.periods?.length > 0) {
-                    currentPeriods = currentTimetable.periods;
+        // Always fetch from server first — this is the source of truth
+        try {
+            const res = await fetch(`${SERVER_URL}/api/periods`);
+            if (res.ok) {
+                const data = await res.json();
+                if (data.success && Array.isArray(data.periods) && data.periods.length > 0) {
+                    currentPeriods = data.periods;
                     periodsLoaded = true;
-                } else {
-                    // Otherwise, pull periods from the first available timetable on server
-                    const allRes = await fetch(`${SERVER_URL}/api/timetables`);
-                    if (allRes.ok) {
-                        const allData = await allRes.json();
-                        const first = allData?.timetables?.find(tt => tt?.periods?.length > 0);
-                        if (first?.periods?.length > 0) {
-                            currentPeriods = first.periods;
-                            periodsLoaded = true;
-                        }
-                    }
+                    // Keep localStorage in sync with server
+                    localStorage.setItem('defaultPeriods', JSON.stringify(currentPeriods));
+                    console.log(`✅ Loaded ${currentPeriods.length} periods from server`);
                 }
-            } catch (fetchError) {
-                console.warn('Could not fetch periods from timetables:', fetchError);
+            }
+        } catch (fetchError) {
+            console.warn('Could not fetch periods from server:', fetchError);
+        }
+
+        // Fallback 1: localStorage (last known good config)
+        if (!periodsLoaded) {
+            const savedPeriods = localStorage.getItem('defaultPeriods');
+            if (savedPeriods) {
+                try {
+                    currentPeriods = JSON.parse(savedPeriods);
+                    periodsLoaded = true;
+                    console.log('⚠️ Using cached periods from localStorage');
+                } catch (e) {
+                    console.warn('Invalid saved periods in localStorage');
+                }
             }
         }
 
-        // If still no periods loaded, use system defaults
+        // Fallback 2: currently loaded timetable
+        if (!periodsLoaded && currentTimetable?.periods?.length > 0) {
+            currentPeriods = currentTimetable.periods;
+            periodsLoaded = true;
+        }
+
+        // Fallback 3: system defaults
         if (!periodsLoaded) {
             currentPeriods = getDefaultPeriods();
         }
@@ -7026,8 +7042,8 @@ async function savePeriodsConfig() {
         console.log('Response data:', data);
 
         if (response.ok && data.success) {
-            // Persist as local default so UI does not fall back to old hardcoded values
-            saveDefaultPeriods(currentPeriods);
+            // Update localStorage so it stays in sync with server
+            localStorage.setItem('defaultPeriods', JSON.stringify(currentPeriods));
 
             // Keep currently loaded timetable (if any) in sync with new period config
             if (currentTimetable) {
@@ -7036,7 +7052,7 @@ async function savePeriodsConfig() {
             }
 
             showNotification(`✅ Successfully updated ${data.updatedCount} timetables!`, 'success');
-            loadPeriods(); // Reload to confirm
+            loadPeriods(); // Reload from server to confirm
         } else {
             showNotification('Failed to update periods: ' + (data.error || data.message || 'Unknown error'), 'error');
         }
@@ -7214,8 +7230,10 @@ async function loadAttendanceHistory() {
         // First, get the date range of available data
         await loadAttendanceDateRange();
 
-        // Get all students
-        const studentsResponse = await fetch(`${SERVER_URL}/api/students`);
+        // Get all students filtered by semester/branch server-side
+        const studentsResponse = await fetch(
+            `${SERVER_URL}/api/students?semester=${encodeURIComponent(semesterFilter)}&branch=${encodeURIComponent(courseFilter)}`
+        );
         const studentsData = await studentsResponse.json();
 
         if (!studentsData.success) {
@@ -7230,9 +7248,8 @@ async function loadAttendanceHistory() {
         const searchQuery = document.getElementById('attendanceStudentSearch').value.toLowerCase();
 
         // Filter students
+        // Server already filtered by semester/branch — only apply search filter client-side
         let filteredStudents = students.filter(student => {
-            if (semesterFilter && student.semester !== semesterFilter) return false;
-            if (courseFilter && student.branch !== courseFilter) return false;
             if (searchQuery && !student.name.toLowerCase().includes(searchQuery) &&
                 !student.enrollmentNo.toLowerCase().includes(searchQuery)) return false;
             return true;
@@ -7417,9 +7434,9 @@ async function viewDetailedAttendance(enrollmentNo) {
         console.log(`📊 Loading attendance overview for ${enrollmentNo}...`);
 
         // Get student info
-        const studentsResponse = await fetch(`${SERVER_URL}/api/students`);
+        const studentsResponse = await fetch(`${SERVER_URL}/api/students?enrollmentNo=${enrollmentNo}`);
         const studentsData = await studentsResponse.json();
-        const student = studentsData.students.find(s => s.enrollmentNo === enrollmentNo);
+        const student = (studentsData.students || []).find(s => s.enrollmentNo === enrollmentNo) || studentsData.student;
 
         if (!student) {
             throw new Error('Student not found');
@@ -7549,10 +7566,10 @@ function renderStudentOverviewModal(student, summary, dates) {
             ${dates.map(d => {
         const date = new Date(d.date);
         const dateStr = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
-        const attendedSec = Number(d.attended) || 0;
-        const totalSec    = Number(d.total)    || 0;
-        const attendedMin = Math.floor(attendedSec / 60);
-        const totalMin    = Math.floor(totalSec / 60);
+        const attendedSec = Number(d.attended) || 0;  // now in minutes
+        const totalSec    = Number(d.total)    || 0;  // now in minutes
+        const attendedMin = attendedSec;  // already minutes
+        const totalMin    = totalSec;     // already minutes
         const pct         = Number(d.percentage) || (d.status === 'present' ? 100 : 0);
         const timeStr     = totalMin > 0 ? `${attendedMin}/${totalMin} min` : (d.status === 'present' ? 'Present' : '—');
 
@@ -7597,8 +7614,8 @@ function renderDateDetailsModal(enrollmentNo, studentName, record) {
 
     const date = new Date(record.date);
     const dateStr = date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
-    const attendedMin = Math.floor(record.totalAttended / 60);
-    const totalMin = Math.floor(record.totalClassTime / 60);
+    const attendedMin = Number(record.totalAttended) || 0;   // already minutes
+    const totalMin    = Number(record.totalClassTime) || 0;  // already minutes
 
     modalBody.innerHTML = `
         <div class="attendance-detail-header">

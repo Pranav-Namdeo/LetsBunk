@@ -1,12 +1,44 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, Linking, NativeModules as RNNativeModules } from 'react-native';
-import { NativeModules, PermissionsAndroid, Platform } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, ScrollView, NativeModules } from 'react-native';
+import { PermissionsAndroid, Platform } from 'react-native';
 import WiFiManager from './WiFiManager';
 import NativeWiFiService from './NativeWiFiService';
 import BSSIDStorage from './BSSIDStorage';
 import { SERVER_BASE_URL } from './config';
+import { getServerTime } from './ServerTime';
 
-const { WifiModule } = NativeModules;
+const { WifiModule, TimerModule: _TestTimerModule } = NativeModules;
+
+// Boot-elapsed cache for spoof-proof timestamps in test results
+let _testBootCache = 0;
+let _testBootCacheAt = 0;
+async function _refreshTestBootCache() {
+  try {
+    if (_TestTimerModule && _TestTimerModule.getBootElapsedMs) {
+      const { bootElapsedMs } = await _TestTimerModule.getBootElapsedMs();
+      _testBootCache = bootElapsedMs;
+      _testBootCacheAt = Date.now();
+    }
+  } catch (_) {}
+}
+function _testGetNow() {
+  // 1. Server time (best)
+  try { return getServerTime().nowDate(); } catch (_) {}
+  // 2. Boot-elapsed
+  if (_testBootCache > 0) {
+    return new Date(_testBootCache + Math.max(0, Date.now() - _testBootCacheAt));
+  }
+  // 3. Device time fallback
+  return new Date();
+}
+function _testTimestamp() {
+  return _testGetNow().toLocaleTimeString();
+}
+function _testId() {
+  if (_testBootCache > 0) return _testBootCache + Math.max(0, Date.now() - _testBootCacheAt);
+  try { return getServerTime().now(); } catch (_) {}
+  return Date.now();
+}
 
 export default function TestBSSID({ theme }) {
   const [testResults, setTestResults] = useState([]);
@@ -14,35 +46,12 @@ export default function TestBSSID({ theme }) {
   const [currentBSSID, setCurrentBSSID] = useState(null);
   const [wifiInfo, setWifiInfo] = useState(null);
   const [isMonitoring, setIsMonitoring] = useState(false);
-  const [liveSSID, setLiveSSID] = useState(null);
-  const [liveBSSID, setLiveBSSID] = useState(null);
-
-  // Fetch live WiFi info on mount
-  useEffect(() => {
-    const fetchWifi = async () => {
-      try {
-        if (WifiModule) {
-          const result = await WifiModule.getBSSID();
-          if (result.success) {
-            setLiveSSID(result.ssid || null);
-            setLiveBSSID(result.bssid || null);
-          }
-        }
-      } catch (_) {}
-    };
-    fetchWifi();
-  }, []);
-
-  const openWifiSettings = () => {
-    Linking.sendIntent('android.settings.WIFI_SETTINGS').catch(() => {
-      Linking.openSettings();
-    });
-  };
 
   const addResult = (test, result, success = true) => {
-    const timestamp = new Date().toLocaleTimeString();
+    _refreshTestBootCache(); // keep cache warm
+    const timestamp = _testTimestamp();
     setTestResults(prev => [...prev, {
-      id: Date.now(),
+      id: _testId(),
       test,
       result,
       success,
@@ -377,38 +386,7 @@ export default function TestBSSID({ theme }) {
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
-      <Text style={[styles.title, { color: theme.text }]}>WiFi Test</Text>
-
-      {/* Server URL Card */}
-      <View style={[styles.infoCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-        <Text style={[styles.infoLabel, { color: theme.textSecondary }]}>🌐 Server URL</Text>
-        <Text style={[styles.infoValue, { color: theme.primary }]} numberOfLines={1} ellipsizeMode="middle">
-          {SERVER_BASE_URL}
-        </Text>
-      </View>
-
-      {/* WiFi Connection Card */}
-      <View style={[styles.infoCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-        <View style={styles.wifiRow}>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.infoLabel, { color: theme.textSecondary }]}>📶 Current WiFi</Text>
-            {liveSSID ? (
-              <>
-                <Text style={[styles.infoValue, { color: theme.text }]}>{liveSSID}</Text>
-                <Text style={[styles.bssidSmall, { color: theme.textSecondary }]}>{liveBSSID}</Text>
-              </>
-            ) : (
-              <Text style={[styles.infoValue, { color: '#ef4444' }]}>Not connected</Text>
-            )}
-          </View>
-          <TouchableOpacity
-            style={[styles.wifiButton, { backgroundColor: theme.primary }]}
-            onPress={openWifiSettings}
-          >
-            <Text style={styles.wifiButtonText}>⚙️ WiFi Settings</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
+      <Text style={[styles.title, { color: theme.text }]}>BSSID Detection Test</Text>
       
       <View style={styles.buttonContainer}>
         <TouchableOpacity 
@@ -479,45 +457,7 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     textAlign: 'center',
-    marginBottom: 14,
-  },
-  infoCard: {
-    borderRadius: 12,
-    borderWidth: 1,
-    padding: 14,
-    marginBottom: 10,
-  },
-  infoLabel: {
-    fontSize: 11,
-    fontWeight: '600',
-    marginBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  infoValue: {
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  bssidSmall: {
-    fontSize: 11,
-    marginTop: 2,
-    fontFamily: 'monospace',
-  },
-  wifiRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  wifiButton: {
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  wifiButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
+    marginBottom: 20,
   },
   buttonContainer: {
     flexDirection: 'row',

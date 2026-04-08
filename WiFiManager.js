@@ -153,7 +153,11 @@ class WiFiManager {
    */
   async getCurrentBSSID() {
     try {
+      console.log('📶 Getting BSSID using native Kotlin module...');
+
+      // Check if native module is available
       if (!NativeWiFiService.isModuleAvailable()) {
+        console.warn('⚠️ Native WiFi module not available, using fallback');
         return this.getFallbackBSSID();
       }
 
@@ -161,19 +165,37 @@ class WiFiManager {
       const result = await NativeWiFiService.getCurrentBSSID();
 
       if (result && result.success && result.bssid) {
-        return result.bssid.toLowerCase();
+        console.log(`✅ BSSID detected: ${result.bssid}`);
+        console.log(`   SSID: ${result.ssid}`);
+        console.log(`   Signal: ${result.rssi} dBm`);
+        console.log(`   Link Speed: ${result.linkSpeed} Mbps`);
+        console.log(`   Frequency: ${result.frequency} MHz`);
+        return result.bssid.toLowerCase(); // Normalize to lowercase
       }
 
       if (result && !result.success) {
-        // Silent expected states — WiFi off or not connected
-        if (result.code === 'WIFI_DISABLED' || result.code === 'NO_BSSID') {
-          return null;
+        console.warn(`⚠️ BSSID detection failed: ${result.code}`);
+        console.warn(`   Error: ${result.error}`);
+
+        // Provide user-friendly solutions
+        if (result.code === 'PERMISSION_DENIED') {
+          console.log('💡 Solution: Grant location permission in device settings');
+        } else if (result.code === 'LOCATION_SERVICES_DISABLED') {
+          console.log('💡 Solution: Enable Location Services (GPS) in system settings');
+          // Show user-friendly alert for location services
+          this.showLocationServicesAlert();
+        } else if (result.code === 'WIFI_DISABLED') {
+          console.log('💡 Solution: Enable WiFi on device');
+        } else if (result.code === 'NO_BSSID') {
+          console.log('💡 Solution: Connect to a WiFi network');
+        } else if (result.code === 'MODULE_NOT_AVAILABLE') {
+          console.log('💡 Solution: Native module not available, using fallback');
         }
 
-        if (result.code === 'PERMISSION_DENIED') {
-          console.warn('💡 BSSID: location permission denied');
-        } else if (result.code === 'LOCATION_SERVICES_DISABLED') {
-          this.showLocationServicesAlert();
+        // Return fallback for development
+        if (__DEV__) {
+          console.log('📱 Development mode: Using fallback BSSID');
+          return this.getFallbackBSSID();
         }
 
         return null;
@@ -183,12 +205,11 @@ class WiFiManager {
       return this.getFallbackBSSID();
 
     } catch (error) {
-      // Suppress noisy log when WiFi is simply disabled — that's an expected state
-      if (!error?.message?.includes('WiFi is disabled') && !error?.message?.includes('WIFI_DISABLED')) {
-        console.error('❌ Error getting BSSID from native module:', error);
-      }
+      console.error('❌ Error getting BSSID from native module:', error);
 
+      // In development, always return fallback
       if (__DEV__) {
+        console.log('📱 Development mode: Using fallback BSSID due to error');
         return this.getFallbackBSSID();
       }
 
@@ -410,29 +431,9 @@ class WiFiManager {
    */
   getCurrentLectureRoom(timetable) {
     try {
-      // Use server time (IST) — immune to device time spoofing
-      let now;
-      try {
-        const { getServerTime } = require('./ServerTime');
-        const st = getServerTime();
-        const istMinutes = st.getISTTimeInMinutes();
-        now = {
-          getDay: () => new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCDay(),
-          getHours: () => Math.floor(istMinutes / 60),
-          getMinutes: () => istMinutes % 60,
-        };
-      } catch {
-        // Fallback: always use IST offset
-        const istMs = Date.now() + (5.5 * 60 * 60 * 1000);
-        const istDate = new Date(istMs);
-        now = {
-          getDay: () => istDate.getUTCDay(),
-          getHours: () => istDate.getUTCHours(),
-          getMinutes: () => istDate.getUTCMinutes(),
-        };
-      }
+      const now = new Date();
       const currentDay = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
-      const currentTime = now.getHours() * 60 + now.getMinutes();
+      const currentTime = now.getHours() * 60 + now.getMinutes(); // minutes since midnight
 
       const daySchedule = timetable.schedule?.[currentDay];
       if (!daySchedule || !timetable.periods) return null;
@@ -535,10 +536,10 @@ class WiFiManager {
       clearInterval(this.checkInterval);
     }
 
-    // Check every 30 seconds (OfflineTimerService polls every 10s for active monitoring)
+    // Check every 10 seconds
     this.checkInterval = setInterval(async () => {
       await this.checkConnection();
-    }, 30000);
+    }, 10000);
 
     // Initial check
     this.checkConnection();

@@ -89,26 +89,25 @@ class NativeWiFiService {
       };
       
     } catch (error) {
-      // Don't spam logs for expected states (WiFi off, no network)
-      const msg = error.message || '';
-      const isExpected = msg.includes('WiFi is disabled') || msg.includes('WIFI_DISABLED') ||
-                         msg.includes('BSSID not available') || msg.includes('NO_BSSID') ||
-                         msg.includes('not connected');
-      if (!isExpected) {
-        console.error('❌ Native WiFi error:', error);
-      }
-
+      console.error('❌ Native WiFi error:', error);
+      
+      // Parse error details
       let errorCode = 'UNKNOWN_ERROR';
       let errorMessage = error.message;
-
+      
       if (error.code) {
         errorCode = error.code;
       } else if (error.message) {
-        if (error.message.includes('PERMISSION_DENIED')) errorCode = 'PERMISSION_DENIED';
-        else if (error.message.includes('WIFI_DISABLED')) errorCode = 'WIFI_DISABLED';
-        else if (error.message.includes('NO_BSSID')) errorCode = 'NO_BSSID';
+        // Try to extract error code from message
+        if (error.message.includes('PERMISSION_DENIED')) {
+          errorCode = 'PERMISSION_DENIED';
+        } else if (error.message.includes('WIFI_DISABLED')) {
+          errorCode = 'WIFI_DISABLED';
+        } else if (error.message.includes('NO_BSSID')) {
+          errorCode = 'NO_BSSID';
+        }
       }
-
+      
       return {
         success: false,
         error: errorMessage,

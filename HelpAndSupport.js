@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, TextInput } from 'react-native';
-import { SERVER_BASE_URL } from './config';
 
 export default function HelpAndSupport({ theme, onBack }) {
   const [searchQuery, setSearchQuery] = useState("");
@@ -163,10 +162,6 @@ export default function HelpAndSupport({ theme, onBack }) {
               </TouchableOpacity>
             </View>
           ))}
-          <View style={[styles.serverUrlCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-            <Text style={[styles.serverUrlLabel, { color: theme.textSecondary }]}>🌐 Server</Text>
-            <Text style={[styles.serverUrlValue, { color: theme.textSecondary }]}>{SERVER_BASE_URL}</Text>
-          </View>
         </View>
 
         {/* Additional Resources */}
@@ -357,24 +352,6 @@ const styles = StyleSheet.create({
   contactButtonText: {
     fontSize: 14,
     fontWeight: '500',
-  },
-  serverUrlCard: {
-    marginTop: 8,
-    borderRadius: 10,
-    borderWidth: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  serverUrlLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  serverUrlValue: {
-    fontSize: 12,
-    flex: 1,
   },
   resourcesCard: {
     borderRadius: 12,
