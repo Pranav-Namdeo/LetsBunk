@@ -6888,6 +6888,8 @@ function renderPeriods() {
     }).join('');
 
     updatePeriodStats();
+    // Highlight any overlapping periods after DOM is updated
+    setTimeout(highlightOverlappingPeriods, 0);
 }
 
 function calculateDuration(startTime, endTime) {
@@ -6920,7 +6922,58 @@ function updatePeriodTime(index, field, value) {
         }
 
         renderPeriods();
+        highlightOverlappingPeriods();
     }
+}
+
+function highlightOverlappingPeriods() {
+    const items = document.querySelectorAll('.period-item');
+    // Reset all
+    items.forEach(el => {
+        el.style.borderColor = '';
+        el.style.backgroundColor = '';
+        const warn = el.querySelector('.period-overlap-warn');
+        if (warn) warn.remove();
+    });
+
+    if (!currentPeriods || currentPeriods.length < 2) return;
+
+    const overlapping = new Set();
+
+    for (let i = 0; i < currentPeriods.length; i++) {
+        const p = currentPeriods[i];
+        const durI = calculateDuration(p.startTime, p.endTime);
+        if (durI <= 0) { overlapping.add(i); continue; }
+
+        const [si, ei] = toMinutes(p.startTime, p.endTime);
+        for (let j = i + 1; j < currentPeriods.length; j++) {
+            const q = currentPeriods[j];
+            const durJ = calculateDuration(q.startTime, q.endTime);
+            if (durJ <= 0) { overlapping.add(j); continue; }
+
+            const [sj, ej] = toMinutes(q.startTime, q.endTime);
+            if (si < ej && sj < ei) {
+                overlapping.add(i);
+                overlapping.add(j);
+            }
+        }
+    }
+
+    overlapping.forEach(idx => {
+        const el = items[idx];
+        if (!el) return;
+        el.style.borderColor = '#ef4444';
+        el.style.backgroundColor = 'rgba(239,68,68,0.08)';
+        if (!el.querySelector('.period-overlap-warn')) {
+            const warn = document.createElement('div');
+            warn.className = 'period-overlap-warn';
+            warn.style.cssText = 'color:#ef4444;font-size:11px;margin-top:4px;font-weight:600;';
+            warn.textContent = calculateDuration(currentPeriods[idx].startTime, currentPeriods[idx].endTime) <= 0
+                ? '⚠️ End time must be after start time'
+                : '⚠️ Overlaps with another period';
+            el.appendChild(warn);
+        }
+    });
 }
 
 function addNewPeriodSlot() {
@@ -6988,22 +7041,61 @@ function updatePeriodStats() {
     }
 }
 
+function validatePeriods(periods) {
+    const errors = [];
+
+    for (let i = 0; i < periods.length; i++) {
+        const p = periods[i];
+        const duration = calculateDuration(p.startTime, p.endTime);
+
+        // End must be after start
+        if (duration <= 0) {
+            errors.push(`P${p.number}: End time must be after start time (${p.startTime} → ${p.endTime})`);
+            continue;
+        }
+
+        // Minimum 5 minutes
+        if (duration < 5) {
+            errors.push(`P${p.number}: Duration too short (${duration} min). Minimum is 5 minutes.`);
+        }
+
+        // Check overlap with every other period
+        const [si, ei] = toMinutes(p.startTime, p.endTime);
+        for (let j = i + 1; j < periods.length; j++) {
+            const q = periods[j];
+            const [sj, ej] = toMinutes(q.startTime, q.endTime);
+            // Overlap: one starts before the other ends
+            if (si < ej && sj < ei) {
+                errors.push(`P${p.number} (${p.startTime}–${p.endTime}) overlaps with P${q.number} (${q.startTime}–${q.endTime})`);
+            }
+        }
+    }
+
+    return errors;
+}
+
+function toMinutes(startTime, endTime) {
+    const [sh, sm] = startTime.split(':').map(Number);
+    const [eh, em] = endTime.split(':').map(Number);
+    return [sh * 60 + sm, eh * 60 + em];
+}
+
 async function savePeriodsConfig() {
     if (currentPeriods.length === 0) {
         showNotification('Cannot save empty period configuration', 'error');
         return;
     }
 
-    // Validate periods
-    for (let i = 0; i < currentPeriods.length; i++) {
-        const period = currentPeriods[i];
-        const duration = calculateDuration(period.startTime, period.endTime);
-
-        if (duration <= 0) {
-            showNotification(`Period ${period.number}: End time must be after start time`, 'error');
-            return;
-        }
+    // Validate periods — end > start + no overlaps
+    const errors = validatePeriods(currentPeriods);
+    if (errors.length > 0) {
+        showNotification('❌ Fix these errors before saving:\n• ' + errors.join('\n• '), 'error');
+        highlightOverlappingPeriods();
+        return;
     }
+
+    // Clear any previous error highlights
+    highlightOverlappingPeriods();
 
     const confirmMsg = `This will update periods for ALL timetables across all semesters and branches.\n\n` +
         `Total Periods: ${currentPeriods.length}\n` +

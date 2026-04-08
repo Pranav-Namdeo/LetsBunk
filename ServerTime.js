@@ -29,6 +29,7 @@ class ServerTime {
     this.lastSyncDeviceTime = 0;
     this.lastSyncBootMs = 0;   // boot-relative ms at last sync — spoof-proof anchor
     this._cachedBootElapsedMs = 0; // updated every second via updateBootCache()
+    this._cacheUpdatedAt = 0;      // wall-clock ms when cache was last refreshed
     this.syncInterval = null;
     this.bootCacheInterval = null;
     this.isSynced = false;
@@ -192,8 +193,6 @@ class ServerTime {
 
       if (data.success && data.serverTime) {
         const t1 = data.serverTime; // Server time when request received
-        const t2 = data.serverTime; // Server time when response sent (same for GET)
-
         // Calculate round-trip time
         const roundTripTime = t3 - t0;
 
@@ -203,14 +202,11 @@ class ServerTime {
         // Calculate offset: server time - device time
         const offset = t1 - t0 - latency;
 
-        // Debug logging for unreasonable offsets
+        // Reject samples with unreasonable offsets (>1 hour = likely network error)
         if (Math.abs(offset) > 3600000) {
-          console.error('⚠️ Unreasonable offset calculated in sample:');
-          console.error(`   t0 (device before): ${t0} (${new Date(t0).toISOString()})`);
-          console.error(`   t1 (server): ${t1} (${new Date(t1).toISOString()})`);
-          console.error(`   t3 (device after): ${t3} (${new Date(t3).toISOString()})`);
-          console.error(`   Round trip: ${roundTripTime}ms`);
-          console.error(`   Calculated offset: ${offset}ms (${Math.round(offset / 3600000)} hours)`);
+          console.error('⚠️ Unreasonable offset calculated — rejecting sample:');
+          console.error(`   t0=${t0}, t1=${t1}, t3=${t3}, rtt=${roundTripTime}ms, offset=${offset}ms`);
+          return null;
         }
 
         return {
@@ -251,7 +247,7 @@ class ServerTime {
       try {
         // Synchronous read from shared static field via a cached value
         // We update _cachedBootElapsedMs every tick via updateBootCache()
-        if (this._cachedBootElapsedMs > 0) {
+        if (this._cachedBootElapsedMs > 0 && (Date.now() - this._cacheUpdatedAt) < 3000) {
           const elapsedSinceSync = this._cachedBootElapsedMs - this.lastSyncBootMs;
           return this.lastServerTime + elapsedSinceSync;
         }
@@ -273,6 +269,7 @@ class ServerTime {
       if (TimerModule && TimerModule.getBootElapsedMs) {
         const { bootElapsedMs } = await TimerModule.getBootElapsedMs();
         this._cachedBootElapsedMs = bootElapsedMs;
+        this._cacheUpdatedAt = Date.now();
       }
     } catch (_) {}
   }

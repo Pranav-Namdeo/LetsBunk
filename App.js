@@ -627,7 +627,7 @@ export default function App() {
           }
 
           // Check if we're currently in this lecture
-          if (currentTimeInSeconds >= startSeconds && currentTimeInSeconds <= endSeconds) {
+          if (currentTimeInSeconds >= startSeconds && currentTimeInSeconds < endSeconds) {
             currentLecture = {
               subject: slot.subject,
               teacher: slot.teacher || slot.teacherName || 'Unknown',
@@ -5238,6 +5238,27 @@ export default function App() {
           )}
 
           {/* Offline Timer Controls - NEW TIMER SYSTEM */}
+          {offlineTimerInitialized && !currentClassInfo && (
+            <View style={{
+              width: '100%',
+              maxWidth: 400,
+              backgroundColor: theme.cardBackground,
+              borderRadius: 12,
+              padding: 28,
+              borderWidth: 2,
+              borderColor: theme.border,
+              marginTop: 15,
+              alignItems: 'center',
+            }}>
+              <Text style={{ fontSize: 40, marginBottom: 12 }}>🎉</Text>
+              <Text style={{ fontSize: 18, fontWeight: 'bold', color: theme.text, textAlign: 'center', marginBottom: 8 }}>
+                Enjoy! No class right now.
+              </Text>
+              <Text style={{ fontSize: 13, color: theme.textSecondary, textAlign: 'center' }}>
+                Your next class will appear here automatically when it starts.
+              </Text>
+            </View>
+          )}
           {currentClassInfo && offlineTimerInitialized && (
             <View style={{
               width: '100%',
@@ -5291,58 +5312,123 @@ export default function App() {
                 </Text>
               </View>
 
-              {/* Attendance Threshold Progress — uses offline period duration as local fallback */}
+              {/* Attendance Threshold Progress */}
               {(() => {
-                // ALWAYS compute threshold from offlinePeriod first — it's the current period
-                // offlineTimerState.thresholdSeconds from server may be stale (previous period)
-                const threshold = (() => {
-                  // Priority 1: current offline period (always accurate)
-                  const p = offlinePeriod;
-                  if (p?.startTime && p?.endTime) {
-                    const [sh, sm] = p.startTime.split(':').map(Number);
-                    const [eh, em] = p.endTime.split(':').map(Number);
-                    const durationMin = (eh * 60 + em) - (sh * 60 + sm);
-                    if (durationMin > 0 && durationMin <= 180) {
-                      return Math.ceil(durationMin * 60 * (offlineTimerState.attendanceThreshold || 75) / 100);
-                    }
+                const pctRequired = offlineTimerState.attendanceThreshold || 75;
+                const periodNum = offlinePeriod?.period || offlineTimerState.currentLecture?.period || null;
+
+                // Source of truth for period times
+                const periodSrc = offlinePeriod || offlineTimerState.currentLecture;
+
+                // Compute total period duration in seconds — NO cap
+                const totalSecs = (() => {
+                  if (periodSrc?.startTime && periodSrc?.endTime) {
+                    const [sh, sm] = periodSrc.startTime.split(':').map(Number);
+                    const [eh, em] = periodSrc.endTime.split(':').map(Number);
+                    const dur = ((eh * 60 + em) - (sh * 60 + sm)) * 60;
+                    if (dur > 0) return dur;
                   }
-                  // Priority 2: server-synced value (only if offline period unavailable)
-                  if (offlineTimerState.thresholdSeconds > 0) return offlineTimerState.thresholdSeconds;
-                  // Priority 3: currentLecture times (set at timer start)
-                  const cl = offlineTimerState.currentLecture;
-                  if (cl?.startTime && cl?.endTime) {
-                    const [sh, sm] = cl.startTime.split(':').map(Number);
-                    const [eh, em] = cl.endTime.split(':').map(Number);
-                    const durationMin = (eh * 60 + em) - (sh * 60 + sm);
-                    if (durationMin > 0 && durationMin <= 180) {
-                      return Math.ceil(durationMin * 60 * (offlineTimerState.attendanceThreshold || 75) / 100);
-                    }
-                  }
-                  return 0;
+                  return 60 * 60; // fallback 60 min
                 })();
 
-                if (threshold <= 0) return null;
+                // Time remaining until period ends (wall-clock based)
+                const periodEndRemainSecs = (() => {
+                  if (!periodSrc?.endTime) return null;
+                  try {
+                    const now = new Date();
+                    const [eh, em] = periodSrc.endTime.split(':').map(Number);
+                    const endMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), eh, em, 0).getTime();
+                    const diff = Math.floor((endMs - now.getTime()) / 1000);
+                    return diff > 0 ? diff : 0;
+                  } catch { return null; }
+                })();
 
-                const pct = Math.min(100, Math.round((offlineTimerState.timerSeconds / threshold) * 100));
-                const reached = offlineTimerState.attendanceStatus === 'present' || pct >= 100;
-                const remaining = Math.max(0, threshold - offlineTimerState.timerSeconds);
+                // Threshold = pctRequired% of total duration
+                const threshold = Math.ceil(totalSecs * pctRequired / 100);
+                const attended = offlineTimerState.timerSeconds || 0;
+                // 100% = full period duration
+                const pct = Math.min(100, Math.round((attended / totalSecs) * 100));
+                const reached = offlineTimerState.attendanceStatus === 'present' || attended >= threshold;
+                const remainingSecs = Math.max(0, threshold - attended);
+
+                // Format seconds → "Xh Ym" or "Ym" or "Xs"
+                const fmtTime = (secs) => {
+                  if (secs <= 0) return '0 min';
+                  const h = Math.floor(secs / 3600);
+                  const m = Math.floor((secs % 3600) / 60);
+                  const s = secs % 60;
+                  if (h > 0 && m > 0) return `${h}h ${m}m`;
+                  if (h > 0) return `${h}h`;
+                  if (m > 0) return `${m} min`;
+                  return `${s} sec`;
+                };
+
+                const totalFmt = fmtTime(totalSecs);
+                const attendedFmt = fmtTime(attended);
+                const remainFmt = fmtTime(remainingSecs);
+                const thresholdFmt = fmtTime(threshold);
+                const periodEndFmt = periodEndRemainSecs !== null ? fmtTime(periodEndRemainSecs) : null;
 
                 return (
                   <View style={{ backgroundColor: theme.background, borderRadius: 10, padding: 12, marginBottom: 15 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 }}>
+                    {/* Header row */}
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                       <Text style={{ fontSize: 12, color: theme.textSecondary }}>
-                        Attendance ({offlineTimerState.attendanceThreshold || 75}% required)
+                        {periodNum ? `P${periodNum} · ` : ''}{pctRequired}% attendance required
                       </Text>
                       <Text style={{ fontSize: 12, fontWeight: 'bold', color: reached ? '#22c55e' : '#f59e0b' }}>
                         {reached ? '✅ Present' : `${pct}%`}
                       </Text>
                     </View>
-                    <View style={{ height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: 'hidden' }}>
+
+                    {/* Progress bar — 100% = full period, marker at attendance threshold */}
+                    <View style={{ height: 8, backgroundColor: theme.border, borderRadius: 4, overflow: 'hidden', marginBottom: 2 }}>
                       <View style={{ height: 8, width: `${pct}%`, backgroundColor: reached ? '#22c55e' : '#f59e0b', borderRadius: 4 }} />
                     </View>
-                    {!reached && remaining > 0 && (
-                      <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 4, textAlign: 'center' }}>
-                        {Math.ceil(remaining / 60)} min more to mark present
+                    {/* Threshold marker */}
+                    <View style={{ position: 'relative', height: 12, marginBottom: 6 }}>
+                      <View style={{
+                        position: 'absolute',
+                        left: `${pctRequired}%`,
+                        top: 0,
+                        width: 2,
+                        height: 10,
+                        backgroundColor: '#ef4444',
+                        borderRadius: 1,
+                      }} />
+                      <Text style={{
+                        position: 'absolute',
+                        left: `${pctRequired}%`,
+                        top: 0,
+                        fontSize: 9,
+                        color: '#ef4444',
+                        fontWeight: '700',
+                        marginLeft: 3,
+                      }}>{pctRequired}%</Text>
+                    </View>
+
+                    {/* Period total duration + need to attend */}
+                    <Text style={{ fontSize: 11, color: theme.textSecondary, marginBottom: 4 }}>
+                      📅 Period: <Text style={{ fontWeight: '600', color: theme.text }}>{totalFmt}</Text>
+                      {'  '}·{'  '}Need <Text style={{ fontWeight: '600', color: theme.text }}>{thresholdFmt}</Text> to be present
+                    </Text>
+
+                    {/* Period ends in */}
+                    {periodEndFmt !== null && (
+                      <Text style={{ fontSize: 11, color: theme.textSecondary, marginBottom: 6 }}>
+                        🕐 Period ends in: <Text style={{ fontWeight: '600', color: periodEndRemainSecs < 600 ? '#ef4444' : theme.text }}>{periodEndFmt}</Text>
+                        {periodSrc?.endTime ? <Text style={{ color: theme.textSecondary }}> ({periodSrc.endTime})</Text> : null}
+                      </Text>
+                    )}
+
+                    {/* Attended / remaining to mark present */}
+                    {reached ? (
+                      <Text style={{ fontSize: 11, color: '#22c55e', fontWeight: '600', textAlign: 'center' }}>
+                        ✅ Attended {attendedFmt} — marked present
+                      </Text>
+                    ) : (
+                      <Text style={{ fontSize: 11, color: '#f59e0b', fontWeight: '600', textAlign: 'center' }}>
+                        ⏱ Attended {attendedFmt} · Need {remainFmt} more to be marked present
                       </Text>
                     )}
                   </View>

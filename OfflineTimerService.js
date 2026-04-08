@@ -210,20 +210,22 @@ class OfflineTimerService {
 
         console.log('✅ BSSID validation passed');
 
-        // Step 2: Check if this is a manual restart in the same lecture
+        // Step 2: Check if this is a restart in the same lecture
+        // Covers: manual stop+restart, WiFi drop+reconnect+re-verify, any re-entry same period
         const isSameLecture = this.isSameLecture(lectureInfo);
-        const isManualRestartInSameLecture = this.wasManuallyStoppedInSameLecture && 
-                                            isSameLecture && 
-                                            this.lastVerifiedLecture &&
-                                            this.lastVerifiedLecture.subject === lectureInfo.subject &&
-                                            this.lastVerifiedLecture.room === lectureInfo.room;
+        const isManualRestartInSameLecture = this.wasManuallyStoppedInSameLecture &&
+                                            isSameLecture &&
+                                            this.lastVerifiedLecture;
+
+        // Also treat any same-lecture re-start with existing timer as a continuation
+        const isSameLectureContinuation = isSameLecture && this.timerSeconds > 0 && this.lastVerifiedLecture;
 
         let faceVerificationResult = { success: true };
 
-        if (isManualRestartInSameLecture) {
-          // Skip face verification for manual restart in same lecture
-          console.log('🔄 Manual restart in same lecture - skipping face verification');
-          console.log('📚 Continuing from previous timer value:', this.timerSeconds);
+        if (isManualRestartInSameLecture || isSameLectureContinuation) {
+          // Skip face verification — continuing same lecture
+          console.log('🔄 Same lecture continuation - skipping face verification');
+          console.log('📚 Continuing from timer value:', this.timerSeconds);
         } else {
           // Perform face verification for new lecture or first start
           console.log('👤 Step 2: Starting face verification...');
@@ -260,9 +262,12 @@ class OfflineTimerService {
         this.lectureStartTime = _getBootMs() || Date.now();
         this.authorizedBSSID = bssidCheck.expectedBSSID;
 
-        // Reset threshold so it's recomputed for this period (not carried from previous)
-        this.thresholdSeconds = null;
-        this.attendanceStatus = 'absent';
+        // Only reset attendance tracking when switching to a NEW lecture.
+        // For same-lecture re-starts (manual or re-verify), preserve accumulated state.
+        if (!isSameLecture) {
+          this.thresholdSeconds = null;
+          this.attendanceStatus = 'absent';
+        }
 
         // Start timer
         this.isRunning = true;
@@ -284,26 +289,26 @@ class OfflineTimerService {
           lecture: this.currentLecture,
           faceVerified: faceVerificationResult.success,
           bssidAuthorized: true,
-          skippedFaceVerification: isManualRestartInSameLecture
+          skippedFaceVerification: isManualRestartInSameLecture || isSameLectureContinuation
         });
 
         // Step 4: Register check-in on server (creates PeriodAttendance { verificationType: 'initial' })
         // This is required so that offline-sync doesn't get 403 "No verified check-in for today"
-        if (!isManualRestartInSameLecture) {
+        if (!isManualRestartInSameLecture && !isSameLectureContinuation) {
           await this.registerCheckIn(lectureInfo, bssidCheck.currentBSSID, faceVerificationResult);
         }
 
         // Try to sync with server
         await this.syncToServer();
 
-        console.log('✅ Offline timer started successfully', isManualRestartInSameLecture ? '(face verification skipped)' : '(with face verification)');
+        console.log('✅ Offline timer started successfully', (isManualRestartInSameLecture || isSameLectureContinuation) ? '(face verification skipped - same lecture)' : '(with face verification)');
         return {
           success: true,
           timerSeconds: this.timerSeconds,
           isNewLecture: !isSameLecture,
           faceVerified: faceVerificationResult.success,
           bssidAuthorized: true,
-          skippedFaceVerification: isManualRestartInSameLecture
+          skippedFaceVerification: isManualRestartInSameLecture || isSameLectureContinuation
         };
 
       } catch (error) {
@@ -1077,13 +1082,24 @@ class OfflineTimerService {
    * Check if same lecture (same subject, teacher, room)
    */
   isSameLecture(newLecture) {
-    if (!this.currentLecture) return false;
-    
-    return (
-      this.currentLecture.subject === newLecture.subject &&
-      this.currentLecture.teacher === newLecture.teacher &&
-      this.currentLecture.room === newLecture.room
-    );
+    if (!this.currentLecture || !newLecture) return false;
+
+    // Primary: compare by period number (most reliable)
+    const curPeriod = this.currentLecture.period ?? this.currentLecture.periodNumber;
+    const newPeriod = newLecture.period ?? newLecture.periodNumber;
+    if (curPeriod != null && newPeriod != null) {
+      return String(curPeriod) === String(newPeriod);
+    }
+
+    // Fallback: compare by start+end time (period number not available)
+    if (this.currentLecture.startTime && newLecture.startTime) {
+      return this.currentLecture.startTime === newLecture.startTime &&
+             this.currentLecture.endTime   === newLecture.endTime;
+    }
+
+    // Last resort: subject + room (old behaviour)
+    return (this.currentLecture.subject || '') === (newLecture.subject || '') &&
+           (this.currentLecture.room    || '') === (newLecture.room    || '');
   }
 
   /**
@@ -1097,17 +1113,20 @@ class OfflineTimerService {
         const currentBSSID = await WiFiManager.getCurrentBSSID();
         
         if (currentBSSID) {
-          const validation = await BSSIDStorage.validateCurrentBSSID(currentBSSID);
-          
-          if (!validation.valid) {
-            console.warn('⚠️ BSSID validation failed during monitoring - stopping timer');
-            await this.stopTimer('bssid_changed');
-            
-            this.notifyListeners({
-              type: 'bssid_unauthorized',
-              reason: validation.reason,
-              details: validation
-            });
+          try {
+            const validation = await BSSIDStorage.validateCurrentBSSID(currentBSSID);
+            if (!validation.valid) {
+              console.warn('⚠️ BSSID validation failed during monitoring - stopping timer');
+              await this.stopTimer('bssid_changed');
+              this.notifyListeners({
+                type: 'bssid_unauthorized',
+                reason: validation.reason,
+                details: validation
+              });
+            }
+          } catch (validationErr) {
+            console.error('❌ BSSID validation threw error:', validationErr);
+            // Don't stop timer on validation error — treat as transient
           }
         } else {
           console.warn('⚠️ WiFi disconnected - stopping timer');
@@ -1424,7 +1443,8 @@ class OfflineTimerService {
           });
         }
         
-        // Clear sync queue on successful sync
+        // Clear sync queue on successful sync — save empty queue first, then clear in memory
+        await this.saveSyncQueue();
         this.syncQueue = [];
         await this.saveSyncQueue();
         this.pendingSyncCount = 0;
@@ -1588,6 +1608,8 @@ class OfflineTimerService {
         lectureStartTime: this.lectureStartTime,
         authorizedBSSID: this.authorizedBSSID,
         lastSyncTime: this.lastSyncTime,
+        attendanceStatus: this.attendanceStatus || 'absent',
+        thresholdSeconds: this.thresholdSeconds || null,
         // Disconnection tracking
         wasRunningBeforeDisconnect: this.wasRunningBeforeDisconnect,
         disconnectionTime: this.disconnectionTime,
@@ -1635,6 +1657,8 @@ class OfflineTimerService {
           this.disconnectionTime = state.disconnectionTime || null;
           this.pausedDueToWiFiLoss = state.pausedDueToWiFiLoss || false;
           this.previousLectureData = state.previousLectureData || null;
+          this.attendanceStatus = state.attendanceStatus || 'absent';
+          this.thresholdSeconds = state.thresholdSeconds || null;
           
           console.log('📦 Loaded timer state from storage:', {
             timerSeconds: this.timerSeconds,
