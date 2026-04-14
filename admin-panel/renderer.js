@@ -1,13 +1,13 @@
 
-// ── ADMIN AUTH ────────────────────────────────────────────────────────────────
-// Credentials are stored as SHA-256 hashes — never plaintext in source.
-// email:    adityarajsir162@gmail.com  → hashed below
-// password: Adi*3tya                  → hashed below
+//  ADMIN AUTH 
+// Credentials are stored as SHA-256 hashes  never plaintext in source.
+// email:    adityarajsir162@gmail.com   hashed below
+// password: Adi*3tya                   hashed below
 //
 // To regenerate:  crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
 //   then convert to hex.
-const ADMIN_EMAIL_HASH    = 'b0c3b2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2'; // placeholder — set at runtime
-const ADMIN_PASSWORD_HASH = 'b0c3b2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2'; // placeholder — set at runtime
+const ADMIN_EMAIL_HASH    = 'b0c3b2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2'; // placeholder  set at runtime
+const ADMIN_PASSWORD_HASH = 'b0c3b2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2e2'; // placeholder  set at runtime
 
 // Compute SHA-256 hex of a string
 async function sha256(str) {
@@ -15,7 +15,7 @@ async function sha256(str) {
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// Actual credential hashes — computed once at module load
+// Actual credential hashes  computed once at module load
 let _emailHash    = null;
 let _passwordHash = null;
 (async () => {
@@ -23,7 +23,7 @@ let _passwordHash = null;
     _passwordHash = await sha256('Adi*3tya');
 })();
 
-// ── INPUT SANITISATION ───────────────────────────────────────────────────────
+//  INPUT SANITISATION 
 function sanitizeEmail(raw) {
     // Strip all whitespace, lowercase, limit to 254 chars, allow only valid email chars
     return String(raw)
@@ -35,7 +35,7 @@ function sanitizeEmail(raw) {
 
 function sanitizePassword(raw) {
     // Trim leading/trailing whitespace only, limit to 128 chars
-    // Do NOT strip special chars — password may contain them intentionally
+    // Do NOT strip special chars  password may contain them intentionally
     return String(raw).trim().slice(0, 128);
 }
 
@@ -44,11 +44,11 @@ function validateEmail(email) {
     return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
 }
 
-// ── LOGIN / LOGOUT ───────────────────────────────────────────────────────────
+//  LOGIN / LOGOUT 
 const SESSION_KEY = 'adminSessionToken';
 
 function isLoggedIn() {
-    // Session token is a SHA-256 of email+password+date — valid for the calendar day
+    // Session token is a SHA-256 of email+password+date  valid for the calendar day
     const token = sessionStorage.getItem(SESSION_KEY);
     if (!token) return false;
     const today = new Date().toDateString();
@@ -104,13 +104,13 @@ async function handleLogin(e) {
     ]);
 
     if (inputEmailHash === _emailHash && inputPasswordHash === _passwordHash) {
-        // Success — create session token
+        // Success  create session token
         const today = new Date().toDateString();
         const token = (await sha256(email + password + today)) + ':' + today;
         sessionStorage.setItem(SESSION_KEY, token);
         showApp();
     } else {
-        // Failure — show generic error (don't reveal which field is wrong)
+        // Failure  show generic error (don't reveal which field is wrong)
         const banner = document.getElementById('loginErrorBanner');
         banner.textContent = 'Invalid email or password.';
         banner.style.display = 'block';
@@ -152,7 +152,7 @@ function togglePasswordVisibility() {
     const input = document.getElementById('loginPassword');
     input.type = input.type === 'password' ? 'text' : 'password';
 }
-// ─────────────────────────────────────────────────────────────────────────────
+// 
 
 // Configuration
 // Server URL - can be changed in Settings
@@ -161,14 +161,14 @@ function togglePasswordVisibility() {
 // Clear any stale URLs that are no longer valid
 const savedUrl = localStorage.getItem('serverUrl');
 if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') || savedUrl.includes('azurewebsites.net'))) {
-    console.log('🔄 Clearing old server URL, switching to current server');
+    console.log(' Clearing old server URL, switching to current server');
     localStorage.removeItem('serverUrl');
 }
 
 const DEFAULT_SERVER_URL = 'https://letsbunk-omqs.onrender.com';
 let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
-console.log('🌐 Admin Panel Server URL:', SERVER_URL);
+console.log(' Admin Panel Server URL:', SERVER_URL);
 
 // State
 let students = [];
@@ -194,7 +194,7 @@ let dynamicData = {
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    // Auth gate — show login or app depending on session
+    // Auth gate  show login or app depending on session
     if (isLoggedIn()) {
         showApp();
     } else {
@@ -216,28 +216,28 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Load dynamic dropdown data from server
 async function loadDynamicDropdownData() {
-    console.log('📥 Loading dynamic dropdown data from server...');
+    console.log(' Loading dynamic dropdown data from server...');
 
     try {
         // Fetch branches/courses
         const branchesResponse = await fetch(`${SERVER_URL}/api/config/branches`);
-        console.log('📡 Branches API response status:', branchesResponse.status);
+        console.log(' Branches API response status:', branchesResponse.status);
         
         if (branchesResponse.ok) {
             const branchesData = await branchesResponse.json();
-            console.log('📦 Branches data received:', branchesData);
+            console.log(' Branches data received:', branchesData);
             
             if (branchesData.success && branchesData.branches) {
                 dynamicData.branches = branchesData.branches.map(b => ({
                     value: b.name,
                     label: b.displayName || b.name
                 }));
-                console.log(`✅ Loaded ${dynamicData.branches.length} branches:`, dynamicData.branches);
+                console.log(` Loaded ${dynamicData.branches.length} branches:`, dynamicData.branches);
             } else {
-                console.warn('⚠️ Branches API returned success=false or no branches array');
+                console.warn(' Branches API returned success=false or no branches array');
             }
         } else {
-            console.error('❌ Branches API failed with status:', branchesResponse.status);
+            console.error(' Branches API failed with status:', branchesResponse.status);
         }
 
         // Fetch semesters
@@ -246,7 +246,7 @@ async function loadDynamicDropdownData() {
             const semestersData = await semestersResponse.json();
             if (semestersData.success && semestersData.semesters) {
                 dynamicData.semesters = semestersData.semesters;
-                console.log(`✅ Loaded ${dynamicData.semesters.length} semesters`);
+                console.log(` Loaded ${dynamicData.semesters.length} semesters`);
             }
         }
 
@@ -259,27 +259,27 @@ async function loadDynamicDropdownData() {
                     value: d.value || d.code,
                     label: d.displayName || d.name || d.value
                 }));
-                console.log(`✅ Loaded ${dynamicData.departments.length} departments`);
+                console.log(` Loaded ${dynamicData.departments.length} departments`);
             }
         }
 
         // If no data from server, show warning
         if (dynamicData.branches.length === 0) {
-            console.warn('⚠️ No branches loaded from server! Please add branches in Settings.');
+            console.warn(' No branches loaded from server! Please add branches in Settings.');
             showNotification('No branches configured. Please add branches in Settings section.', 'warning');
         }
 
         if (dynamicData.departments.length === 0) {
-            console.warn('⚠️ No departments loaded from server! Please add departments in Settings.');
+            console.warn(' No departments loaded from server! Please add departments in Settings.');
         }
 
-        console.log('✅ Dynamic dropdown data loaded');
+        console.log(' Dynamic dropdown data loaded');
 
         // Populate filter dropdowns after data is loaded
         populateFilterDropdowns();
 
     } catch (error) {
-        console.error('❌ Error loading dynamic data:', error);
+        console.error(' Error loading dynamic data:', error);
         showNotification('Failed to load configuration from server. Please check connection.', 'error');
         
         // Populate filter dropdowns even if empty
@@ -289,7 +289,7 @@ async function loadDynamicDropdownData() {
 
 // Helper function to generate branch dropdown options
 function generateBranchOptions(selectedValue = '') {
-    console.log('🔧 Generating branch options. Selected:', selectedValue, 'Available branches:', dynamicData.branches);
+    console.log(' Generating branch options. Selected:', selectedValue, 'Available branches:', dynamicData.branches);
     
     // If no branches loaded, show a message
     if (dynamicData.branches.length === 0) {
@@ -329,7 +329,7 @@ function generateSemesterOptions(selectedValue = '') {
 
 // Populate all filter dropdowns on page load
 function populateFilterDropdowns() {
-    console.log('🔄 Populating filter dropdowns...');
+    console.log(' Populating filter dropdowns...');
 
     // Student Management filters
     const semesterFilter = document.getElementById('semesterFilter');
@@ -376,12 +376,14 @@ function populateFilterDropdowns() {
         subjectBranchFilter.innerHTML = '<option value="">All Branches</option>' + generateBranchOptions();
     }
 
-    console.log('✅ Filter dropdowns populated');
+    console.log(' Filter dropdowns populated');
 }
 
 function initializeApp() {
     loadSettings();
-    loadDashboardData();
+    // Restore last active section, fall back to dashboard
+    const lastSection = localStorage.getItem('activeSection') || 'dashboard';
+    switchSection(lastSection);
     // Initialize cursor tracking after a short delay to ensure DOM is ready
     setTimeout(() => {
         initCursorTracking();
@@ -390,7 +392,7 @@ function initializeApp() {
 
 // Global Cursor Light Effect
 function initCursorTracking() {
-    console.log('🎨 Initializing Global Cursor Light...');
+    console.log(' Initializing Global Cursor Light...');
 
     // Remove existing spotlight if any
     const existingSpotlight = document.querySelector('.global-spotlight');
@@ -402,7 +404,7 @@ function initCursorTracking() {
     const spotlight = document.createElement('div');
     spotlight.className = 'global-spotlight';
     document.body.appendChild(spotlight);
-    console.log('✅ Global spotlight created');
+    console.log(' Global spotlight created');
 
     // Track mouse movement everywhere
     document.addEventListener('mousemove', (e) => {
@@ -529,10 +531,25 @@ function setupEventListeners() {
     setupThresholdSync();
 
 
-    // Modal close
-    document.querySelector('.modal-close').addEventListener('click', closeModal);
-    document.getElementById('modal').addEventListener('click', (e) => {
-        if (e.target.id === 'modal') closeModal();
+    // Modal close - handle all modals
+    document.querySelectorAll('.modal-close').forEach(closeBtn => {
+        closeBtn.addEventListener('click', (e) => {
+            const modal = e.target.closest('.modal');
+            if (modal) {
+                modal.classList.remove('active');
+                modal.style.display = 'none';
+            }
+        });
+    });
+    
+    // Close modal when clicking outside
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('active');
+                modal.style.display = 'none';
+            }
+        });
     });
 
     // Filters
@@ -545,10 +562,10 @@ function setupEventListeners() {
     // Subject Management - Simple version
     const addSubjectBtn = document.getElementById('addSubjectBtn');
     if (addSubjectBtn) {
-        console.log('✅ Add Subject button found, attaching simple listener');
+        console.log(' Add Subject button found, attaching simple listener');
         addSubjectBtn.addEventListener('click', showSimpleAddSubjectDialog);
     } else {
-        console.log('❌ Add Subject button NOT found');
+        console.log(' Add Subject button NOT found');
     }
     const subjectSemesterFilter = document.getElementById('subjectSemesterFilter');
     if (subjectSemesterFilter) {
@@ -572,6 +589,9 @@ function switchSection(sectionName) {
     document.querySelector(`[data-section="${sectionName}"]`).classList.add('active');
     document.getElementById(`${sectionName}-section`).classList.add('active');
 
+    // Persist active section so reload returns to the same page
+    localStorage.setItem('activeSection', sectionName);
+
     // Load section data
     switch (sectionName) {
         case 'students': loadStudents(); break;
@@ -588,6 +608,7 @@ function switchSection(sectionName) {
             break;
         case 'settings': loadAttendanceThresholdSetting(); break;
         case 'attendance': initAttendanceHistory(); break;
+        case 'attendance-showcase': initAttendanceShowcase(); break;
     }
 }
 
@@ -640,7 +661,7 @@ async function loadDashboardData() {
         // Basic stats
         document.getElementById('totalStudents').textContent = students.length;
         document.getElementById('totalTeachers').textContent = teachers.length;
-        document.getElementById('totalTimetables').textContent = '12'; // 4 courses × 3 semesters
+        document.getElementById('totalTimetables').textContent = '12'; // 4 courses  3 semesters
         document.getElementById('totalAttendance').textContent = dailyRecords.length;
 
         // Course distribution with progress bars
@@ -866,12 +887,12 @@ function showAddStudentModal() {
                 <label>Profile Photo</label>
                 <div class="photo-capture">
                     <div class="photo-preview" id="photoPreview">
-                        <div class="photo-placeholder">📷 No photo</div>
+                        <div class="photo-placeholder"> No photo</div>
                     </div>
                     <div class="photo-buttons">
-                        <button type="button" class="btn btn-secondary" onclick="openCamera()">📸 Take Photo</button>
-                        <button type="button" class="btn btn-secondary" onclick="uploadPhoto()">📁 Upload</button>
-                        <button type="button" class="btn btn-danger" onclick="clearPhoto()" style="display:none;" id="clearPhotoBtn">🗑️ Clear</button>
+                        <button type="button" class="btn btn-secondary" onclick="openCamera()"> Take Photo</button>
+                        <button type="button" class="btn btn-secondary" onclick="uploadPhoto()"> Upload</button>
+                        <button type="button" class="btn btn-danger" onclick="clearPhoto()" style="display:none;" id="clearPhotoBtn"> Clear</button>
                     </div>
                     <input type="file" id="photoUpload" accept="image/*" style="display:none;" onchange="handlePhotoUpload(event)">
                     <input type="hidden" name="photoData" id="photoData">
@@ -886,8 +907,8 @@ function showAddStudentModal() {
                 <video id="cameraVideo" autoplay playsinline></video>
                 <canvas id="cameraCanvas" style="display:none;"></canvas>
                 <div class="camera-controls">
-                    <button type="button" class="btn btn-primary" onclick="capturePhoto()">📸 Capture</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeCamera()">❌ Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="capturePhoto()"> Capture</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeCamera()"> Cancel</button>
                 </div>
             </div>
         </div>
@@ -974,7 +995,7 @@ function clearPhoto() {
     const photoDataInput = document.getElementById('photoData');
     const clearBtn = document.getElementById('clearPhotoBtn');
 
-    preview.innerHTML = '<div class="photo-placeholder">📷 No photo</div>';
+    preview.innerHTML = '<div class="photo-placeholder"> No photo</div>';
     photoDataInput.value = '';
     clearBtn.style.display = 'none';
 }
@@ -1007,11 +1028,11 @@ async function handleAddStudent(e) {
             if (photoResponse.ok && photoResult.success) {
                 // Server now returns full URL, no need to prepend SERVER_URL
                 studentData.photoUrl = photoResult.photoUrl;
-                console.log('✅ Photo uploaded with face detected:', studentData.photoUrl);
+                console.log(' Photo uploaded with face detected:', studentData.photoUrl);
             } else {
                 // Face not detected or other error
                 const errorMsg = photoResult.error || 'Photo upload failed';
-                console.error('❌ Photo upload failed:', errorMsg);
+                console.error(' Photo upload failed:', errorMsg);
                 showNotification('Photo upload skipped: ' + errorMsg, 'error');
             }
         } catch (error) {
@@ -1059,10 +1080,10 @@ function showBulkStudentModal() {
         
         <div class="form-group" style="margin-bottom: 20px;">
             <button class="btn btn-secondary" onclick="downloadStudentTemplate()" style="margin-right: 10px;">
-                📥 Download CSV Template
+                 Download CSV Template
             </button>
             <button class="btn btn-info" onclick="showStudentTemplateExample()">
-                👁️ View Example
+                 View Example
             </button>
         </div>
         
@@ -1218,11 +1239,11 @@ async function loadDepartmentsFilter() {
                     departmentFilter.appendChild(option);
                 });
 
-                console.log('✅ Loaded departments for filter:', data.departments.length);
+                console.log(' Loaded departments for filter:', data.departments.length);
             }
         }
     } catch (error) {
-        console.error('❌ Error loading departments for filter:', error);
+        console.error(' Error loading departments for filter:', error);
         // Keep hardcoded fallback options if API fails
     }
 }
@@ -1297,7 +1318,7 @@ async function showAddTeacherModal() {
             </div>
             <div class="form-group">
                 <label>Subjects Taught *
-                    <small style="color:var(--text-secondary);font-weight:normal"> — hold Ctrl/Cmd to select multiple</small>
+                    <small style="color:var(--text-secondary);font-weight:normal">  hold Ctrl/Cmd to select multiple</small>
                 </label>
                 ${allSubjects.length > 0
                     ? `<select id="teacherSubjectsSelect" class="form-select" multiple size="5" style="height:auto">
@@ -1307,7 +1328,7 @@ async function showAddTeacherModal() {
                            Or type manually: <input type="text" id="teacherSubjectManual" class="form-input" style="margin-top:6px" placeholder="e.g. Mathematics, Physics">
                        </small>`
                     : `<input type="text" name="subject" id="teacherSubjectManual" class="form-input" placeholder="e.g., Data Structures, Mathematics" required>
-                       <small style="color:var(--text-secondary)">No subjects configured yet — type manually (comma separated)</small>`
+                       <small style="color:var(--text-secondary)">No subjects configured yet  type manually (comma separated)</small>`
                 }
             </div>
             <div class="form-group">
@@ -1322,12 +1343,12 @@ async function showAddTeacherModal() {
                 <label>Profile Photo</label>
                 <div class="photo-capture">
                     <div class="photo-preview" id="photoPreview">
-                        <div class="photo-placeholder">📷 No photo</div>
+                        <div class="photo-placeholder"> No photo</div>
                     </div>
                     <div class="photo-buttons">
-                        <button type="button" class="btn btn-secondary" onclick="openCamera()">📸 Take Photo</button>
-                        <button type="button" class="btn btn-secondary" onclick="uploadPhoto()">📁 Upload</button>
-                        <button type="button" class="btn btn-danger" onclick="clearPhoto()" style="display:none;" id="clearPhotoBtn">🗑️ Clear</button>
+                        <button type="button" class="btn btn-secondary" onclick="openCamera()"> Take Photo</button>
+                        <button type="button" class="btn btn-secondary" onclick="uploadPhoto()"> Upload</button>
+                        <button type="button" class="btn btn-danger" onclick="clearPhoto()" style="display:none;" id="clearPhotoBtn"> Clear</button>
                     </div>
                     <input type="file" id="photoUpload" accept="image/*" style="display:none;" onchange="handlePhotoUpload(event)">
                     <input type="hidden" name="photoData" id="photoData">
@@ -1345,8 +1366,8 @@ async function showAddTeacherModal() {
                 <video id="cameraVideo" autoplay playsinline></video>
                 <canvas id="cameraCanvas" style="display:none;"></canvas>
                 <div class="camera-controls">
-                    <button type="button" class="btn btn-primary" onclick="capturePhoto()">📸 Capture</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeCamera()">❌ Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="capturePhoto()"> Capture</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeCamera()"> Cancel</button>
                 </div>
             </div>
         </div>
@@ -1396,16 +1417,16 @@ async function handleAddTeacher(e) {
 
             if (photoResponse.ok && photoResult.success) {
                 teacherData.photoUrl = photoResult.photoUrl;
-                console.log('✅ Photo uploaded with face detected');
+                console.log(' Photo uploaded with face detected');
             } else {
                 const errorMsg = photoResult.error || 'Photo upload failed';
-                console.error('❌ Photo upload failed:', errorMsg);
+                console.error(' Photo upload failed:', errorMsg);
                 alert('Photo Upload Failed\n\n' + errorMsg + '\n\nPlease use a clear, well-lit photo showing your face.');
                 return;
             }
         } catch (error) {
             console.error('Error uploading photo:', error);
-            alert('❌ Error uploading photo: ' + error.message);
+            alert(' Error uploading photo: ' + error.message);
             return;
         }
         delete teacherData.photoData;
@@ -1421,7 +1442,7 @@ async function handleAddTeacher(e) {
         const result = await response.json();
 
         if (response.ok && result.success) {
-            showNotification('✅ Teacher added successfully', 'success');
+            showNotification(' Teacher added successfully', 'success');
             closeModal();
             loadTeachers();
 
@@ -1431,7 +1452,7 @@ async function handleAddTeacher(e) {
             }, 500);
         } else {
             const errorMsg = result.error || result.message || 'Failed to add teacher';
-            showNotification(`❌ Failed to add teacher: ${errorMsg}`, 'error');
+            showNotification(` Failed to add teacher: ${errorMsg}`, 'error');
             console.error('Add teacher error:', result);
         }
     } catch (error) {
@@ -1451,10 +1472,10 @@ function showBulkTeacherModal() {
         
         <div class="form-group" style="margin-bottom: 20px;">
             <button class="btn btn-secondary" onclick="downloadTeacherTemplate()" style="margin-right: 10px;">
-                📥 Download CSV Template
+                 Download CSV Template
             </button>
             <button class="btn btn-info" onclick="showTemplateExample()">
-                👁️ View Example
+                 View Example
             </button>
         </div>
         
@@ -1559,7 +1580,7 @@ async function processBulkTeachers() {
         const result = await response.json();
 
         if (response.ok && result.success) {
-            showNotification(`✅ Successfully imported ${result.count || teachers.length} teachers`, 'success');
+            showNotification(` Successfully imported ${result.count || teachers.length} teachers`, 'success');
             closeModal();
             loadTeachers();
 
@@ -1569,12 +1590,12 @@ async function processBulkTeachers() {
             }, 500);
         } else {
             const errorMsg = result.error || result.message || 'Failed to import teachers';
-            showNotification(`❌ Import failed: ${errorMsg}`, 'error');
+            showNotification(` Import failed: ${errorMsg}`, 'error');
             console.error('Bulk import error:', result);
         }
     } catch (error) {
         console.error('Error importing teachers:', error);
-        showNotification(`❌ Network error: ${error.message}`, 'error');
+        showNotification(` Network error: ${error.message}`, 'error');
     }
 }
 
@@ -1605,7 +1626,7 @@ function downloadTeacherTemplate() {
     link.click();
     document.body.removeChild(link);
 
-    showNotification('📥 Template downloaded successfully! Check your Downloads folder.', 'success');
+    showNotification(' Template downloaded successfully! Check your Downloads folder.', 'success');
 }
 
 // Show template example in modal
@@ -1616,7 +1637,7 @@ function showTemplateExample() {
         <div class="modal-content" style="max-width: 900px;">
             <div class="modal-header">
                 <h3>CSV Template Example</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">×</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <h4>Required Columns:</h4>
@@ -1646,7 +1667,7 @@ function showTemplateExample() {
                 </div>
                 
                 <div style="margin-top: 20px; padding: 15px; background: #e3f2fd; border-radius: 5px;">
-                    <strong>💡 Tips:</strong>
+                    <strong> Tips:</strong>
                     <ul style="margin: 10px 0;">
                         <li>Use quotes around text values that contain commas</li>
                         <li>Date format must be YYYY-MM-DD</li>
@@ -1657,7 +1678,7 @@ function showTemplateExample() {
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="downloadTeacherTemplate()">📥 Download Template</button>
+                <button class="btn btn-secondary" onclick="downloadTeacherTemplate()"> Download Template</button>
                 <button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Close</button>
             </div>
         </div>
@@ -1693,7 +1714,7 @@ function downloadStudentTemplate() {
     link.click();
     document.body.removeChild(link);
 
-    showNotification('📥 Student template downloaded successfully! Check your Downloads folder.', 'success');
+    showNotification(' Student template downloaded successfully! Check your Downloads folder.', 'success');
 }
 
 // Show student template example in modal
@@ -1704,7 +1725,7 @@ function showStudentTemplateExample() {
         <div class="modal-content" style="max-width: 900px;">
             <div class="modal-header">
                 <h3>Student CSV Template Example</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">×</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <h4>Required Columns:</h4>
@@ -1737,7 +1758,7 @@ function showStudentTemplateExample() {
                 </div>
                 
                 <div style="margin-top: 20px; padding: 15px; background: #e8f5e8; border-radius: 5px;">
-                    <strong>💡 Tips:</strong>
+                    <strong> Tips:</strong>
                     <ul style="margin: 10px 0;">
                         <li>Use quotes around text values that contain commas</li>
                         <li>Date format must be YYYY-MM-DD</li>
@@ -1748,7 +1769,7 @@ function showStudentTemplateExample() {
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="btn btn-secondary" onclick="downloadStudentTemplate()">📥 Download Template</button>
+                <button class="btn btn-secondary" onclick="downloadStudentTemplate()"> Download Template</button>
                 <button class="btn btn-primary" onclick="this.closest('.modal-overlay').remove()">Close</button>
             </div>
         </div>
@@ -1809,8 +1830,8 @@ function renderClassrooms(classroomsToRender) {
             <td>${bssidDisplay}</td>
             <td><span class="status-badge ${classroom.isActive ? 'status-active' : 'status-inactive'}">${classroom.isActive ? 'Active' : 'Inactive'}</span></td>
             <td>
-                <button class="action-btn edit" onclick="editClassroom('${classroom._id}')">✏️ Edit</button>
-                <button class="action-btn delete" onclick="deleteClassroom('${classroom._id}')">🗑️ Delete</button>
+                <button class="action-btn edit" onclick="editClassroom('${classroom._id}')"> Edit</button>
+                <button class="action-btn delete" onclick="deleteClassroom('${classroom._id}')"> Delete</button>
             </td>
         </tr>
     `;
@@ -1841,7 +1862,7 @@ function showAddClassroomModal() {
                         <input type="text" name="wifiBSSID_0" class="form-input" placeholder="XX:XX:XX:XX:XX:XX" style="flex: 1;">
                     </div>
                 </div>
-                <button type="button" class="btn btn-secondary" onclick="addBSSIDField()" style="margin-top: 8px; width: 100%;">➕ More BSSID</button>
+                <button type="button" class="btn btn-secondary" onclick="addBSSIDField()" style="margin-top: 8px; width: 100%;"> More BSSID</button>
             </div>
             <div class="form-group">
                 <label>
@@ -1909,8 +1930,8 @@ function showBulkClassroomModal() {
                 <input type="file" name="file" accept=".csv" class="form-input" required>
             </div>
             <div class="button-group">
-                <button type="button" class="btn btn-secondary" onclick="downloadClassroomTemplate()">📥 Download Template</button>
-                <button type="submit" class="btn btn-primary">📤 Import Classrooms</button>
+                <button type="button" class="btn btn-secondary" onclick="downloadClassroomTemplate()"> Download Template</button>
+                <button type="submit" class="btn btn-primary"> Import Classrooms</button>
             </div>
         </form>
         <div class="csv-template">
@@ -2074,7 +2095,7 @@ async function loadTimetable() {
             document.getElementById('timetableEditor').innerHTML = `
                 <div style="text-align: center; padding: 40px;">
                     <p style="color: var(--text-secondary); margin-bottom: 20px;">No timetable found for ${course} Semester ${semester}</p>
-                    <button class="btn btn-primary" onclick="createNewTimetable()">➕ Create New Timetable</button>
+                    <button class="btn btn-primary" onclick="createNewTimetable()"> Create New Timetable</button>
                 </div>
             `;
         }
@@ -2159,59 +2180,59 @@ function renderAdvancedTimetableEditor(timetable) {
     // Advanced Toolbar
     html += '<div class="advanced-toolbar">';
     html += '<div class="toolbar-section">';
-    html += '<h3>📝 Edit Tools</h3>';
-    html += '<button class="tool-btn" onclick="undo()" title="Undo (Ctrl+Z)">↶ Undo</button>';
-    html += '<button class="tool-btn" onclick="redo()" title="Redo (Ctrl+Y)">↷ Redo</button>';
-    html += '<button class="tool-btn" onclick="clearSelection()">✖ Clear Selection</button>';
+    html += '<h3> Edit Tools</h3>';
+    html += '<button class="tool-btn" onclick="undo()" title="Undo (Ctrl+Z)"> Undo</button>';
+    html += '<button class="tool-btn" onclick="redo()" title="Redo (Ctrl+Y)"> Redo</button>';
+    html += '<button class="tool-btn" onclick="clearSelection()"> Clear Selection</button>';
     html += '</div>';
 
     html += '<div class="toolbar-section">';
-    html += '<h3>📋 Copy/Paste</h3>';
-    html += '<button class="tool-btn" onclick="copySelected()">📄 Copy</button>';
-    html += '<button class="tool-btn" onclick="pasteToSelected()">📋 Paste</button>';
-    html += '<button class="tool-btn" onclick="cutSelected()">✂️ Cut</button>';
+    html += '<h3> Copy/Paste</h3>';
+    html += '<button class="tool-btn" onclick="copySelected()"> Copy</button>';
+    html += '<button class="tool-btn" onclick="pasteToSelected()"> Paste</button>';
+    html += '<button class="tool-btn" onclick="cutSelected()"> Cut</button>';
     html += '</div>';
 
     html += '<div class="toolbar-section">';
-    html += '<h3>🔄 Bulk Actions</h3>';
-    html += '<button class="tool-btn" onclick="showCopyDayDialog()">📅 Copy Day</button>';
-    html += '<button class="tool-btn" onclick="showFillDialog()">🎨 Fill Cells</button>';
-    html += '<button class="tool-btn" onclick="clearDay()">🗑️ Clear Day</button>';
+    html += '<h3> Bulk Actions</h3>';
+    html += '<button class="tool-btn" onclick="showCopyDayDialog()"> Copy Day</button>';
+    html += '<button class="tool-btn" onclick="showFillDialog()"> Fill Cells</button>';
+    html += '<button class="tool-btn" onclick="clearDay()"> Clear Day</button>';
     html += '</div>';
 
     html += '<div class="toolbar-section">';
-    html += '<h3>📆 Day Management</h3>';
-    html += '<button class="tool-btn" onclick="addNewDay()">➕ Add Day</button>';
-    html += '<button class="tool-btn" onclick="removeDay()">➖ Remove Day</button>';
+    html += '<h3> Day Management</h3>';
+    html += '<button class="tool-btn" onclick="addNewDay()"> Add Day</button>';
+    html += '<button class="tool-btn" onclick="removeDay()"> Remove Day</button>';
     html += '</div>';
 
     html += '<div class="toolbar-section">';
-    html += '<h3>📚 Subject Tools</h3>';
-    html += '<button class="tool-btn" onclick="showSubjectManager()">📖 Manage Subjects</button>';
-    html += '<button class="tool-btn" onclick="showTeacherAssign()">👨‍🏫 Assign Teachers</button>';
-    html += '<button class="tool-btn" onclick="showColorPicker()">🎨 Color Code</button>';
+    html += '<h3> Subject Tools</h3>';
+    html += '<button class="tool-btn" onclick="showSubjectManager()"> Manage Subjects</button>';
+    html += '<button class="tool-btn" onclick="showTeacherAssign()"> Assign Teachers</button>';
+    html += '<button class="tool-btn" onclick="showColorPicker()"> Color Code</button>';
     html += '</div>';
 
     html += '<div class="toolbar-section">';
-    html += '<h3>🔍 View Options</h3>';
-    html += `<button class="tool-btn" onclick="toggleTeacherView()">👨‍🏫 ${showTeachers ? 'Hide' : 'Show'} Teachers</button>`;
-    html += `<button class="tool-btn" onclick="toggleRoomView()">🏢 ${showRooms ? 'Hide' : 'Show'} Rooms</button>`;
-    html += `<button class="tool-btn" onclick="toggleCompactView()">📏 ${compactView ? 'Normal' : 'Compact'} View</button>`;
+    html += '<h3> View Options</h3>';
+    html += `<button class="tool-btn" onclick="toggleTeacherView()"> ${showTeachers ? 'Hide' : 'Show'} Teachers</button>`;
+    html += `<button class="tool-btn" onclick="toggleRoomView()"> ${showRooms ? 'Hide' : 'Show'} Rooms</button>`;
+    html += `<button class="tool-btn" onclick="toggleCompactView()"> ${compactView ? 'Normal' : 'Compact'} View</button>`;
     html += '</div>';
 
     html += '<div class="toolbar-section">';
-    html += '<h3>📤 Export/Import</h3>';
-    html += '<button class="tool-btn" onclick="exportToPDF()">📄 Export PDF</button>';
-    html += '<button class="tool-btn" onclick="exportToExcel()">📊 Export Excel</button>';
-    html += '<button class="tool-btn" onclick="showImportDialog()">📥 Import</button>';
+    html += '<h3> Export/Import</h3>';
+    html += '<button class="tool-btn" onclick="exportToPDF()"> Export PDF</button>';
+    html += '<button class="tool-btn" onclick="exportToExcel()"> Export Excel</button>';
+    html += '<button class="tool-btn" onclick="showImportDialog()"> Import</button>';
     html += '</div>';
 
     html += '<div class="toolbar-section">';
-    html += '<h3>⚙️ Advanced</h3>';
-    html += '<button class="tool-btn" onclick="showPeriodSettings()">⏰ Period Settings</button>';
-    html += '<button class="tool-btn" onclick="showTemplateDialog()">💾 Save Template</button>';
-    html += '<button class="tool-btn" onclick="duplicateTimetable()">📑 Duplicate</button>';
-    html += '<button class="tool-btn" onclick="showConflictCheck()">⚠️ Check Conflicts</button>';
+    html += '<h3> Advanced</h3>';
+    html += '<button class="tool-btn" onclick="showPeriodSettings()"> Period Settings</button>';
+    html += '<button class="tool-btn" onclick="showTemplateDialog()"> Save Template</button>';
+    html += '<button class="tool-btn" onclick="duplicateTimetable()"> Duplicate</button>';
+    html += '<button class="tool-btn" onclick="showConflictCheck()"> Check Conflicts</button>';
     html += '</div>';
     html += '</div>';
 
@@ -2261,13 +2282,13 @@ function renderAdvancedTimetableEditor(timetable) {
                 ondblclick="editAdvancedCell(${dayIdx}, ${periodIdx})"
                 oncontextmenu="showCellContextMenu(event, ${dayIdx}, ${periodIdx}); return false;">
                 <div class="cell-content">
-                    ${isBreak ? `<div class="break-indicator">🔔 BREAK</div>` : ''}
+                    ${isBreak ? `<div class="break-indicator"> BREAK</div>` : ''}
                     <div class="subject-name">${isBreak ? (period.subject || 'Break') : (period.subject || '-')}</div>
-                    ${!isBreak && period.teacher ? `<div class="teacher-name">👨‍🏫 ${period.teacher}</div>` : ''}
-                    ${!isBreak && period.room ? `<div class="room-name">🏢 ${period.room}</div>` : ''}
+                    ${!isBreak && period.teacher ? `<div class="teacher-name"> ${period.teacher}</div>` : ''}
+                    ${!isBreak && period.room ? `<div class="room-name"> ${period.room}</div>` : ''}
                 </div>
                 <div class="break-toggle-btn" onclick="toggleBreakPeriod(event, ${dayIdx}, ${periodIdx})" title="${isBreak ? 'Mark as Regular Period' : 'Mark as Break'}">
-                    ${isBreak ? '📚' : '🔔'}
+                    ${isBreak ? '' : ''}
                 </div>
             </div>`;
         }
@@ -2277,12 +2298,12 @@ function renderAdvancedTimetableEditor(timetable) {
 
     // Quick Actions Bar
     html += '<div class="quick-actions-bar">';
-    html += '<div style="color: var(--text-secondary); font-size: 14px; padding: 8px;" id="timetable-save-status">✏️ Unsaved changes</div>';
-    html += '<button class="btn btn-primary" id="save-timetable-btn" onclick="saveAndRefreshSchedule()" style="background:#2563eb;border-color:#2563eb;font-weight:700;padding:8px 22px;">💾 Save</button>';
-    html += '<button class="btn btn-success" onclick="autoFillTimetable()">🤖 Auto Fill</button>';
-    html += '<button class="btn btn-warning" onclick="validateTimetable()">✓ Validate</button>';
-    html += '<button class="btn btn-secondary" onclick="printTimetable()">🖨️ Print</button>';
-    html += '<button class="btn btn-info" onclick="shareTimetable()">🔗 Share</button>';
+    html += '<div style="color: var(--text-secondary); font-size: 14px; padding: 8px;" id="timetable-save-status"> Unsaved changes</div>';
+    html += '<button class="btn btn-primary" id="save-timetable-btn" onclick="saveAndRefreshSchedule()" style="background:#2563eb;border-color:#2563eb;font-weight:700;padding:8px 22px;"> Save</button>';
+    html += '<button class="btn btn-success" onclick="autoFillTimetable()"> Auto Fill</button>';
+    html += '<button class="btn btn-warning" onclick="validateTimetable()"> Validate</button>';
+    html += '<button class="btn btn-secondary" onclick="printTimetable()"> Print</button>';
+    html += '<button class="btn btn-info" onclick="shareTimetable()"> Share</button>';
     html += '</div>';
 
     editor.innerHTML = html;
@@ -2371,7 +2392,7 @@ async function editAdvancedCell(dayIdx, periodIdx) {
     // Fetch subjects from database based on current timetable's semester and branch
     let subjectOptions = '';
     try {
-        console.log(`📚 Fetching subjects for: ${currentTimetable.branch} - Semester ${currentTimetable.semester}`);
+        console.log(` Fetching subjects for: ${currentTimetable.branch} - Semester ${currentTimetable.semester}`);
         const url = `${SERVER_URL}/api/subjects?semester=${currentTimetable.semester}&branch=${encodeURIComponent(currentTimetable.branch)}`;
         console.log('API URL:', url);
 
@@ -2387,28 +2408,28 @@ async function editAdvancedCell(dayIdx, periodIdx) {
                 subjectOptions = subjects.map(s =>
                     `<option value="${s.subjectName}" ${period.subject === s.subjectName ? 'selected' : ''}>${s.subjectName} (${s.subjectCode})</option>`
                 ).join('');
-                console.log(`✅ Loaded ${subjects.length} subjects`);
+                console.log(` Loaded ${subjects.length} subjects`);
             } else {
-                console.warn('⚠️ No subjects found for this semester/branch');
+                console.warn(' No subjects found for this semester/branch');
                 subjectOptions = '<option value="">No subjects found for this semester/branch</option>';
             }
         } else {
-            console.error('❌ Failed to fetch subjects, status:', response.status);
+            console.error(' Failed to fetch subjects, status:', response.status);
             const errorText = await response.text();
             console.error('Error response:', errorText);
             subjectOptions = '<option value="">Failed to load subjects</option>';
         }
     } catch (error) {
-        console.error('❌ Error fetching subjects:', error);
+        console.error(' Error fetching subjects:', error);
         subjectOptions = '<option value="">Error loading subjects - Check console</option>';
     }
 
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>✏️ Edit Period</h2>
+        <h2> Edit Period</h2>
         <form id="periodForm">
             <div class="form-group">
-                <label>📚 Subject</label>
+                <label> Subject</label>
                 <select name="subject" class="form-select">
                     <option value="">-- Select Subject --</option>
                     ${subjectOptions}
@@ -2416,7 +2437,7 @@ async function editAdvancedCell(dayIdx, periodIdx) {
                 <small style="color: var(--text-secondary); font-size: 12px;">Subjects from database for ${currentTimetable.branch} - Semester ${currentTimetable.semester}</small>
             </div>
             <div class="form-group">
-                <label>👨‍🏫 Teacher</label>
+                <label> Teacher</label>
                 <select name="teacher" class="form-select">
                     <option value="">-- Select Teacher --</option>
                     ${teacherOptions}
@@ -2424,7 +2445,7 @@ async function editAdvancedCell(dayIdx, periodIdx) {
                 <small style="color: var(--text-secondary); font-size: 12px;">Only registered teachers can be assigned</small>
             </div>
             <div class="form-group">
-                <label>🏢 Classroom</label>
+                <label> Classroom</label>
                 <select name="room" class="form-select">
                     <option value="">-- Select Classroom --</option>
                     ${classroomOptions}
@@ -2432,7 +2453,7 @@ async function editAdvancedCell(dayIdx, periodIdx) {
                 <small style="color: var(--text-secondary); font-size: 12px;">Only registered classrooms can be assigned</small>
             </div>
             <div class="form-group">
-                <label>🎨 Color</label>
+                <label> Color</label>
                 <input type="color" name="color" class="form-input" value="${period.color || '#1e3a5f'}">
             </div>
             <div class="form-group">
@@ -2441,7 +2462,7 @@ async function editAdvancedCell(dayIdx, periodIdx) {
                 </label>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">💾 Save</button>
+                <button type="submit" class="btn btn-primary"> Save</button>
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
             </div>
         </form>
@@ -2472,11 +2493,11 @@ async function editAdvancedCell(dayIdx, periodIdx) {
             const conflict = await checkTeacherConflict(newTeacher, currentDay, currentPeriodNumber, newRoom, currentTimetable.branch, currentTimetable.semester);
 
             if (conflict) {
-                const message = `⚠️ Teacher Conflict!\n\n${newTeacher} is already assigned to:\n` +
-                    `• ${conflict.branch} - Semester ${conflict.semester}\n` +
-                    `• ${currentDay} - Period ${currentPeriodNumber}\n` +
-                    `• Subject: ${conflict.subject}\n` +
-                    `• Room: ${conflict.room}\n\n` +
+                const message = ` Teacher Conflict!\n\n${newTeacher} is already assigned to:\n` +
+                    ` ${conflict.branch} - Semester ${conflict.semester}\n` +
+                    ` ${currentDay} - Period ${currentPeriodNumber}\n` +
+                    ` Subject: ${conflict.subject}\n` +
+                    ` Room: ${conflict.room}\n\n` +
                     `Cannot assign same teacher to different rooms at the same time.`;
 
                 if (!confirm(message + '\n\nDo you want to assign anyway?')) {
@@ -2632,17 +2653,17 @@ function toggleBreakPeriod(event, dayIdx, periodIdx) {
         const cellContent = cell.querySelector('.cell-content');
         if (cellContent) {
             cellContent.innerHTML = `
-                ${period.isBreak ? `<div class="break-indicator">🔔 BREAK</div>` : ''}
+                ${period.isBreak ? `<div class="break-indicator"> BREAK</div>` : ''}
                 <div class="subject-name">${period.isBreak ? (period.subject || 'Break') : (period.subject || '-')}</div>
-                ${!period.isBreak && period.teacher ? `<div class="teacher-name">👨‍🏫 ${period.teacher}</div>` : ''}
-                ${!period.isBreak && period.room ? `<div class="room-name">🏢 ${period.room}</div>` : ''}
+                ${!period.isBreak && period.teacher ? `<div class="teacher-name"> ${period.teacher}</div>` : ''}
+                ${!period.isBreak && period.room ? `<div class="room-name"> ${period.room}</div>` : ''}
             `;
         }
 
         // Update toggle button
         const toggleBtn = cell.querySelector('.break-toggle-btn');
         if (toggleBtn) {
-            toggleBtn.innerHTML = period.isBreak ? '📚' : '🔔';
+            toggleBtn.innerHTML = period.isBreak ? '' : '';
             toggleBtn.title = period.isBreak ? 'Mark as Regular Period' : 'Mark as Break';
         }
     }
@@ -2657,7 +2678,7 @@ function toggleBreakPeriod(event, dayIdx, periodIdx) {
 function triggerAutoSave() {
     const status = document.getElementById('timetable-save-status');
     if (status) {
-        status.textContent = '✏️ Unsaved changes';
+        status.textContent = ' Unsaved changes';
         status.style.color = '#f59e0b';
     }
     const btn = document.getElementById('save-timetable-btn');
@@ -2701,8 +2722,8 @@ async function saveAndRefreshSchedule() {
     const status = document.getElementById('timetable-save-status');
 
     // Show saving state
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Saving...'; }
-    if (status) { status.textContent = '⏳ Saving...'; status.style.color = 'var(--text-secondary)'; }
+    if (btn) { btn.disabled = true; btn.textContent = ' Saving...'; }
+    if (status) { status.textContent = ' Saving...'; status.style.color = 'var(--text-secondary)'; }
 
     try {
         // Step 1: Save timetable
@@ -2735,22 +2756,22 @@ async function saveAndRefreshSchedule() {
         // Update UI to saved state
         if (btn) {
             btn.disabled = false;
-            btn.textContent = '✅ Saved';
+            btn.textContent = ' Saved';
             btn.style.background = '#22c55e';
             btn.style.borderColor = '#22c55e';
             setTimeout(() => {
-                btn.textContent = '💾 Save';
+                btn.textContent = ' Save';
                 btn.style.background = '#2563eb';
                 btn.style.borderColor = '#2563eb';
             }, 2000);
         }
-        if (status) { status.textContent = '✅ Saved & schedule refreshed'; status.style.color = '#22c55e'; }
+        if (status) { status.textContent = ' Saved & schedule refreshed'; status.style.color = '#22c55e'; }
         showNotification('Timetable saved & offline schedule updated for all students', 'success');
 
     } catch (error) {
         if (btn) {
             btn.disabled = false;
-            btn.textContent = '💾 Save';
+            btn.textContent = ' Save';
             btn.style.background = '#ef4444';
             btn.style.borderColor = '#ef4444';
             setTimeout(() => {
@@ -2758,7 +2779,7 @@ async function saveAndRefreshSchedule() {
                 btn.style.borderColor = '#2563eb';
             }, 2000);
         }
-        if (status) { status.textContent = '❌ Save failed'; status.style.color = '#ef4444'; }
+        if (status) { status.textContent = ' Save failed'; status.style.color = '#ef4444'; }
         showNotification('Error: ' + error.message, 'error');
     }
 }
@@ -2834,7 +2855,7 @@ function pasteToSelected() {
 function showCopyDayDialog() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>📅 Copy Day</h2>
+        <h2> Copy Day</h2>
         <form id="copyDayForm">
             <div class="form-group">
                 <label>From Day:</label>
@@ -2903,7 +2924,7 @@ function showFillDialog() {
 
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>🎨 Fill Selected Cells</h2>
+        <h2> Fill Selected Cells</h2>
         <form id="fillForm">
             <div class="form-group">
                 <label>Subject:</label>
@@ -2956,7 +2977,7 @@ function showFillDialog() {
 function clearDay() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>🗑️ Clear Day</h2>
+        <h2> Clear Day</h2>
         <p>Select day to clear:</p>
         <form id="clearDayForm">
             <div class="form-group">
@@ -3029,7 +3050,7 @@ function addNewDay() {
     }
 
     modalBody.innerHTML = `
-        <h2>➕ Add New Day</h2>
+        <h2> Add New Day</h2>
         <p>Select a day to add to the timetable:</p>
         <form id="addDayForm">
             <div class="form-group">
@@ -3120,8 +3141,8 @@ function removeDay() {
     }
 
     modalBody.innerHTML = `
-        <h2>➖ Remove Day</h2>
-        <p style="color: var(--warning); margin-bottom: 15px;">⚠️ Warning: This will permanently delete all classes for the selected day!</p>
+        <h2> Remove Day</h2>
+        <p style="color: var(--warning); margin-bottom: 15px;"> Warning: This will permanently delete all classes for the selected day!</p>
         <form id="removeDayForm">
             <div class="form-group">
                 <label>Select day to remove:</label>
@@ -3225,7 +3246,7 @@ async function loadAttendanceThreshold() {
             document.getElementById('attendanceThreshold').value = threshold;
             document.getElementById('attendanceThresholdValue').value = threshold;
             document.getElementById('currentThresholdDisplay').textContent = `${threshold}%`;
-            console.log(`✅ Loaded attendance threshold: ${threshold}%`);
+            console.log(` Loaded attendance threshold: ${threshold}%`);
         }
     } catch (error) {
         console.error('Error loading threshold:', error);
@@ -3256,7 +3277,7 @@ async function saveAttendanceThreshold() {
         if (data.success) {
             showNotification(`Attendance threshold updated to ${threshold}%`, 'success');
             document.getElementById('currentThresholdDisplay').textContent = `${threshold}%`;
-            console.log(`✅ Threshold saved: ${threshold}%`);
+            console.log(` Threshold saved: ${threshold}%`);
         } else {
             showNotification('Failed to save threshold: ' + data.error, 'error');
         }
@@ -3345,7 +3366,7 @@ function addBSSIDField() {
     newField.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px;';
     newField.innerHTML = `
         <input type="text" name="wifiBSSID_${currentCount}" class="form-input" placeholder="XX:XX:XX:XX:XX:XX" style="flex: 1;">
-        <button type="button" class="btn btn-secondary" onclick="removeBSSIDField(this)" style="padding: 8px 12px;">🗑️</button>
+        <button type="button" class="btn btn-secondary" onclick="removeBSSIDField(this)" style="padding: 8px 12px;"></button>
     `;
     
     container.appendChild(newField);
@@ -3366,19 +3387,19 @@ function removeBSSIDField(button) {
 // Edit functions
 async function editStudent(id) {
     try {
-        console.log('🔍 Edit student called with ID:', id);
-        console.log('📋 Available students:', students.length);
+        console.log(' Edit student called with ID:', id);
+        console.log(' Available students:', students.length);
         
         const student = students.find(s => s._id === id || s.enrollmentNo === id);
         
         if (!student) {
-            console.error('❌ Student not found with ID:', id);
+            console.error(' Student not found with ID:', id);
             console.log('Available student IDs:', students.map(s => ({ _id: s._id, enrollmentNo: s.enrollmentNo })));
             showNotification('Student not found. Please refresh the page and try again.', 'error');
             return;
         }
         
-        console.log('✅ Found student:', student.name);
+        console.log(' Found student:', student.name);
 
         // Get current photo
         let currentPhotoUrl = student.photoUrl;
@@ -3437,9 +3458,9 @@ async function editStudent(id) {
                             <img src="${currentPhotoUrl}" alt="Current Photo" class="captured-photo">
                         </div>
                         <div class="photo-buttons">
-                            <button type="button" class="btn btn-secondary" onclick="openCamera()">📸 Take Photo</button>
-                            <button type="button" class="btn btn-secondary" onclick="uploadPhoto()">📁 Upload</button>
-                            <button type="button" class="btn btn-danger" onclick="clearPhoto()" id="clearPhotoBtn">🗑️ Clear</button>
+                            <button type="button" class="btn btn-secondary" onclick="openCamera()"> Take Photo</button>
+                            <button type="button" class="btn btn-secondary" onclick="uploadPhoto()"> Upload</button>
+                            <button type="button" class="btn btn-danger" onclick="clearPhoto()" id="clearPhotoBtn"> Clear</button>
                         </div>
                         <input type="file" id="photoUpload" accept="image/*" style="display:none;" onchange="handlePhotoUpload(event)">
                         <input type="hidden" name="photoData" id="photoData">
@@ -3454,8 +3475,8 @@ async function editStudent(id) {
                     <video id="cameraVideo" autoplay playsinline></video>
                     <canvas id="cameraCanvas" style="display:none;"></canvas>
                     <div class="camera-controls">
-                        <button type="button" class="btn btn-primary" onclick="capturePhoto()">📸 Capture</button>
-                        <button type="button" class="btn btn-secondary" onclick="closeCamera()">❌ Cancel</button>
+                        <button type="button" class="btn btn-primary" onclick="capturePhoto()"> Capture</button>
+                        <button type="button" class="btn btn-secondary" onclick="closeCamera()"> Cancel</button>
                     </div>
                 </div>
             </div>
@@ -3493,10 +3514,10 @@ async function editStudent(id) {
 
                     if (photoResponse.ok && photoResult.success) {
                         studentData.photoUrl = photoResult.photoUrl;
-                        console.log('✅ Photo updated with face detected');
+                        console.log(' Photo updated with face detected');
                     } else {
                         const errorMsg = photoResult.error || 'Photo upload failed';
-                        console.error('❌ Photo upload failed:', errorMsg);
+                        console.error(' Photo upload failed:', errorMsg);
                         showNotification('Photo upload skipped: ' + errorMsg, 'error');
                     }
                 } catch (error) {
@@ -3535,7 +3556,7 @@ async function editStudent(id) {
 
         openModal();
     } catch (error) {
-        console.error('❌ Error in editStudent function:', error);
+        console.error(' Error in editStudent function:', error);
         showNotification('Error opening edit form: ' + error.message, 'error');
     }
 }
@@ -3585,7 +3606,7 @@ async function editTeacher(id) {
         : `<input type="text" id="teacherSubjectManual" class="form-input"
                placeholder="e.g., Data Structures, Mathematics"
                value="${existingSubjects.join(', ')}" required>
-           <small style="color:var(--text-secondary)">No subjects configured yet — type manually (comma separated)</small>`;
+           <small style="color:var(--text-secondary)">No subjects configured yet  type manually (comma separated)</small>`;
 
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
@@ -3615,7 +3636,7 @@ async function editTeacher(id) {
             </div>
             <div class="form-group">
                 <label>Subjects Taught *
-                    <small style="color:var(--text-secondary);font-weight:normal"> — hold Ctrl/Cmd to select multiple</small>
+                    <small style="color:var(--text-secondary);font-weight:normal">  hold Ctrl/Cmd to select multiple</small>
                 </label>
                 ${subjectsHtml}
             </div>
@@ -3634,9 +3655,9 @@ async function editTeacher(id) {
                         <img src="${currentPhotoUrl}" alt="Current Photo" class="captured-photo">
                     </div>
                     <div class="photo-buttons">
-                        <button type="button" class="btn btn-secondary" onclick="openCamera()">📸 Take Photo</button>
-                        <button type="button" class="btn btn-secondary" onclick="uploadPhoto()">📁 Upload</button>
-                        <button type="button" class="btn btn-danger" onclick="clearPhoto()" id="clearPhotoBtn">🗑️ Clear</button>
+                        <button type="button" class="btn btn-secondary" onclick="openCamera()"> Take Photo</button>
+                        <button type="button" class="btn btn-secondary" onclick="uploadPhoto()"> Upload</button>
+                        <button type="button" class="btn btn-danger" onclick="clearPhoto()" id="clearPhotoBtn"> Clear</button>
                     </div>
                     <input type="file" id="photoUpload" accept="image/*" style="display:none;" onchange="handlePhotoUpload(event)">
                     <input type="hidden" name="photoData" id="photoData">
@@ -3656,8 +3677,8 @@ async function editTeacher(id) {
                 <video id="cameraVideo" autoplay playsinline></video>
                 <canvas id="cameraCanvas" style="display:none;"></canvas>
                 <div class="camera-controls">
-                    <button type="button" class="btn btn-primary" onclick="capturePhoto()">📸 Capture</button>
-                    <button type="button" class="btn btn-secondary" onclick="closeCamera()">❌ Cancel</button>
+                    <button type="button" class="btn btn-primary" onclick="capturePhoto()"> Capture</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeCamera()"> Cancel</button>
                 </div>
             </div>
         </div>
@@ -3706,16 +3727,16 @@ async function editTeacher(id) {
 
                 if (photoResponse.ok && photoResult.success) {
                     teacherData.photoUrl = photoResult.photoUrl;
-                    console.log('✅ Photo updated with face detected');
+                    console.log(' Photo updated with face detected');
                 } else {
                     const errorMsg = photoResult.error || 'Photo upload failed';
-                    console.error('❌ Photo upload failed:', errorMsg);
+                    console.error(' Photo upload failed:', errorMsg);
                     alert('Photo Upload Failed\n\n' + errorMsg + '\n\nPlease use a clear, well-lit photo showing your face.');
                     return;
                 }
             } catch (error) {
                 console.error('Error uploading photo:', error);
-                alert('❌ Error uploading photo: ' + error.message);
+                alert(' Error uploading photo: ' + error.message);
                 return;
             }
             delete teacherData.photoData;
@@ -3777,11 +3798,11 @@ async function editClassroom(id) {
                     ${bssids.map((bssid, index) => `
                         <div class="bssid-input-group" style="display: flex; gap: 8px; margin-bottom: 8px;">
                             <input type="text" name="wifiBSSID_${index}" class="form-input" value="${bssid || ''}" placeholder="XX:XX:XX:XX:XX:XX" style="flex: 1;">
-                            ${index > 0 ? `<button type="button" class="btn btn-secondary" onclick="removeBSSIDField(this)" style="padding: 8px 12px;">🗑️</button>` : ''}
+                            ${index > 0 ? `<button type="button" class="btn btn-secondary" onclick="removeBSSIDField(this)" style="padding: 8px 12px;"></button>` : ''}
                         </div>
                     `).join('')}
                 </div>
-                <button type="button" class="btn btn-secondary" onclick="addBSSIDField()" style="margin-top: 8px; width: 100%;">➕ More BSSID</button>
+                <button type="button" class="btn btn-secondary" onclick="addBSSIDField()" style="margin-top: 8px; width: 100%;"> More BSSID</button>
             </div>
             <div class="form-group">
                 <label>
@@ -3985,7 +4006,7 @@ function showNotification(message, type = 'info') {
     notification.innerHTML = `
         <span class="notification-icon">${getNotificationIcon(type)}</span>
         <span class="notification-message">${message}</span>
-        <button class="notification-close" onclick="closeNotification()">✕</button>
+        <button class="notification-close" onclick="closeNotification()"></button>
     `;
 
     document.body.appendChild(notification);
@@ -3999,10 +4020,10 @@ function showNotification(message, type = 'info') {
 
 function getNotificationIcon(type) {
     const icons = {
-        success: '✓',
-        error: '✕',
-        warning: '⚠',
-        info: 'ℹ'
+        success: '',
+        error: '',
+        warning: '',
+        info: ''
     };
     return icons[type] || icons.info;
 }
@@ -4064,7 +4085,7 @@ function addExportButtons() {
         const exportBtn = document.createElement('button');
         exportBtn.id = 'exportStudentsBtn';
         exportBtn.className = 'btn btn-secondary';
-        exportBtn.innerHTML = '📥 Export CSV';
+        exportBtn.innerHTML = ' Export CSV';
         exportBtn.onclick = exportStudentsToCSV;
         studentsActions.insertBefore(exportBtn, studentsActions.firstChild);
     }
@@ -4075,7 +4096,7 @@ function addExportButtons() {
         const exportBtn = document.createElement('button');
         exportBtn.id = 'exportTeachersBtn';
         exportBtn.className = 'btn btn-secondary';
-        exportBtn.innerHTML = '📥 Export CSV';
+        exportBtn.innerHTML = ' Export CSV';
         exportBtn.onclick = exportTeachersToCSV;
         teachersActions.insertBefore(exportBtn, teachersActions.firstChild);
     }
@@ -4086,7 +4107,7 @@ function addExportButtons() {
         const exportBtn = document.createElement('button');
         exportBtn.id = 'exportClassroomsBtn';
         exportBtn.className = 'btn btn-secondary';
-        exportBtn.innerHTML = '📥 Export CSV';
+        exportBtn.innerHTML = ' Export CSV';
         exportBtn.onclick = exportClassroomsToCSV;
         classroomsActions.insertBefore(exportBtn, classroomsActions.firstChild);
     }
@@ -4206,7 +4227,7 @@ function addPrintButton() {
         const printBtn = document.createElement('button');
         printBtn.id = 'printTimetableBtn';
         printBtn.className = 'btn btn-secondary';
-        printBtn.innerHTML = '🖨️ Print';
+        printBtn.innerHTML = ' Print';
         printBtn.onclick = printTimetable;
         timetableActions.appendChild(printBtn);
     }
@@ -4214,7 +4235,7 @@ function addPrintButton() {
 
 setTimeout(addPrintButton, 100);
 
-console.log('✅ All features loaded successfully!');
+console.log(' All features loaded successfully!');
 
 
 // Student Attendance Report
@@ -4259,8 +4280,8 @@ async function showStudentAttendance(studentId, studentName) {
         let html = `
             <div class="attendance-report">
                 <div class="report-header">
-                    <h2>📊 Detailed Attendance Report</h2>
-                    <button class="btn btn-secondary" onclick="exportAttendanceReport('${studentId}')">📥 Export</button>
+                    <h2> Detailed Attendance Report</h2>
+                    <button class="btn btn-secondary" onclick="exportAttendanceReport('${studentId}')"> Export</button>
                 </div>
                 
                 <div class="student-info-card">
@@ -4326,7 +4347,7 @@ async function showStudentAttendance(studentId, studentName) {
                 </div>
                 
                 <div class="attendance-table-container">
-                    <h3>📅 Detailed Daily Records</h3>
+                    <h3> Detailed Daily Records</h3>
                     <table class="attendance-table">
                         <thead>
                             <tr>
@@ -4365,13 +4386,13 @@ async function showStudentAttendance(studentId, studentName) {
                                         <td>${attended} min</td>
                                         <td>${total} min</td>
                                         <td><strong>${percentage}%</strong></td>
-                                        <td>${record.status === 'leave' ? '🏖️ No Classes' : `${presentLectures}/${lectureCount} lectures`}</td>
+                                        <td>${record.status === 'leave' ? ' No Classes' : `${presentLectures}/${lectureCount} lectures`}</td>
                                     </tr>
                                     ${record.lectures && record.lectures.length > 0 ? `
                                     <tr class="lecture-details-row" id="details_${record._id || record.studentId + '_' + dateStr}" style="display: none;">
                                         <td colspan="7">
                                             <div class="lecture-breakdown">
-                                                <h4>📚 Lecture-wise Breakdown:</h4>
+                                                <h4> Lecture-wise Breakdown:</h4>
                                                 <table class="lecture-table">
                                                     <thead>
                                                         <tr>
@@ -4395,7 +4416,7 @@ async function showStudentAttendance(studentId, studentName) {
                                                             <td>${lec.attended} min</td>
                                                             <td>${lec.total} min</td>
                                                             <td><strong>${lec.percentage}%</strong></td>
-                                                            <td><span class="status-badge ${lec.present ? 'status-present' : 'status-absent'}">${lec.present ? '✓ Present' : '✗ Absent'}</span></td>
+                                                            <td><span class="status-badge ${lec.present ? 'status-present' : 'status-absent'}">${lec.present ? ' Present' : ' Absent'}</span></td>
                                                         </tr>
                                                         `).join('')}
                                                     </tbody>
@@ -4559,7 +4580,7 @@ function deleteSelectedCells() {
 function showSubjectManager() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>📖 Subject Manager</h2>
+        <h2> Subject Manager</h2>
         <p>Manage common subjects for quick access</p>
         <div class="subject-list">
             <div class="subject-item">Mathematics <button onclick="applySubjectToSelected('Mathematics')">Apply</button></div>
@@ -4612,7 +4633,7 @@ function showTeacherAssign() {
 
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>👨‍🏫 Assign Teacher</h2>
+        <h2> Assign Teacher</h2>
         <p style="color: var(--text-secondary); margin-bottom: 20px;">
             Assigning to ${selectedCells.length} selected cell(s)
         </p>
@@ -4629,7 +4650,7 @@ function showTeacherAssign() {
             </div>
             ${teachers.length === 0 ? `
                 <div style="padding: 12px; background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px; margin-bottom: 16px;">
-                    <strong>⚠️ No teachers found!</strong><br>
+                    <strong> No teachers found!</strong><br>
                     Please add teachers in the Teachers section first.
                 </div>
             ` : ''}
@@ -4674,7 +4695,7 @@ function showTeacherAssign() {
 function showColorPicker() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>🎨 Color Code Subjects</h2>
+        <h2> Color Code Subjects</h2>
         <p>Select a color for selected cells:</p>
         <div class="color-palette">
             <div class="color-option" style="background: #ffebee" onclick="applyColorToSelected('#ffebee')"></div>
@@ -4747,7 +4768,7 @@ function exportToExcel() {
 function showImportDialog() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>📥 Import Timetable</h2>
+        <h2> Import Timetable</h2>
         <p>Upload a JSON file to import timetable</p>
         <input type="file" id="importFile" accept=".json">
         <div class="form-actions">
@@ -4787,7 +4808,7 @@ function importTimetableFile() {
 function showTemplateDialog() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>💾 Save as Template</h2>
+        <h2> Save as Template</h2>
         <form id="templateForm">
             <div class="form-group">
                 <label>Template Name:</label>
@@ -4824,7 +4845,7 @@ function showTemplateDialog() {
 function duplicateTimetable() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>📑 Duplicate Timetable</h2>
+        <h2> Duplicate Timetable</h2>
         <form id="duplicateForm">
             <div class="form-group">
                 <label>Target Semester:</label>
@@ -4911,12 +4932,12 @@ function showConflictCheck() {
     const modalBody = document.getElementById('modalBody');
     if (conflicts.length === 0) {
         modalBody.innerHTML = `
-            <h2>✓ No Conflicts Found</h2>
+            <h2> No Conflicts Found</h2>
             <p>Your timetable looks good!</p>
             <button class="btn btn-primary" onclick="closeModal()">Close</button>
         `;
     } else {
-        let html = `<h2>⚠️ Conflicts Found</h2>`;
+        let html = `<h2> Conflicts Found</h2>`;
         html += `<p>Found ${conflicts.length} conflict(s):</p>`;
         html += '<div class="conflict-list">';
         conflicts.forEach(conflict => {
@@ -4944,13 +4965,13 @@ function autoFillTimetable() {
 
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>🤖 Auto Fill Timetable</h2>
+        <h2> Auto Fill Timetable</h2>
         <p>Automatically fill empty periods with subjects</p>
         <form id="autoFillForm">
             <div class="form-group">
                 <label>Fill Mode:</label>
                 <select name="mode" class="form-select" required>
-                    <option value="repeat">Repeat Pattern (Mon → Other Days)</option>
+                    <option value="repeat">Repeat Pattern (Mon  Other Days)</option>
                     <option value="subjects">Fill with Subject List</option>
                     <option value="random">Random Distribution</option>
                 </select>
@@ -5165,11 +5186,11 @@ async function validateTimetable() {
 
     // Show results
     if (issues.length === 0) {
-        showNotification('✓ Timetable is valid! No conflicts found.', 'success');
+        showNotification(' Timetable is valid! No conflicts found.', 'success');
     } else {
         const modalBody = document.getElementById('modalBody');
         modalBody.innerHTML = `
-            <h2>⚠️ Validation Issues (${issues.length})</h2>
+            <h2> Validation Issues (${issues.length})</h2>
             <div style="max-height: 400px; overflow-y: auto;">
                 <ul style="color: var(--text-primary); line-height: 1.8;">
                     ${issues.map(issue => `<li>${issue}</li>`).join('')}
@@ -5214,12 +5235,12 @@ function showCellContextMenu(event, dayIdx, periodIdx) {
     menu.style.left = event.pageX + 'px';
     menu.style.top = event.pageY + 'px';
     menu.innerHTML = `
-        <div class="context-menu-item" onclick="editAdvancedCell(${dayIdx}, ${periodIdx}); closeContextMenu()">✏️ Edit</div>
-        <div class="context-menu-item" onclick="toggleBreakPeriod(event, ${dayIdx}, ${periodIdx}); closeContextMenu()">${isBreak ? '📚 Mark as Regular' : '🔔 Mark as Break'}</div>
+        <div class="context-menu-item" onclick="editAdvancedCell(${dayIdx}, ${periodIdx}); closeContextMenu()"> Edit</div>
+        <div class="context-menu-item" onclick="toggleBreakPeriod(event, ${dayIdx}, ${periodIdx}); closeContextMenu()">${isBreak ? ' Mark as Regular' : ' Mark as Break'}</div>
         <div class="context-menu-separator"></div>
-        <div class="context-menu-item" onclick="copySingleCell(${dayIdx}, ${periodIdx}); closeContextMenu()">📄 Copy</div>
-        <div class="context-menu-item" onclick="pasteSingleCell(${dayIdx}, ${periodIdx}); closeContextMenu()">📋 Paste</div>
-        <div class="context-menu-item" onclick="clearSingleCell(${dayIdx}, ${periodIdx}); closeContextMenu()">🗑️ Clear</div>
+        <div class="context-menu-item" onclick="copySingleCell(${dayIdx}, ${periodIdx}); closeContextMenu()"> Copy</div>
+        <div class="context-menu-item" onclick="pasteSingleCell(${dayIdx}, ${periodIdx}); closeContextMenu()"> Paste</div>
+        <div class="context-menu-item" onclick="clearSingleCell(${dayIdx}, ${periodIdx}); closeContextMenu()"> Clear</div>
     `;
 
     document.body.appendChild(menu);
@@ -5269,7 +5290,7 @@ function showPeriodSettings() {
     }
 
     const modalBody = document.getElementById('modalBody');
-    let html = '<h2>⏰ Period Settings</h2>';
+    let html = '<h2> Period Settings</h2>';
     html += '<p style="color: var(--text-secondary); margin-bottom: 20px;">Configure period timings for your college schedule</p>';
 
     html += '<div class="period-settings-container">';
@@ -5283,16 +5304,16 @@ function showPeriodSettings() {
                 <div class="period-header">
                     <span class="period-label">Period ${period.number}</span>
                     <div class="period-actions">
-                        <button class="icon-btn" onclick="editPeriod(${index})" title="Edit">✏️</button>
-                        <button class="icon-btn" onclick="deletePeriod(${index})" title="Delete">🗑️</button>
-                        <button class="icon-btn" onclick="movePeriodUp(${index})" ${index === 0 ? 'disabled' : ''} title="Move Up">⬆️</button>
-                        <button class="icon-btn" onclick="movePeriodDown(${index})" ${index === currentTimetable.periods.length - 1 ? 'disabled' : ''} title="Move Down">⬇️</button>
+                        <button class="icon-btn" onclick="editPeriod(${index})" title="Edit"></button>
+                        <button class="icon-btn" onclick="deletePeriod(${index})" title="Delete"></button>
+                        <button class="icon-btn" onclick="movePeriodUp(${index})" ${index === 0 ? 'disabled' : ''} title="Move Up"></button>
+                        <button class="icon-btn" onclick="movePeriodDown(${index})" ${index === currentTimetable.periods.length - 1 ? 'disabled' : ''} title="Move Down"></button>
                     </div>
                 </div>
                 <div class="period-details">
-                    <span class="time-badge">⏰ ${period.startTime} - ${period.endTime}</span>
-                    <span class="duration-badge">⏱️ ${calculateDuration(period.startTime, period.endTime)} min</span>
-                    ${isBreak ? '<span class="break-badge">☕ Break</span>' : ''}
+                    <span class="time-badge"> ${period.startTime} - ${period.endTime}</span>
+                    <span class="duration-badge"> ${calculateDuration(period.startTime, period.endTime)} min</span>
+                    ${isBreak ? '<span class="break-badge"> Break</span>' : ''}
                 </div>
             </div>
         `;
@@ -5301,9 +5322,9 @@ function showPeriodSettings() {
 
     // Action buttons
     html += '<div class="period-actions-container" style="margin-top: 20px; display: flex; gap: 10px;">';
-    html += '<button class="btn btn-primary" onclick="addNewPeriod()" style="flex: 1;">➕ Add New Period</button>';
-    html += '<button class="btn btn-secondary" onclick="saveCurrentPeriodsAsDefault()" style="flex: 1;">💾 Save as Default</button>';
-    html += '<button class="btn btn-outline" onclick="resetToDefaultPeriods()" style="flex: 1;">🔄 Reset to Default</button>';
+    html += '<button class="btn btn-primary" onclick="addNewPeriod()" style="flex: 1;"> Add New Period</button>';
+    html += '<button class="btn btn-secondary" onclick="saveCurrentPeriodsAsDefault()" style="flex: 1;"> Save as Default</button>';
+    html += '<button class="btn btn-outline" onclick="resetToDefaultPeriods()" style="flex: 1;"> Reset to Default</button>';
     html += '</div>';
 
     html += '</div>';
@@ -5326,7 +5347,7 @@ function editPeriod(index) {
 
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>✏️ Edit Period ${period.number}</h2>
+        <h2> Edit Period ${period.number}</h2>
         <form id="editPeriodForm">
             <div class="form-group">
                 <label>Period Number</label>
@@ -5347,8 +5368,8 @@ function editPeriod(index) {
                 </label>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">💾 Save Changes</button>
-                <button type="button" class="btn btn-secondary" onclick="showPeriodSettings()">❌ Cancel</button>
+                <button type="submit" class="btn btn-primary"> Save Changes</button>
+                <button type="button" class="btn btn-secondary" onclick="showPeriodSettings()"> Cancel</button>
             </div>
         </form>
     `;
@@ -5405,7 +5426,7 @@ function addNewPeriod() {
     const suggestedEnd = `${String(h + 1).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 
     modalBody.innerHTML = `
-        <h2>➕ Add New Period</h2>
+        <h2> Add New Period</h2>
         <form id="addPeriodForm">
             <div class="form-group">
                 <label>Period Number</label>
@@ -5426,8 +5447,8 @@ function addNewPeriod() {
                 </label>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">➕ Add Period</button>
-                <button type="button" class="btn btn-secondary" onclick="showPeriodSettings()">❌ Cancel</button>
+                <button type="submit" class="btn btn-primary"> Add Period</button>
+                <button type="button" class="btn btn-secondary" onclick="showPeriodSettings()"> Cancel</button>
             </div>
         </form>
     `;
@@ -5575,7 +5596,7 @@ function editPeriodTime(index, currentStart, currentEnd) {
     const isBreak = currentTimetable.timetable.monday[index]?.isBreak || false;
 
     modalBody.innerHTML = `
-        <h2>⏰ Edit Period ${index + 1} Timing</h2>
+        <h2> Edit Period ${index + 1} Timing</h2>
         <form id="editTimeForm">
             <div class="form-group">
                 <label>Start Time</label>
@@ -5592,7 +5613,7 @@ function editPeriodTime(index, currentStart, currentEnd) {
                 </label>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">💾 Save</button>
+                <button type="submit" class="btn btn-primary"> Save</button>
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
             </div>
         </form>
@@ -5640,7 +5661,7 @@ function addNewPeriodInline() {
 
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>➕ Add New Period</h2>
+        <h2> Add New Period</h2>
         <form id="addPeriodForm">
             <div class="form-group">
                 <label>Start Time</label>
@@ -5657,7 +5678,7 @@ function addNewPeriodInline() {
                 </label>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">➕ Add</button>
+                <button type="submit" class="btn btn-primary"> Add</button>
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
             </div>
         </form>
@@ -5712,14 +5733,14 @@ let currentCalendarDate = new Date();
 let holidays = [];
 let academicEvents = [];
 
-// ── Attendance filter state ───────────────────────────────────────────────────
+//  Attendance filter state 
 let calFilterMode     = 'day';      // 'day' | 'subject'
 let calFilterSemester = '';
 let calFilterBranch   = '';
 let calFilterSubject  = '';
 let calSubjectList    = [];
 let calActiveDates    = new Set();  // ISO midnight strings (subject mode)
-let calDayData        = {};         // dateKey → { present, absent, total } (day mode)
+let calDayData        = {};         // dateKey  { present, absent, total } (day mode)
 let calCurrentPeriodIdx = 0;        // chevron index inside subject modal
 
 async function loadCalendar() {
@@ -5730,7 +5751,7 @@ async function loadCalendar() {
 }
 
 // Populate semester/branch dropdowns from existing dynamicData
-// ── Shared fetch helper with timeout ─────────────────────────────────────────
+//  Shared fetch helper with timeout 
 async function calApiFetch(url, timeoutMs = 10000) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -5948,7 +5969,7 @@ function renderCalendar() {
             const midnight = new Date(date); midnight.setHours(0,0,0,0);
             if (calActiveDates.has(midnight.toISOString())) {
                 isActive = true;
-                badge = `<div class="cal-badge cal-badge-subject">●</div>`;
+                badge = `<div class="cal-badge cal-badge-subject"></div>`;
             }
         }
 
@@ -5958,7 +5979,7 @@ function renderCalendar() {
             <div class="calendar-date">${day}</div>
             ${holiday ? `
                 <div class="calendar-event" style="background:${holiday.color}">${holiday.name}</div>
-                <button class="cal-edit-btn" onclick="event.stopPropagation();editHoliday(${JSON.stringify(holiday).replace(/"/g,'&quot;')})" title="Edit holiday">✏️</button>
+                <button class="cal-edit-btn" onclick="event.stopPropagation();editHoliday(${JSON.stringify(holiday).replace(/"/g,'&quot;')})" title="Edit holiday"></button>
             ` : badge}
         </div>`;
     }
@@ -5987,8 +6008,8 @@ function renderHolidaysList() {
                     ${holiday.description ? `<div class="holiday-desc">${holiday.description}</div>` : ''}
                 </div>
                 <div class="holiday-actions">
-                    <button class="icon-btn" onclick='editHoliday(${JSON.stringify(holiday).replace(/'/g, "\\'")})'title="Edit">✏️</button>
-                    <button class="icon-btn" onclick="deleteHoliday('${holiday._id}')" title="Delete">🗑️</button>
+                    <button class="icon-btn" onclick='editHoliday(${JSON.stringify(holiday).replace(/'/g, "\\'")})'title="Edit"></button>
+                    <button class="icon-btn" onclick="deleteHoliday('${holiday._id}')" title="Delete"></button>
                 </div>
             </div>
         `;
@@ -6016,7 +6037,7 @@ async function selectCalendarDate(dateStr) {
     const date    = new Date(dateStr);
     const holiday = holidays.find(h => new Date(h.date).toDateString() === dateStr);
 
-    // If semester+branch filters are active → always show attendance modal
+    // If semester+branch filters are active  always show attendance modal
     if (calFilterSemester && calFilterBranch) {
         if (calFilterMode === 'subject' && calFilterSubject) {
             await showSubjectAttendanceModal(date);
@@ -6026,25 +6047,25 @@ async function selectCalendarDate(dateStr) {
         return;
     }
 
-    // No filters — clicking opens add-holiday (holiday edit is via pencil icon)
+    // No filters  clicking opens add-holiday (holiday edit is via pencil icon)
     showAddHolidayModal(date);
 }
 
 // Keep old selectDate as alias for any remaining references
 function selectDate(dateStr) { selectCalendarDate(dateStr); }
 
-// ── Day-mode modal ────────────────────────────────────────────────────────────
+//  Day-mode modal 
 async function showDayAttendanceModal(date) {
     const dateStr   = date.toISOString().split('T')[0];
     const modalBody = document.getElementById('modalBody');
-    modalBody.innerHTML = `<h2>📅 ${date.toDateString()}</h2><p style="color:var(--text-secondary)">Loading…</p>`;
+    modalBody.innerHTML = `<h2> ${date.toDateString()}</h2><p style="color:var(--text-secondary)">Loading</p>`;
     openModal();
     try {
         const data = await calApiFetch(
             `${SERVER_URL}/api/attendance/date/${dateStr}?semester=${encodeURIComponent(calFilterSemester)}&branch=${encodeURIComponent(calFilterBranch)}`
         );
         if (!data.success || !data.students?.length) {
-            modalBody.innerHTML = `<h2>📅 ${date.toDateString()}</h2>
+            modalBody.innerHTML = `<h2> ${date.toDateString()}</h2>
                 <p style="color:var(--text-secondary);text-align:center;padding:20px">
                     No attendance records for this date.
                 </p>`;
@@ -6052,10 +6073,10 @@ async function showDayAttendanceModal(date) {
         }
         renderDayModal(date, data.students);
     } catch (err) {
-        modalBody.innerHTML = `<h2>📅 ${date.toDateString()}</h2>
-            <p style="color:#ef4444;text-align:center;padding:20px">⚠️ ${err.message}</p>
+        modalBody.innerHTML = `<h2> ${date.toDateString()}</h2>
+            <p style="color:#ef4444;text-align:center;padding:20px"> ${err.message}</p>
             <div style="text-align:center">
-                <button class="btn btn-secondary" onclick="showDayAttendanceModal(new Date('${date.toISOString()}'))">🔄 Retry</button>
+                <button class="btn btn-secondary" onclick="showDayAttendanceModal(new Date('${date.toISOString()}'))"> Retry</button>
             </div>`;
     }
 }
@@ -6073,8 +6094,8 @@ function renderDayModal(date, students) {
     modalBody.innerHTML = `
         <div class="cal-modal-header">
             <div>
-                <div class="cal-modal-title">📅 ${date.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
-                <div class="cal-modal-sub">Sem ${calFilterSemester} · ${calFilterBranch}</div>
+                <div class="cal-modal-title"> ${date.toLocaleDateString('en-IN',{weekday:'long',day:'numeric',month:'long',year:'numeric'})}</div>
+                <div class="cal-modal-sub">Sem ${calFilterSemester}  ${calFilterBranch}</div>
             </div>
         </div>
 
@@ -6123,7 +6144,7 @@ function renderDayModal(date, students) {
                         <div class="cal-sc-id">${s.enrollmentNo || ''}</div>
                         ${lc > 0 ? `<div class="cal-sc-lectures">${sp}/${lc} lectures attended</div>` : ''}
                     </div>
-                    <div class="cal-sc-badge ${isP ? 'present' : 'absent'}">${isP ? '✓' : '✗'}</div>
+                    <div class="cal-sc-badge ${isP ? 'present' : 'absent'}">${isP ? '' : ''}</div>
                 </div>`;
             }).join('')}
         </div>`;
@@ -6142,7 +6163,7 @@ function showStudentLectureDetail(idx, mode) {
     const enrollmentNo = s.enrollmentNo || s.studentId || '';
 
     const renderDetail = () => {
-        // Build period bubbles — P1 to P8 (or however many periods exist in the timetable)
+        // Build period bubbles  P1 to P8 (or however many periods exist in the timetable)
         // Determine max period number from lectures or default to 8
         const maxPeriod = Math.max(8, ...lectures.map(l => parseInt((l.period || 'P0').replace('P','')) || 0));
         const periodSlots = Array.from({ length: maxPeriod }, (_, i) => {
@@ -6157,7 +6178,7 @@ function showStudentLectureDetail(idx, mode) {
                 <div class="cal-subject-bubbles">
                     ${periodSlots.map(({ pid, lec }) => {
                         if (!lec) {
-                            // Empty ghost bubble — period not in timetable or no data
+                            // Empty ghost bubble  period not in timetable or no data
                             return `
                             <div class="cal-bubble-wrap" title="${pid}: No class">
                                 <svg viewBox="0 0 36 36" class="cal-bubble-svg">
@@ -6171,9 +6192,9 @@ function showStudentLectureDetail(idx, mode) {
                         const isPresent = lec.status === 'present';
                         const c = isPresent ? '#10b981' : '#ef4444';
                         const dash = isPresent ? 100 : 0; // full ring if present, empty if absent
-                        const shortName = (lec.subject || '').length > 5 ? (lec.subject || '').substring(0, 4) + '…' : (lec.subject || pid);
+                        const shortName = (lec.subject || '').length > 5 ? (lec.subject || '').substring(0, 4) + '' : (lec.subject || pid);
                         return `
-                        <div class="cal-bubble-wrap" title="${pid}: ${lec.subject || '—'} (${isPresent ? 'Present' : 'Absent'})">
+                        <div class="cal-bubble-wrap" title="${pid}: ${lec.subject || ''} (${isPresent ? 'Present' : 'Absent'})">
                             <svg viewBox="0 0 36 36" class="cal-bubble-svg">
                                 <circle cx="18" cy="18" r="15.9" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2.5"/>
                                 <circle cx="18" cy="18" r="15.9" fill="none" stroke="${c}" stroke-width="2.5"
@@ -6190,10 +6211,10 @@ function showStudentLectureDetail(idx, mode) {
 
         modalBody.innerHTML = `
             <div class="cal-modal-header">
-                <button class="btn btn-sm btn-secondary" onclick="${backFn}" style="flex-shrink:0">← Back</button>
+                <button class="btn btn-sm btn-secondary" onclick="${backFn}" style="flex-shrink:0"> Back</button>
                 <div>
                     <div class="cal-modal-title">${s.name || s.studentName || 'Unknown'}</div>
-                    <div class="cal-modal-sub">${enrollmentNo} · ${window._calModalDate?.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'}) || ''}</div>
+                    <div class="cal-modal-sub">${enrollmentNo}  ${window._calModalDate?.toLocaleDateString('en-IN',{weekday:'short',day:'numeric',month:'short',year:'numeric'}) || ''}</div>
                 </div>
             </div>
 
@@ -6223,45 +6244,45 @@ function showStudentLectureDetail(idx, mode) {
             </div>
 
             ${lectures.length === 0
-                ? `<div class="cal-empty"><span style="font-size:32px">📭</span><p>No lecture data for this day</p></div>`
+                ? `<div class="cal-empty"><span style="font-size:32px"></span><p>No lecture data for this day</p></div>`
                 : `<div class="cal-lecture-timeline">
                     ${lectures.map(l => `
                         <div class="cal-lt-row ${l.status}">
                             <div class="cal-lt-dot ${l.status}"></div>
-                            <div class="cal-lt-period">${l.period || '—'}</div>
+                            <div class="cal-lt-period">${l.period || ''}</div>
                             <div class="cal-lt-body">
                                 <div class="cal-lt-subject">${l.subject || 'Unknown Subject'}</div>
                                 <div class="cal-lt-meta">
-                                    ${l.teacher ? `<span>👨‍🏫 ${l.teacher}</span>` : ''}
-                                    ${l.room    ? `<span>📍 ${l.room}</span>` : ''}
+                                    ${l.teacher ? `<span> ${l.teacher}</span>` : ''}
+                                    ${l.room    ? `<span> ${l.room}</span>` : ''}
                                     ${l.verificationType ? `<span class="cal-verify-badge">${l.verificationType}</span>` : ''}
                                 </div>
                             </div>
-                            <div class="cal-lt-status ${l.status}">${l.status === 'present' ? '✓' : '✗'}</div>
+                            <div class="cal-lt-status ${l.status}">${l.status === 'present' ? '' : ''}</div>
                         </div>`).join('')}
                    </div>`}
 
             ${bubbleHtml}`;
     };
 
-    // Render immediately — bubbles are built from existing lectures data, no extra fetch needed
+    // Render immediately  bubbles are built from existing lectures data, no extra fetch needed
     renderDetail();
 }
 
-// ── Subject-mode modal with chevron period navigation ─────────────────────────
+//  Subject-mode modal with chevron period navigation 
 let calSubjectModalData = null;   // { students, allPeriods }
 
 async function showSubjectAttendanceModal(date) {
     const dateStr   = date.toISOString().split('T')[0];
     const modalBody = document.getElementById('modalBody');
-    modalBody.innerHTML = `<h2>📚 ${calFilterSubject} — ${date.toDateString()}</h2><p style="color:var(--text-secondary)">Loading…</p>`;
+    modalBody.innerHTML = `<h2> ${calFilterSubject}  ${date.toDateString()}</h2><p style="color:var(--text-secondary)">Loading</p>`;
     openModal();
     try {
         const data = await calApiFetch(
             `${SERVER_URL}/api/attendance/date/${dateStr}/subject/${encodeURIComponent(calFilterSubject)}?semester=${encodeURIComponent(calFilterSemester)}&branch=${encodeURIComponent(calFilterBranch)}`
         );
         if (!data.success || !data.students?.length) {
-            modalBody.innerHTML = `<h2>📚 ${calFilterSubject} — ${date.toDateString()}</h2>
+            modalBody.innerHTML = `<h2> ${calFilterSubject}  ${date.toDateString()}</h2>
                 <p style="color:var(--text-secondary);text-align:center;padding:20px">
                     No attendance records for this subject on this date.
                 </p>`;
@@ -6281,10 +6302,10 @@ async function showSubjectAttendanceModal(date) {
         }));
         renderSubjectModal(date);
     } catch (err) {
-        modalBody.innerHTML = `<h2>📚 ${calFilterSubject}</h2>
-            <p style="color:#ef4444;text-align:center;padding:20px">⚠️ ${err.message}</p>
+        modalBody.innerHTML = `<h2> ${calFilterSubject}</h2>
+            <p style="color:#ef4444;text-align:center;padding:20px"> ${err.message}</p>
             <div style="text-align:center">
-                <button class="btn btn-secondary" onclick="showSubjectAttendanceModal(new Date('${date.toISOString()}'))">🔄 Retry</button>
+                <button class="btn btn-secondary" onclick="showSubjectAttendanceModal(new Date('${date.toISOString()}'))"> Retry</button>
             </div>`;
     }
 }
@@ -6309,8 +6330,8 @@ function renderSubjectModal(date) {
     modalBody.innerHTML = `
         <div class="cal-modal-header">
             <div>
-                <div class="cal-modal-title">📚 ${calFilterSubject}</div>
-                <div class="cal-modal-sub">${dateLabel} · Sem ${calFilterSemester} · ${calFilterBranch}</div>
+                <div class="cal-modal-title"> ${calFilterSubject}</div>
+                <div class="cal-modal-sub">${dateLabel}  Sem ${calFilterSemester}  ${calFilterBranch}</div>
             </div>
         </div>
 
@@ -6344,12 +6365,12 @@ function renderSubjectModal(date) {
         <!-- Period chevron navigator -->
         ${allPeriods.length > 1 ? `
         <div class="cal-period-nav">
-            <button class="btn btn-sm btn-secondary" onclick="calChevron(-1)" ${prevDisabled}>‹</button>
+            <button class="btn btn-sm btn-secondary" onclick="calChevron(-1)" ${prevDisabled}></button>
             <div style="text-align:center">
                 <div class="cal-period-label">${period}</div>
                 <div style="font-size:11px;color:var(--text-secondary)">${calCurrentPeriodIdx + 1} of ${allPeriods.length} periods</div>
             </div>
-            <button class="btn btn-sm btn-secondary" onclick="calChevron(1)" ${nextDisabled}>›</button>
+            <button class="btn btn-sm btn-secondary" onclick="calChevron(1)" ${nextDisabled}></button>
         </div>` : period ? `<div class="cal-period-label-solo">${period}</div>` : ''}
 
         <!-- Student cards -->
@@ -6366,7 +6387,7 @@ function renderSubjectModal(date) {
                         <div class="cal-sc-id">${s.enrollmentNo || ''}</div>
                         ${pr?.verificationType ? `<div class="cal-sc-lectures">${pr.verificationType}</div>` : ''}
                     </div>
-                    <div class="cal-sc-badge ${isP ? 'present' : 'absent'}">${isP ? '✓' : '✗'}</div>
+                    <div class="cal-sc-badge ${isP ? 'present' : 'absent'}">${isP ? '' : ''}</div>
                 </div>`;
             }).join('')}
         </div>`;
@@ -6382,10 +6403,10 @@ function calChevron(dir) {
 async function backfillTimetableHistory() {
     if (!confirm('This will backfill TimetableHistory from existing PeriodAttendance records.\nRun once after deploying the update. Continue?')) return;
     const btn = event?.target;
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Running…'; }
+    if (btn) { btn.disabled = true; btn.textContent = ' Running'; }
     try {
         const data = await calApiFetch(`${SERVER_URL}/api/timetable-history/backfill`, 60000);
-        // calApiFetch only does GET — use fetch directly for POST
+        // calApiFetch only does GET  use fetch directly for POST
         throw new Error('use_fetch'); // fallthrough to catch
     } catch (_) {
         // POST needs direct fetch
@@ -6407,14 +6428,14 @@ async function backfillTimetableHistory() {
         const msg = err.name === 'AbortError' ? 'Backfill timed out (60s)' : err.message;
         showNotification('Backfill error: ' + msg, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '🔄 Backfill History'; }
+        if (btn) { btn.disabled = false; btn.textContent = ' Backfill History'; }
     }
 }
 
 async function runDbMigration() {
-    if (!confirm('Run DB migration?\n\nThis will:\n• Add semester/branch to PeriodAttendance records\n• Deduplicate AttendanceRecord\n• Normalise studentId = enrollmentNo\n\nSafe to run multiple times.')) return;
+    if (!confirm('Run DB migration?\n\nThis will:\n Add semester/branch to PeriodAttendance records\n Deduplicate AttendanceRecord\n Normalise studentId = enrollmentNo\n\nSafe to run multiple times.')) return;
     const btn = event?.target;
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Migrating…'; }
+    if (btn) { btn.disabled = true; btn.textContent = ' Migrating'; }
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 120000);
@@ -6424,7 +6445,7 @@ async function runDbMigration() {
         if (data.success) {
             const r = data.report;
             showNotification(
-                `Migration done — PA updated: ${r.periodAttendanceUpdated}, AR dupes removed: ${r.arDuplicatesRemoved}, AR normalised: ${r.arNormalised}`,
+                `Migration done  PA updated: ${r.periodAttendanceUpdated}, AR dupes removed: ${r.arDuplicatesRemoved}, AR normalised: ${r.arNormalised}`,
                 'success'
             );
         } else {
@@ -6434,14 +6455,14 @@ async function runDbMigration() {
         const msg = err.name === 'AbortError' ? 'Migration timed out (120s)' : err.message;
         showNotification('Migration error: ' + msg, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '🔧 DB Migrate'; }
+        if (btn) { btn.disabled = false; btn.textContent = ' DB Migrate'; }
     }
 }
 
 async function runAttendanceResync() {
     if (!confirm('Recalculate all AttendanceRecord statuses from PeriodAttendance?\nThis fixes historical present/absent status. Safe to run multiple times.')) return;
     const btn = event?.target;
-    if (btn) { btn.disabled = true; btn.textContent = '⏳ Resyncing…'; }
+    if (btn) { btn.disabled = true; btn.textContent = ' Resyncing'; }
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 120000);
@@ -6457,7 +6478,7 @@ async function runAttendanceResync() {
         const msg = err.name === 'AbortError' ? 'Resync timed out' : err.message;
         showNotification('Resync error: ' + msg, 'error');
     } finally {
-        if (btn) { btn.disabled = false; btn.textContent = '🔁 Resync Attendance'; }
+        if (btn) { btn.disabled = false; btn.textContent = ' Resync Attendance'; }
     }
 }
 
@@ -6470,7 +6491,7 @@ function showAddHolidayModal(date = new Date()) {
     const dateStr = date.toISOString().split('T')[0];
 
     modalBody.innerHTML = `
-        <h2>➕ Add Holiday/Event</h2>
+        <h2> Add Holiday/Event</h2>
         <form id="holidayForm">
             <div class="form-group">
                 <label>Date *</label>
@@ -6483,9 +6504,9 @@ function showAddHolidayModal(date = new Date()) {
             <div class="form-group">
                 <label>Type *</label>
                 <select id="holidayType" class="form-select" required>
-                    <option value="holiday">🏖️ Holiday</option>
-                    <option value="exam">📝 Exam</option>
-                    <option value="event">🎉 Event</option>
+                    <option value="holiday"> Holiday</option>
+                    <option value="exam"> Exam</option>
+                    <option value="event"> Event</option>
                 </select>
             </div>
             <div class="form-group">
@@ -6500,8 +6521,8 @@ function showAddHolidayModal(date = new Date()) {
                 <textarea id="holidayDescription" class="form-textarea" rows="3" placeholder="Optional description"></textarea>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">➕ Add</button>
-                <button type="button" class="btn btn-secondary" onclick="closeModal()">❌ Cancel</button>
+                <button type="submit" class="btn btn-primary"> Add</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal()"> Cancel</button>
             </div>
         </form>
     `;
@@ -6551,7 +6572,7 @@ function editHoliday(holiday) {
     const dateStr = new Date(holiday.date).toISOString().split('T')[0];
 
     modalBody.innerHTML = `
-        <h2>✏️ Edit Holiday/Event</h2>
+        <h2> Edit Holiday/Event</h2>
         <form id="editHolidayForm">
             <div class="form-group">
                 <label>Date *</label>
@@ -6564,9 +6585,9 @@ function editHoliday(holiday) {
             <div class="form-group">
                 <label>Type *</label>
                 <select id="editHolidayType" class="form-select" required>
-                    <option value="holiday" ${holiday.type === 'holiday' ? 'selected' : ''}>🏖️ Holiday</option>
-                    <option value="exam" ${holiday.type === 'exam' ? 'selected' : ''}>📝 Exam</option>
-                    <option value="event" ${holiday.type === 'event' ? 'selected' : ''}>🎉 Event</option>
+                    <option value="holiday" ${holiday.type === 'holiday' ? 'selected' : ''}> Holiday</option>
+                    <option value="exam" ${holiday.type === 'exam' ? 'selected' : ''}> Exam</option>
+                    <option value="event" ${holiday.type === 'event' ? 'selected' : ''}> Event</option>
                 </select>
             </div>
             <div class="form-group">
@@ -6578,8 +6599,8 @@ function editHoliday(holiday) {
                 <textarea id="editHolidayDescription" class="form-textarea" rows="3">${holiday.description || ''}</textarea>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">💾 Save</button>
-                <button type="button" class="btn btn-secondary" onclick="closeModal()">❌ Cancel</button>
+                <button type="submit" class="btn btn-primary"> Save</button>
+                <button type="button" class="btn btn-secondary" onclick="closeModal()"> Cancel</button>
             </div>
         </form>
     `;
@@ -6655,7 +6676,7 @@ function showHolidayDetails(holiday) {
     modalBody.innerHTML = `
         <div class="holiday-details">
             <div class="holiday-icon" style="background: ${holiday.color}">
-                ${holiday.type === 'holiday' ? '🏖️' : holiday.type === 'exam' ? '📝' : '🎉'}
+                ${holiday.type === 'holiday' ? '' : holiday.type === 'exam' ? '' : ''}
             </div>
             <h2>${holiday.name}</h2>
             <p class="holiday-date-full">${dateStr}</p>
@@ -6672,7 +6693,7 @@ function showHolidayDetails(holiday) {
 function showAcademicYearSettings() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>📅 Academic Year Settings</h2>
+        <h2> Academic Year Settings</h2>
         <p style="color: var(--text-secondary); margin-bottom: 16px;">
             Indian academic year typically runs from July to June
         </p>
@@ -6694,7 +6715,7 @@ function showAcademicYearSettings() {
                     <input type="checkbox" checked> Include Indian Holidays
                 </label>
             </div>
-            <button type="submit" class="btn btn-primary">💾 Save</button>
+            <button type="submit" class="btn btn-primary"> Save</button>
         </form>
     `;
     openModal();
@@ -6704,7 +6725,7 @@ function showAcademicYearSettings() {
 function showSemesterDates() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>📆 Semester Dates</h2>
+        <h2> Semester Dates</h2>
         <div class="semester-dates-list">
             <div class="semester-date-item">
                 <h4>Semester 1 (Odd)</h4>
@@ -6717,7 +6738,7 @@ function showSemesterDates() {
                 <input type="date" class="form-input" placeholder="End Date">
             </div>
         </div>
-        <button class="btn btn-primary">💾 Save Dates</button>
+        <button class="btn btn-primary"> Save Dates</button>
     `;
     openModal();
 }
@@ -6736,7 +6757,7 @@ function showEventManager() {
 function bulkImportHolidays() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>📥 Bulk Import Holidays</h2>
+        <h2> Bulk Import Holidays</h2>
         <p>Upload a CSV file with columns: date, name, type, color, description</p>
         <input type="file" accept=".csv" class="form-input" id="holidayCSV">
         <button class="btn btn-primary" onclick="processHolidayCSV()">Import</button>
@@ -6765,7 +6786,7 @@ async function loadPeriods() {
     try {
         let periodsLoaded = false;
 
-        // Always fetch from server first — this is the source of truth
+        // Always fetch from server first  this is the source of truth
         try {
             const res = await fetch(`${SERVER_URL}/api/periods`);
             if (res.ok) {
@@ -6775,7 +6796,7 @@ async function loadPeriods() {
                     periodsLoaded = true;
                     // Keep localStorage in sync with server
                     localStorage.setItem('defaultPeriods', JSON.stringify(currentPeriods));
-                    console.log(`✅ Loaded ${currentPeriods.length} periods from server`);
+                    console.log(` Loaded ${currentPeriods.length} periods from server`);
                 }
             }
         } catch (fetchError) {
@@ -6789,7 +6810,7 @@ async function loadPeriods() {
                 try {
                     currentPeriods = JSON.parse(savedPeriods);
                     periodsLoaded = true;
-                    console.log('⚠️ Using cached periods from localStorage');
+                    console.log(' Using cached periods from localStorage');
                 } catch (e) {
                     console.warn('Invalid saved periods in localStorage');
                 }
@@ -6895,7 +6916,7 @@ function renderPeriods() {
                 
                 <div class="period-actions-cell">
                     <button class="period-btn period-btn-delete" onclick="deletePeriod(${index})">
-                        🗑️ Delete
+                         Delete
                     </button>
                 </div>
             </div>
@@ -6984,8 +7005,8 @@ function highlightOverlappingPeriods() {
             warn.className = 'period-overlap-warn';
             warn.style.cssText = 'color:#ef4444;font-size:11px;margin-top:4px;font-weight:600;';
             warn.textContent = calculateDuration(currentPeriods[idx].startTime, currentPeriods[idx].endTime) <= 0
-                ? '⚠️ End time must be after start time'
-                : '⚠️ Overlaps with another period';
+                ? ' End time must be after start time'
+                : ' Overlaps with another period';
             el.appendChild(warn);
         }
     });
@@ -7065,7 +7086,7 @@ function validatePeriods(periods) {
 
         // End must be after start
         if (duration <= 0) {
-            errors.push(`P${p.number}: End time must be after start time (${p.startTime} → ${p.endTime})`);
+            errors.push(`P${p.number}: End time must be after start time (${p.startTime}  ${p.endTime})`);
             continue;
         }
 
@@ -7081,7 +7102,7 @@ function validatePeriods(periods) {
             const [sj, ej] = toMinutes(q.startTime, q.endTime);
             // Overlap: one starts before the other ends
             if (si < ej && sj < ei) {
-                errors.push(`P${p.number} (${p.startTime}–${p.endTime}) overlaps with P${q.number} (${q.startTime}–${q.endTime})`);
+                errors.push(`P${p.number} (${p.startTime}${p.endTime}) overlaps with P${q.number} (${q.startTime}${q.endTime})`);
             }
         }
     }
@@ -7101,10 +7122,10 @@ async function savePeriodsConfig() {
         return;
     }
 
-    // Validate periods — end > start + no overlaps
+    // Validate periods  end > start + no overlaps
     const errors = validatePeriods(currentPeriods);
     if (errors.length > 0) {
-        showNotification('❌ Fix these errors before saving:\n• ' + errors.join('\n• '), 'error');
+        showNotification(' Fix these errors before saving:\n ' + errors.join('\n '), 'error');
         highlightOverlappingPeriods();
         return;
     }
@@ -7158,7 +7179,7 @@ async function savePeriodsConfig() {
                 renderAdvancedTimetableEditor(currentTimetable);
             }
 
-            showNotification(`✅ Successfully updated ${data.updatedCount} timetables!`, 'success');
+            showNotification(` Successfully updated ${data.updatedCount} timetables!`, 'success');
             loadPeriods(); // Reload from server to confirm
         } else {
             showNotification('Failed to update periods: ' + (data.error || data.message || 'Unknown error'), 'error');
@@ -7185,7 +7206,7 @@ async function resetPeriodsToDefault() {
 // Load Attendance Date Range
 async function loadAttendanceDateRange() {
     try {
-        console.log('📅 Loading attendance date range...');
+        console.log(' Loading attendance date range...');
 
         // Get all attendance history records to find date range
         const response = await fetch(`${SERVER_URL}/api/attendance/date-range`);
@@ -7212,14 +7233,14 @@ async function loadAttendanceDateRange() {
 
                 document.getElementById('totalRecordsCount').textContent = totalRecords;
 
-                console.log(`✅ Data available from ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}`);
+                console.log(` Data available from ${startDate.toLocaleDateString()} to ${endDate.toLocaleDateString()}`);
                 console.log(`   Total records: ${totalRecords}`);
 
                 // Always set date filters to the full available range
                 document.getElementById('attendanceStartDate').value = startDate.toISOString().split('T')[0];
                 document.getElementById('attendanceEndDate').value = endDate.toISOString().split('T')[0];
 
-                console.log(`📅 Date filters set to: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]}`);
+                console.log(` Date filters set to: ${startDate.toISOString().split('T')[0]} to ${endDate.toISOString().split('T')[0]}`);
             } else {
                 // No data available yet
                 document.getElementById('dataStartDate').textContent = 'No data yet';
@@ -7228,12 +7249,12 @@ async function loadAttendanceDateRange() {
             }
         } else {
             // Endpoint might not exist, try alternative method
-            console.log('⚠️ Date range endpoint not available, using alternative method');
+            console.log(' Date range endpoint not available, using alternative method');
             await loadAttendanceDateRangeAlternative();
         }
 
     } catch (error) {
-        console.error('❌ Error loading date range:', error);
+        console.error(' Error loading date range:', error);
         // Try alternative method
         await loadAttendanceDateRangeAlternative();
     }
@@ -7291,7 +7312,7 @@ async function loadAttendanceDateRangeAlternative() {
         }
 
     } catch (error) {
-        console.error('❌ Error in alternative date range method:', error);
+        console.error(' Error in alternative date range method:', error);
         document.getElementById('dataStartDate').textContent = 'Error loading';
         document.getElementById('dataEndDate').textContent = 'Error loading';
         document.getElementById('totalRecordsCount').textContent = '0';
@@ -7301,7 +7322,7 @@ async function loadAttendanceDateRangeAlternative() {
 // Load Attendance History
 async function loadAttendanceHistory() {
     try {
-        console.log('📊 Loading attendance history...');
+        console.log(' Loading attendance history...');
 
         // Get filters
         const semesterFilter = document.getElementById('attendanceSemesterFilter').value;
@@ -7310,11 +7331,11 @@ async function loadAttendanceHistory() {
 
         // Check if required filters are selected
         if (!semesterFilter || !courseFilter) {
-            console.log('⚠️ Branch and Semester must be selected');
+            console.log(' Branch and Semester must be selected');
             tbody.innerHTML = `
                 <tr>
                     <td colspan="9" style="text-align: center; padding: 60px;">
-                        <div style="font-size: 48px; margin-bottom: 20px;">📊</div>
+                        <div style="font-size: 48px; margin-bottom: 20px;"></div>
                         <h3 style="color: var(--text-primary); margin-bottom: 10px;">Select Branch and Semester</h3>
                         <p style="color: var(--text-secondary);">Please select a branch and semester to view attendance data</p>
                     </td>
@@ -7327,7 +7348,7 @@ async function loadAttendanceHistory() {
         tbody.innerHTML = `
             <tr>
                 <td colspan="9" style="text-align: center; padding: 60px;">
-                    <div style="font-size: 48px; margin-bottom: 20px;">⏳</div>
+                    <div style="font-size: 48px; margin-bottom: 20px;"></div>
                     <h3 style="color: var(--text-primary); margin-bottom: 10px;">Loading Attendance Data...</h3>
                     <p style="color: var(--text-secondary);">Please wait while we fetch the records</p>
                 </td>
@@ -7348,21 +7369,21 @@ async function loadAttendanceHistory() {
         }
 
         const students = studentsData.students || [];
-        console.log(`✅ Loaded ${students.length} students`);
+        console.log(` Loaded ${students.length} students`);
 
         const startDate = document.getElementById('attendanceStartDate').value;
         const endDate = document.getElementById('attendanceEndDate').value;
         const searchQuery = document.getElementById('attendanceStudentSearch').value.toLowerCase();
 
         // Filter students
-        // Server already filtered by semester/branch — only apply search filter client-side
+        // Server already filtered by semester/branch  only apply search filter client-side
         let filteredStudents = students.filter(student => {
             if (searchQuery && !student.name.toLowerCase().includes(searchQuery) &&
                 !student.enrollmentNo.toLowerCase().includes(searchQuery)) return false;
             return true;
         });
 
-        console.log(`📋 Filtered to ${filteredStudents.length} students`);
+        console.log(` Filtered to ${filteredStudents.length} students`);
 
         // Load attendance summary for each student
         const attendancePromises = filteredStudents.map(async (student) => {
@@ -7410,7 +7431,7 @@ async function loadAttendanceHistory() {
 
         const studentsWithAttendance = await Promise.all(attendancePromises);
 
-        console.log(`✅ Loaded attendance for ${studentsWithAttendance.length} students`);
+        console.log(` Loaded attendance for ${studentsWithAttendance.length} students`);
 
         // Update summary cards
         const totalStudents = studentsWithAttendance.length;
@@ -7420,7 +7441,7 @@ async function loadAttendanceHistory() {
         const totalDays = Math.max(...studentsWithAttendance.map(s => s.summary.totalDays), 0);
         const totalHours = Math.floor(studentsWithAttendance.reduce((sum, s) => sum + s.summary.totalAttendedMinutes, 0) / 60);
 
-        console.log(`📊 Summary: ${totalStudents} students, ${avgAttendance}% avg, ${totalDays} days, ${totalHours}h`);
+        console.log(` Summary: ${totalStudents} students, ${avgAttendance}% avg, ${totalDays} days, ${totalHours}h`);
 
         document.getElementById('totalStudentsAttendance').textContent = totalStudents;
         document.getElementById('avgAttendanceRate').textContent = `${avgAttendance}%`;
@@ -7429,12 +7450,12 @@ async function loadAttendanceHistory() {
         if (hoursEl) hoursEl.textContent = `${totalHours}h`;
 
         // Render table
-        console.log('📋 Calling renderAttendanceHistoryTable...');
+        console.log(' Calling renderAttendanceHistoryTable...');
         renderAttendanceHistoryTable(studentsWithAttendance);
-        console.log('✅ Attendance history loaded successfully');
+        console.log(' Attendance history loaded successfully');
 
     } catch (error) {
-        console.error('❌ Error loading attendance history:', error);
+        console.error(' Error loading attendance history:', error);
         showNotification('Failed to load attendance history', 'error');
     }
 }
@@ -7443,10 +7464,10 @@ async function loadAttendanceHistory() {
 function renderAttendanceHistoryTable(students) {
     const tbody = document.getElementById('attendanceHistoryTableBody');
 
-    console.log(`📋 Rendering ${students.length} students in attendance table`);
+    console.log(` Rendering ${students.length} students in attendance table`);
 
     if (!tbody) {
-        console.error('❌ Table body element not found!');
+        console.error(' Table body element not found!');
         return;
     }
 
@@ -7492,17 +7513,17 @@ function renderAttendanceHistoryTable(students) {
             </td>
             <td>
                 <button class="btn-icon" onclick="viewDetailedAttendance('${student.enrollmentNo}')" title="View Details">
-                    👁️
+                    
                 </button>
                 <button class="btn-icon" onclick="exportStudentAttendance('${student.enrollmentNo}')" title="Export">
-                    📥
+                    
                 </button>
             </td>
         `;
         tbody.appendChild(row);
     });
 
-    console.log(`✅ Successfully rendered ${students.length} rows`);
+    console.log(` Successfully rendered ${students.length} rows`);
 }
 
 // Get Attendance Badge Class
@@ -7526,11 +7547,11 @@ function getWiFiStatusClass(status) {
 // Get WiFi Status Text
 function getWiFiStatusText(status) {
     switch (status) {
-        case 'connected': return '📶 Connected';
-        case 'disconnected': return '📵 Offline';
-        case 'grace_period': return '⏳ Grace Period';
-        case 'wrong_bssid': return '🚫 Wrong WiFi';
-        default: return '❓ Unknown';
+        case 'connected': return ' Connected';
+        case 'disconnected': return ' Offline';
+        case 'grace_period': return ' Grace Period';
+        case 'wrong_bssid': return ' Wrong WiFi';
+        default: return ' Unknown';
     }
 }
 
@@ -7538,7 +7559,7 @@ function getWiFiStatusText(status) {
 // Level 1: View Student Overview (All Dates)
 async function viewDetailedAttendance(enrollmentNo) {
     try {
-        console.log(`📊 Loading attendance overview for ${enrollmentNo}...`);
+        console.log(` Loading attendance overview for ${enrollmentNo}...`);
 
         // Get student info
         const studentsResponse = await fetch(`${SERVER_URL}/api/students?enrollmentNo=${enrollmentNo}`);
@@ -7566,14 +7587,14 @@ async function viewDetailedAttendance(enrollmentNo) {
             throw new Error('Failed to load attendance overview');
         }
 
-        console.log(`✅ Loaded ${data.dates.length} days of attendance`);
+        console.log(` Loaded ${data.dates.length} days of attendance`);
         console.log(`   Overall: ${data.student.overallPercentage}%`);
 
         // Render Level 1: Student Overview
         renderStudentOverviewModal(student, data.student, data.dates);
 
     } catch (error) {
-        console.error('❌ Error loading attendance overview:', error);
+        console.error(' Error loading attendance overview:', error);
         showNotification('Failed to load attendance overview', 'error');
     }
 }
@@ -7581,7 +7602,7 @@ async function viewDetailedAttendance(enrollmentNo) {
 // Level 2: View Specific Date Details
 async function viewDateDetails(enrollmentNo, date, studentName) {
     try {
-        console.log(`📅 Loading date details for ${enrollmentNo} on ${date}...`);
+        console.log(` Loading date details for ${enrollmentNo} on ${date}...`);
 
         const response = await fetch(`${SERVER_URL}/api/attendance/student/${enrollmentNo}/date/${date}`);
         const data = await response.json();
@@ -7590,13 +7611,13 @@ async function viewDateDetails(enrollmentNo, date, studentName) {
             throw new Error('Failed to load date details');
         }
 
-        console.log(`✅ Loaded ${data.record.lectures.length} lectures`);
+        console.log(` Loaded ${data.record.lectures.length} lectures`);
 
         // Render Level 2: Date Details
         renderDateDetailsModal(enrollmentNo, studentName, data.record);
 
     } catch (error) {
-        console.error('❌ Error loading date details:', error);
+        console.error(' Error loading date details:', error);
         showNotification('Failed to load date details', 'error');
     }
 }
@@ -7604,7 +7625,7 @@ async function viewDateDetails(enrollmentNo, date, studentName) {
 // Level 3: View Specific Lecture Details
 async function viewLectureDetails(enrollmentNo, date, period, studentName) {
     try {
-        console.log(`📖 Loading lecture details for ${enrollmentNo} - ${period} on ${date}...`);
+        console.log(` Loading lecture details for ${enrollmentNo} - ${period} on ${date}...`);
 
         const response = await fetch(`${SERVER_URL}/api/attendance/student/${enrollmentNo}/date/${date}/lecture/${period}`);
         const data = await response.json();
@@ -7613,13 +7634,13 @@ async function viewLectureDetails(enrollmentNo, date, period, studentName) {
             throw new Error('Failed to load lecture details');
         }
 
-        console.log(`✅ Loaded lecture: ${data.lecture.subject}`);
+        console.log(` Loaded lecture: ${data.lecture.subject}`);
 
         // Render Level 3: Lecture Details
         renderLectureDetailsModal(enrollmentNo, studentName, date, data.lecture);
 
     } catch (error) {
-        console.error('❌ Error loading lecture details:', error);
+        console.error(' Error loading lecture details:', error);
         showNotification('Failed to load lecture details', 'error');
     }
 }
@@ -7633,8 +7654,8 @@ function renderStudentOverviewModal(student, summary, dates) {
 
     modalBody.innerHTML = `
         <div class="attendance-detail-header">
-            <button class="btn btn-secondary" onclick="closeDetailedAttendanceModal()">← Back</button>
-            <h2>📊 ${student.name} - Attendance Overview</h2>
+            <button class="btn btn-secondary" onclick="closeDetailedAttendanceModal()"> Back</button>
+            <h2> ${student.name} - Attendance Overview</h2>
         </div>
         
         <div class="student-summary-card">
@@ -7668,7 +7689,7 @@ function renderStudentOverviewModal(student, summary, dates) {
             </div>
         </div>
         
-        <h3>📅 Attendance by Date</h3>
+        <h3> Attendance by Date</h3>
         <div class="dates-list">
             ${dates.map(d => {
         const date = new Date(d.date);
@@ -7678,7 +7699,7 @@ function renderStudentOverviewModal(student, summary, dates) {
         const attendedMin = attendedSec;  // already minutes
         const totalMin    = totalSec;     // already minutes
         const pct         = Number(d.percentage) || (d.status === 'present' ? 100 : 0);
-        const timeStr     = totalMin > 0 ? `${attendedMin}/${totalMin} min` : (d.status === 'present' ? 'Present' : '—');
+        const timeStr     = totalMin > 0 ? `${attendedMin}/${totalMin} min` : (d.status === 'present' ? 'Present' : '');
 
         return `
                     <div class="date-card" onclick="viewDateDetails('${student.enrollmentNo}', '${d.date}', '${student.name}')">
@@ -7688,20 +7709,20 @@ function renderStudentOverviewModal(student, summary, dates) {
                         </div>
                         <div class="date-card-body">
                             <div class="date-stat">
-                                <span class="stat-icon">📚</span>
+                                <span class="stat-icon"></span>
                                 <span>${d.lectureCount || 0} lectures</span>
                             </div>
                             <div class="date-stat">
-                                <span class="stat-icon">⏱️</span>
+                                <span class="stat-icon"></span>
                                 <span>${timeStr}</span>
                             </div>
                             <div class="date-stat">
-                                <span class="stat-icon">${d.status === 'present' ? '✅' : '❌'}</span>
+                                <span class="stat-icon">${d.status === 'present' ? '' : ''}</span>
                                 <span>${d.status === 'present' ? 'Present' : 'Absent'}</span>
                             </div>
                         </div>
                         <div class="date-card-footer">
-                            <span class="view-details-link">View Details →</span>
+                            <span class="view-details-link">View Details </span>
                         </div>
                     </div>
                 `;
@@ -7726,8 +7747,8 @@ function renderDateDetailsModal(enrollmentNo, studentName, record) {
 
     modalBody.innerHTML = `
         <div class="attendance-detail-header">
-            <button class="btn btn-secondary" onclick="viewDetailedAttendance('${enrollmentNo}')">← Back to Overview</button>
-            <h2>📅 ${studentName} - ${dateStr}</h2>
+            <button class="btn btn-secondary" onclick="viewDetailedAttendance('${enrollmentNo}')"> Back to Overview</button>
+            <h2> ${studentName} - ${dateStr}</h2>
         </div>
         
         <div class="date-summary-card">
@@ -7735,7 +7756,7 @@ function renderDateDetailsModal(enrollmentNo, studentName, record) {
                 <div class="summary-item">
                     <span class="summary-label">Status:</span>
                     <span class="summary-value ${record.status === 'present' ? 'badge-success' : 'badge-danger'}">
-                        ${record.status === 'present' ? '✅ Present' : '❌ Absent'}
+                        ${record.status === 'present' ? ' Present' : ' Absent'}
                     </span>
                 </div>
                 <div class="summary-item">
@@ -7753,7 +7774,7 @@ function renderDateDetailsModal(enrollmentNo, studentName, record) {
             </div>
         </div>
         
-        <h3>📚 Lectures</h3>
+        <h3> Lectures</h3>
         <div class="lectures-list">
             ${record.lectures.map(lecture => {
         const attendedFormatted = lecture.attendedFormatted || formatSecondsToTime(lecture.attended);
@@ -7773,23 +7794,23 @@ function renderDateDetailsModal(enrollmentNo, studentName, record) {
                             <div class="lecture-subject">${lecture.subject}</div>
                             <div class="lecture-details">
                                 <span class="lecture-detail">
-                                    <span class="detail-icon">👨‍🏫</span>
+                                    <span class="detail-icon"></span>
                                     ${lecture.teacherName || 'N/A'}
                                 </span>
                                 <span class="lecture-detail">
-                                    <span class="detail-icon">🏫</span>
+                                    <span class="detail-icon"></span>
                                     ${lecture.room || 'N/A'}
                                 </span>
                             </div>
                             <div class="lecture-time-info">
-                                <span class="time-attended">⏱️ ${attendedFormatted} / ${totalFormatted}</span>
+                                <span class="time-attended"> ${attendedFormatted} / ${totalFormatted}</span>
                                 <span class="status-badge ${lecture.present ? 'badge-success' : 'badge-danger'}">
-                                    ${lecture.present ? '✅ Present' : '❌ Absent'}
+                                    ${lecture.present ? ' Present' : ' Absent'}
                                 </span>
                             </div>
                         </div>
                         <div class="lecture-card-footer">
-                            <span class="view-details-link">View Timeline →</span>
+                            <span class="view-details-link">View Timeline </span>
                         </div>
                     </div>
                 `;
@@ -7812,8 +7833,8 @@ function renderLectureDetailsModal(enrollmentNo, studentName, date, lecture) {
 
     modalBody.innerHTML = `
         <div class="attendance-detail-header">
-            <button class="btn btn-secondary" onclick="viewDateDetails('${enrollmentNo}', '${date}', '${studentName}')">← Back to Date</button>
-            <h2>📖 ${lecture.period} - ${lecture.subject}</h2>
+            <button class="btn btn-secondary" onclick="viewDateDetails('${enrollmentNo}', '${date}', '${studentName}')"> Back to Date</button>
+            <h2> ${lecture.period} - ${lecture.subject}</h2>
         </div>
         
         <div class="lecture-detail-card">
@@ -7846,13 +7867,13 @@ function renderLectureDetailsModal(enrollmentNo, studentName, date, lecture) {
                 <div class="info-item">
                     <span class="info-label">Status:</span>
                     <span class="info-value ${lecture.present ? 'badge-success' : 'badge-danger'}">
-                        ${lecture.present ? '✅ Present' : '❌ Absent'}
+                        ${lecture.present ? ' Present' : ' Absent'}
                     </span>
                 </div>
             </div>
             
             <div class="time-breakdown-section">
-                <h4>⏱️ Time Breakdown</h4>
+                <h4> Time Breakdown</h4>
                 <div class="time-breakdown-grid">
                     <div class="time-item">
                         <span class="time-label">Attended:</span>
@@ -7870,18 +7891,18 @@ function renderLectureDetailsModal(enrollmentNo, studentName, date, lecture) {
             </div>
             
             <div class="timeline-section">
-                <h4>📍 Timeline</h4>
+                <h4> Timeline</h4>
                 <div class="timeline">
                     <div class="timeline-item">
                         <span class="timeline-time">${lecture.startTime}</span>
-                        <span class="timeline-event">🔔 Lecture Started</span>
+                        <span class="timeline-event"> Lecture Started</span>
                         <span class="timeline-detail">${new Date(lecture.lectureStartedAt).toLocaleTimeString()}</span>
                     </div>
                     
                     ${lecture.studentCheckIn ? `
                         <div class="timeline-item">
                             <span class="timeline-time">${new Date(lecture.studentCheckIn).toLocaleTimeString()}</span>
-                            <span class="timeline-event">✅ Student Checked In</span>
+                            <span class="timeline-event"> Student Checked In</span>
                             <span class="timeline-detail">Face verified</span>
                         </div>
                     ` : ''}
@@ -7889,14 +7910,14 @@ function renderLectureDetailsModal(enrollmentNo, studentName, date, lecture) {
                     ${lecture.verifications && lecture.verifications.length > 0 ? lecture.verifications.map(v => `
                         <div class="timeline-item">
                             <span class="timeline-time">${new Date(v.time).toLocaleTimeString()}</span>
-                            <span class="timeline-event">${v.type === 'random_ring' ? '🔔' : '👤'} ${v.event === 'random_ring' ? 'Random Ring Verified' : 'Face Verified'}</span>
-                            <span class="timeline-detail">${v.success ? '✓ Success' : '✗ Failed'}</span>
+                            <span class="timeline-event">${v.type === 'random_ring' ? '' : ''} ${v.event === 'random_ring' ? 'Random Ring Verified' : 'Face Verified'}</span>
+                            <span class="timeline-detail">${v.success ? ' Success' : ' Failed'}</span>
                         </div>
                     `).join('') : ''}
                     
                     <div class="timeline-item">
                         <span class="timeline-time">${lecture.endTime}</span>
-                        <span class="timeline-event">🏁 Lecture Ended</span>
+                        <span class="timeline-event"> Lecture Ended</span>
                         <span class="timeline-detail">${new Date(lecture.lectureEndedAt).toLocaleTimeString()}</span>
                     </div>
                 </div>
@@ -7904,17 +7925,17 @@ function renderLectureDetailsModal(enrollmentNo, studentName, date, lecture) {
             
             ${lecture.verifications && lecture.verifications.length > 0 ? `
                 <div class="verifications-section">
-                    <h4>🔐 Verification Events</h4>
+                    <h4> Verification Events</h4>
                     <div class="verifications-list">
                         ${lecture.verifications.map(v => `
                             <div class="verification-item ${v.success ? 'success' : 'failed'}">
-                                <span class="verification-icon">${v.type === 'random_ring' ? '🔔' : '👤'}</span>
+                                <span class="verification-icon">${v.type === 'random_ring' ? '' : ''}</span>
                                 <div class="verification-info">
                                     <div class="verification-type">${v.event.replace('_', ' ').toUpperCase()}</div>
                                     <div class="verification-time">${new Date(v.time).toLocaleString()}</div>
                                 </div>
                                 <span class="verification-status ${v.success ? 'badge-success' : 'badge-danger'}">
-                                    ${v.success ? '✓ Verified' : '✗ Failed'}
+                                    ${v.success ? ' Verified' : ' Failed'}
                                 </span>
                             </div>
                         `).join('')}
@@ -7998,7 +8019,7 @@ function renderDetailedAttendanceModal(student, history) {
 
     modalBody.innerHTML = `
         <div class="detailed-attendance-header">
-            <h2>📊 Detailed Attendance Report</h2>
+            <h2> Detailed Attendance Report</h2>
             <div class="student-info-card">
                 <h3>${student.name}</h3>
                 <p><strong>Enrollment:</strong> ${student.enrollmentNo}</p>
@@ -8026,7 +8047,7 @@ function renderDetailedAttendanceModal(student, history) {
         </div>
         
         <div class="subject-wise-attendance">
-            <h3>📚 Subject-wise Attendance</h3>
+            <h3> Subject-wise Attendance</h3>
             <div class="subject-cards">
                 ${Object.values(subjectStats).map(stat => `
                     <div class="subject-card">
@@ -8059,7 +8080,7 @@ function renderDetailedAttendanceModal(student, history) {
         </div>
         
         <div class="day-wise-attendance">
-            <h3>📅 Day-wise Attendance</h3>
+            <h3> Day-wise Attendance</h3>
             <div class="table-container">
                 <table class="data-table">
                     <thead>
@@ -8098,7 +8119,7 @@ function renderDetailedAttendanceModal(student, history) {
                                     </td>
                                     <td>
                                         <span class="status-badge ${day.dayPresent ? 'badge-success' : 'badge-danger'}">
-                                            ${day.dayPresent ? '✓ Present' : '✗ Absent'}
+                                            ${day.dayPresent ? ' Present' : ' Absent'}
                                         </span>
                                     </td>
                                 </tr>
@@ -8111,7 +8132,7 @@ function renderDetailedAttendanceModal(student, history) {
         
         <div class="modal-actions">
             <button class="btn btn-secondary" onclick="exportDetailedAttendance('${student.enrollmentNo}')">
-                📥 Export Report
+                 Export Report
             </button>
             <button class="btn btn-primary" onclick="closeDetailedAttendanceModal()">
                 Close
@@ -8130,7 +8151,7 @@ function viewSubjectPeriods(subject, periods) {
     const modalBody = document.getElementById('modalBody');
 
     modalBody.innerHTML = `
-        <h2>📚 ${subject} - All Periods</h2>
+        <h2> ${subject} - All Periods</h2>
         <div class="table-container">
             <table class="data-table">
                 <thead>
@@ -8168,7 +8189,7 @@ function viewSubjectPeriods(subject, periods) {
                                 </td>
                                 <td>
                                     <span class="status-badge ${period.present ? 'badge-success' : 'badge-danger'}">
-                                        ${period.present ? '✓' : '✗'}
+                                        ${period.present ? '' : ''}
                                     </span>
                                 </td>
                             </tr>
@@ -8219,7 +8240,7 @@ async function exportStudentAttendance(enrollmentNo) {
         showNotification('Attendance exported successfully', 'success');
 
     } catch (error) {
-        console.error('❌ Error exporting attendance:', error);
+        console.error(' Error exporting attendance:', error);
         showNotification('Failed to export attendance', 'error');
     }
 }
@@ -8269,9 +8290,9 @@ function setupAttendanceHistoryListeners() {
             fetchBtn.disabled = !(courseSelected && semesterSelected);
 
             if (courseSelected && semesterSelected) {
-                fetchBtn.textContent = `📊 Fetch ${courseFilter.options[courseFilter.selectedIndex].text} - Semester ${semesterFilter.value}`;
+                fetchBtn.textContent = ` Fetch ${courseFilter.options[courseFilter.selectedIndex].text} - Semester ${semesterFilter.value}`;
             } else {
-                fetchBtn.textContent = '📊 Fetch Attendance Data';
+                fetchBtn.textContent = ' Fetch Attendance Data';
             }
         }
     }
@@ -8379,7 +8400,7 @@ async function exportAllAttendance() {
         showNotification('All attendance data exported successfully', 'success');
 
     } catch (error) {
-        console.error('❌ Error exporting all attendance:', error);
+        console.error(' Error exporting all attendance:', error);
         showNotification('Failed to export attendance data', 'error');
     }
 }
@@ -8473,7 +8494,7 @@ async function exportAttendanceData() {
         showNotification(`Attendance data exported successfully (${data.attendance.length} records)`, 'success');
 
     } catch (error) {
-        console.error('❌ Error exporting attendance data:', error);
+        console.error(' Error exporting attendance data:', error);
         showNotification('Failed to export attendance data', 'error');
     }
 }
@@ -8506,15 +8527,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     tbody.innerHTML = `
                         <tr>
                             <td colspan="9" style="text-align: center; padding: 60px;">
-                                <div style="font-size: 48px; margin-bottom: 20px;">📊</div>
+                                <div style="font-size: 48px; margin-bottom: 20px;"></div>
                                 <h3 style="color: var(--text-primary); margin-bottom: 10px;">Welcome to Attendance History</h3>
                                 <p style="color: var(--text-secondary); margin-bottom: 20px;">Select a branch and semester above to view detailed attendance records</p>
                                 <div style="display: flex; gap: 10px; justify-content: center; align-items: center; color: var(--text-secondary); font-size: 14px;">
-                                    <span>1️⃣ Select Branch</span>
-                                    <span>→</span>
-                                    <span>2️⃣ Select Semester</span>
-                                    <span>→</span>
-                                    <span>3️⃣ Click Fetch</span>
+                                    <span>1 Select Branch</span>
+                                    <span></span>
+                                    <span>2 Select Semester</span>
+                                    <span></span>
+                                    <span>3 Click Fetch</span>
                                 </div>
                             </td>
                         </tr>
@@ -8565,7 +8586,7 @@ function attachSubjectButtonListeners() {
         addBtn.onclick = function () {
             showAddSubjectDialog();
         };
-        console.log('✅ Add Subject button listener attached');
+        console.log(' Add Subject button listener attached');
     }
 
     // Subject management buttons
@@ -8604,7 +8625,7 @@ function attachSubjectButtonListeners() {
     }
 }
 
-// Track selected subjects — declared at top of file
+// Track selected subjects  declared at top of file
 function renderSubjectsTable() {
     const tbody = document.getElementById('subjectsTableBody');
 
@@ -8633,9 +8654,9 @@ function renderSubjectsTable() {
             <td><span class="badge badge-${subject.type.toLowerCase()}">${subject.type}</span></td>
             <td><span class="badge badge-${subject.isActive ? 'success' : 'danger'}">${subject.isActive ? 'Active' : 'Inactive'}</span></td>
             <td>
-                <button class="btn-icon" onclick="duplicateSubject('${subject.subjectCode}')" title="Duplicate">📋</button>
-                <button class="btn-icon" onclick="editSubject('${subject.subjectCode}')" title="Edit">✏️</button>
-                <button class="btn-icon" onclick="deleteSubject('${subject.subjectCode}')" title="Delete">🗑️</button>
+                <button class="btn-icon" onclick="duplicateSubject('${subject.subjectCode}')" title="Duplicate"></button>
+                <button class="btn-icon" onclick="editSubject('${subject.subjectCode}')" title="Edit"></button>
+                <button class="btn-icon" onclick="deleteSubject('${subject.subjectCode}')" title="Delete"></button>
             </td>
         </tr>
     `).join('');
@@ -8688,7 +8709,7 @@ function clearSubjectSelection() {
 }
 
 function showAddSubjectDialog() {
-    console.log('🎯 showAddSubjectDialog called');
+    console.log(' showAddSubjectDialog called');
     try {
         const dialog = document.createElement('div');
         dialog.className = 'modal-overlay';
@@ -8696,7 +8717,7 @@ function showAddSubjectDialog() {
         <div class="modal-content">
             <div class="modal-header">
                 <h3>Add New Subject</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div style="padding: 10px 20px; background: rgba(0, 217, 255, 0.1); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text-secondary);">
                 <span style="color: var(--danger);">*</span> Required fields
@@ -8774,13 +8795,13 @@ function showAddSubjectDialog() {
         </div>
     `;
         document.body.appendChild(dialog);
-        console.log('✅ Dialog added to body');
+        console.log(' Dialog added to body');
 
         // Add real-time validation
         setupSubjectFormValidation();
 
     } catch (error) {
-        console.error('❌ Error in showAddSubjectDialog:', error);
+        console.error(' Error in showAddSubjectDialog:', error);
         alert('Error opening dialog: ' + error.message);
     }
 }
@@ -8806,7 +8827,7 @@ function setupSubjectFormValidation() {
 }
 
 function validateSubjectForm() {
-    console.log('🔍 Validating subject form...');
+    console.log(' Validating subject form...');
 
     // Simple validation - just check required fields
     const subjectCode = document.getElementById('subjectCode').value.trim();
@@ -8906,27 +8927,27 @@ function validateSubjectForm() {
 }
 
 async function saveNewSubject() {
-    console.log('🔄 saveNewSubject called');
+    console.log(' saveNewSubject called');
 
     // TEMPORARY: Skip validation for testing
     // if (!validateSubjectForm()) {
-    //     console.log('❌ Form validation failed');
+    //     console.log(' Form validation failed');
     //     return;
     // }
 
-    console.log('✅ Skipping validation for testing');
+    console.log(' Skipping validation for testing');
 
     // Test server connection first
     try {
-        console.log('🔍 Testing server connection...');
+        console.log(' Testing server connection...');
         const testResponse = await fetch(`${SERVER_URL}/api/health`);
-        console.log('🏥 Health check status:', testResponse.status);
+        console.log(' Health check status:', testResponse.status);
         if (!testResponse.ok) {
             showNotification('Server is not responding. Please check if the server is running.', 'error');
             return;
         }
     } catch (error) {
-        console.error('❌ Server connection failed:', error);
+        console.error(' Server connection failed:', error);
         showNotification('Cannot connect to server. Please check if the server is running.', 'error');
         return;
     }
@@ -8940,7 +8961,7 @@ async function saveNewSubject() {
     const type = document.getElementById('type')?.value || 'Theory';
     const description = document.getElementById('description')?.value?.trim() || '';
 
-    console.log('📋 Form values:', {
+    console.log(' Form values:', {
         subjectCode,
         subjectName,
         shortName,
@@ -8969,8 +8990,8 @@ async function saveNewSubject() {
             description
         };
 
-        console.log('📤 Sending payload:', payload);
-        console.log('🌐 Server URL:', SERVER_URL);
+        console.log(' Sending payload:', payload);
+        console.log(' Server URL:', SERVER_URL);
 
         const response = await fetch(`${SERVER_URL}/api/subjects`, {
             method: 'POST',
@@ -8979,8 +9000,8 @@ async function saveNewSubject() {
         });
 
         const data = await response.json();
-        console.log('📥 Server response:', data);
-        console.log('📊 Response status:', response.status);
+        console.log(' Server response:', data);
+        console.log(' Response status:', response.status);
 
         if (data.success) {
             showNotification(`Subject "${subjectCode}" added successfully`, 'success');
@@ -9025,7 +9046,7 @@ async function editSubject(subjectCode) {
             <div class="modal-content">
                 <div class="modal-header">
                     <h3>Edit Subject</h3>
-                    <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                    <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
                 </div>
                 <div class="modal-body">
                     <form id="editSubjectForm">
@@ -9160,6 +9181,32 @@ async function deleteSubject(subjectCode) {
     }
 }
 
+async function purgeOrphanSubjects() {
+    if (!confirm(
+        'This will permanently delete all PeriodAttendance and TimetableHistory records\n' +
+        'whose subject name does not exist in the Subject collection.\n\n' +
+        'This cannot be undone. Continue?'
+    )) return;
+
+    try {
+        showNotification('Purging ghost subjects...', 'info');
+        const res  = await fetch(`${SERVER_URL}/api/admin/purge-orphan-subjects`, { method: 'POST' });
+        const data = await res.json();
+        if (data.success) {
+            const d = data.deleted;
+            showNotification(
+                `Done — removed ${d.periodAttendance} period records, ${d.timetableHistory} timetable history records`,
+                'success'
+            );
+        } else {
+            showNotification(data.error || 'Purge failed', 'error');
+        }
+    } catch (err) {
+        console.error('Purge error:', err);
+        showNotification('Purge failed: ' + err.message, 'error');
+    }
+}
+
 // Duplicate subject
 async function duplicateSubject(subjectCode) {
     try {
@@ -9176,7 +9223,7 @@ async function duplicateSubject(subjectCode) {
         // Show dialog to select new semester/branch
         const modalBody = document.getElementById('modalBody');
         modalBody.innerHTML = `
-            <h2>📋 Duplicate Subject</h2>
+            <h2> Duplicate Subject</h2>
             <p style="color: var(--text-secondary); margin-bottom: 20px;">
                 Duplicating: <strong>${subject.subjectName} (${subject.subjectCode})</strong>
             </p>
@@ -9200,7 +9247,7 @@ async function duplicateSubject(subjectCode) {
                     </select>
                 </div>
                 <div class="form-actions">
-                    <button type="submit" class="btn btn-primary">📋 Duplicate</button>
+                    <button type="submit" class="btn btn-primary"> Duplicate</button>
                     <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
                 </div>
             </form>
@@ -9340,7 +9387,7 @@ async function bulkDuplicateSubjects() {
     // Show dialog to select target semester/branch
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>📋 Bulk Duplicate Subjects</h2>
+        <h2> Bulk Duplicate Subjects</h2>
         <p style="color: var(--text-secondary); margin-bottom: 20px;">
             Duplicating ${selectedSubjects.size} subject(s) to a new semester/branch
         </p>
@@ -9371,7 +9418,7 @@ async function bulkDuplicateSubjects() {
                 <small style="color: var(--text-secondary);">Leave empty to keep original codes</small>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">📋 Duplicate All</button>
+                <button type="submit" class="btn btn-primary"> Duplicate All</button>
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
             </div>
         </form>
@@ -9631,9 +9678,9 @@ function searchSubjects(query) {
             <td><span class="badge badge-${subject.type.toLowerCase()}">${subject.type}</span></td>
             <td><span class="badge badge-${subject.isActive ? 'success' : 'danger'}">${subject.isActive ? 'Active' : 'Inactive'}</span></td>
             <td>
-                <button class="btn-icon" onclick="duplicateSubject('${subject.subjectCode}')" title="Duplicate">📋</button>
-                <button class="btn-icon" onclick="editSubject('${subject.subjectCode}')" title="Edit">✏️</button>
-                <button class="btn-icon" onclick="deleteSubject('${subject.subjectCode}')" title="Delete">🗑️</button>
+                <button class="btn-icon" onclick="duplicateSubject('${subject.subjectCode}')" title="Duplicate"></button>
+                <button class="btn-icon" onclick="editSubject('${subject.subjectCode}')" title="Edit"></button>
+                <button class="btn-icon" onclick="deleteSubject('${subject.subjectCode}')" title="Delete"></button>
             </td>
         </tr>
     `).join('');
@@ -9645,7 +9692,7 @@ function searchSubjects(query) {
 function showFeatureRequestDialog() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>💡 Submit Feature Request</h2>
+        <h2> Submit Feature Request</h2>
         <p style="color: var(--text-secondary); margin-bottom: 20px;">
             Help us improve the system by sharing your ideas and suggestions!
         </p>
@@ -9691,7 +9738,7 @@ function showFeatureRequestDialog() {
                 </select>
             </div>
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">✉️ Submit Request</button>
+                <button type="submit" class="btn btn-primary"> Submit Request</button>
                 <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
             </div>
         </form>
@@ -9805,7 +9852,7 @@ function resetToDefaultPeriods() {
 // ===== SIMPLE ADD SUBJECT FUNCTIONALITY =====
 
 function showSimpleAddSubjectDialog() {
-    console.log('🎯 Simple Add Subject Dialog');
+    console.log(' Simple Add Subject Dialog');
 
     // Create simple modal
     const modal = document.createElement('div');
@@ -9814,7 +9861,7 @@ function showSimpleAddSubjectDialog() {
         <div class="modal-content">
             <div class="modal-header">
                 <h3>Add New Subject</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
@@ -9879,7 +9926,7 @@ function showSimpleAddSubjectDialog() {
 }
 
 async function saveSimpleSubject() {
-    console.log('💾 Saving simple subject...');
+    console.log(' Saving simple subject...');
 
     // Get form values
     const subjectCode = document.getElementById('simpleSubjectCode').value.trim();
@@ -9948,7 +9995,7 @@ async function saveSimpleSubject() {
 // ===== BULK EDIT SUBJECTS FUNCTIONALITY =====
 
 function showBulkEditDialog() {
-    console.log('📝 Opening bulk edit dialog');
+    console.log(' Opening bulk edit dialog');
 
     if (selectedSubjects.size === 0) {
         showNotification('Please select subjects to edit', 'warning');
@@ -9965,7 +10012,7 @@ function showBulkEditDialog() {
         <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
                 <h3>Bulk Edit Subjects (${selectedCount} selected)</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <div class="selected-subjects-list">
@@ -10076,7 +10123,7 @@ function setupBulkEditCheckboxes() {
 }
 
 async function executeBulkEdit() {
-    console.log('🔄 Executing bulk edit...');
+    console.log(' Executing bulk edit...');
 
     const selectedList = Array.from(selectedSubjects);
 
@@ -10166,7 +10213,7 @@ function attachBulkEditListener() {
     const bulkEditBtn = document.getElementById('bulkEditSubjectsBtn');
     if (bulkEditBtn) {
         bulkEditBtn.onclick = showBulkEditDialog;
-        console.log('✅ Bulk edit button listener attached');
+        console.log(' Bulk edit button listener attached');
     }
 }
 
@@ -10198,7 +10245,7 @@ function initializeAttendanceManagement() {
         manageAttendanceBtn.addEventListener('click', showAttendanceManagementPanel);
     }
 
-    console.log('✅ Attendance management initialized');
+    console.log(' Attendance management initialized');
 }
 
 // Enhanced attendance table with management features
@@ -10209,10 +10256,10 @@ function renderAttendanceTable(records) {
         tbody.innerHTML = `
             <tr>
                 <td colspan="11" style="text-align: center; padding: 40px;">
-                    <div style="font-size: 48px; margin-bottom: 15px;">📊</div>
+                    <div style="font-size: 48px; margin-bottom: 15px;"></div>
                     <h3 style="color: var(--text-primary); margin-bottom: 10px;">No Attendance Records Found</h3>
                     <p style="color: var(--text-secondary); margin-bottom: 20px;">No attendance data available for the selected criteria</p>
-                    <button class="btn btn-primary" onclick="showAddAttendanceDialog()">➕ Add First Record</button>
+                    <button class="btn btn-primary" onclick="showAddAttendanceDialog()"> Add First Record</button>
                 </td>
             </tr>
         `;
@@ -10252,14 +10299,14 @@ function renderAttendanceTable(records) {
                 <td>${Math.round(record.totalHours || 0)}h</td>
                 <td>
                     <span class="wifi-status ${record.wifiConnected ? 'connected' : 'disconnected'}">
-                        ${record.wifiConnected ? '🟢 Connected' : '🔴 Offline'}
+                        ${record.wifiConnected ? ' Connected' : ' Offline'}
                     </span>
                 </td>
                 <td>
                     <div class="action-buttons-small">
-                        <button class="action-btn edit" onclick="editAttendanceRecord('${record._id}')" title="Edit">✏️</button>
-                        <button class="action-btn view" onclick="viewAttendanceDetails('${record._id}')" title="View Details">👁️</button>
-                        <button class="action-btn delete" onclick="deleteAttendanceRecord('${record._id}')" title="Delete">🗑️</button>
+                        <button class="action-btn edit" onclick="editAttendanceRecord('${record._id}')" title="Edit"></button>
+                        <button class="action-btn view" onclick="viewAttendanceDetails('${record._id}')" title="View Details"></button>
+                        <button class="action-btn delete" onclick="deleteAttendanceRecord('${record._id}')" title="Delete"></button>
                     </div>
                 </td>
             </tr>
@@ -10278,7 +10325,7 @@ function showAddAttendanceDialog() {
         <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
                 <h3>Add Attendance Record</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
@@ -10350,7 +10397,7 @@ function editAttendanceRecord(recordId) {
         <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
                 <h3>Edit Attendance Record</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <div class="form-group">
@@ -10405,7 +10452,7 @@ function viewAttendanceDetails(recordId) {
         <div class="modal-content" style="max-width: 700px;">
             <div class="modal-header">
                 <h3>Attendance Details - ${record.name}</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <div class="attendance-detail-grid">
@@ -10426,14 +10473,14 @@ function viewAttendanceDetails(recordId) {
                     <div class="detail-card">
                         <h4>Recent Activity</h4>
                         <p><strong>Last Updated:</strong> ${new Date(record.updatedAt || record.createdAt).toLocaleDateString()}</p>
-                        <p><strong>WiFi Status:</strong> ${record.wifiConnected ? '🟢 Connected' : '🔴 Offline'}</p>
+                        <p><strong>WiFi Status:</strong> ${record.wifiConnected ? ' Connected' : ' Offline'}</p>
                         <p><strong>Notes:</strong> ${record.notes || 'No notes'}</p>
                     </div>
                 </div>
                 <div class="attendance-history-chart">
                     <h4>Weekly Attendance Trend</h4>
                     <div id="attendanceChart" style="height: 200px; background: var(--bg-hover); border-radius: 8px; display: flex; align-items: center; justify-content: center; color: var(--text-secondary);">
-                        📊 Chart visualization coming soon
+                         Chart visualization coming soon
                     </div>
                 </div>
             </div>
@@ -10462,7 +10509,7 @@ function showBulkEditAttendanceDialog() {
         <div class="modal-content" style="max-width: 600px;">
             <div class="modal-header">
                 <h3>Bulk Edit Attendance (${selectedCount} records)</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <div class="bulk-edit-info">
@@ -10517,7 +10564,7 @@ function showAttendanceManagementPanel() {
         <div class="modal-content" style="max-width: 800px;">
             <div class="modal-header">
                 <h3>Attendance Management Panel</h3>
-                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+                <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"></button>
             </div>
             <div class="modal-body">
                 <div class="management-tabs">
@@ -10531,19 +10578,19 @@ function showAttendanceManagementPanel() {
                     <h4>Bulk Operations</h4>
                     <div class="operation-grid">
                         <button class="operation-btn" onclick="markAllPresent()">
-                            <span class="op-icon">✅</span>
+                            <span class="op-icon"></span>
                             <span class="op-text">Mark All Present</span>
                         </button>
                         <button class="operation-btn" onclick="markAllAbsent()">
-                            <span class="op-icon">❌</span>
+                            <span class="op-icon"></span>
                             <span class="op-text">Mark All Absent</span>
                         </button>
                         <button class="operation-btn" onclick="resetAttendance()">
-                            <span class="op-icon">🔄</span>
+                            <span class="op-icon"></span>
                             <span class="op-text">Reset Attendance</span>
                         </button>
                         <button class="operation-btn" onclick="generateReport()">
-                            <span class="op-icon">📊</span>
+                            <span class="op-icon"></span>
                             <span class="op-text">Generate Report</span>
                         </button>
                     </div>
@@ -10555,12 +10602,12 @@ function showAttendanceManagementPanel() {
                         <div class="ie-card">
                             <h5>Import Attendance</h5>
                             <p>Upload CSV file with attendance data</p>
-                            <button class="btn btn-primary" onclick="importAttendanceData()">📥 Import CSV</button>
+                            <button class="btn btn-primary" onclick="importAttendanceData()"> Import CSV</button>
                         </div>
                         <div class="ie-card">
                             <h5>Export Attendance</h5>
                             <p>Download attendance data as CSV</p>
-                            <button class="btn btn-secondary" onclick="exportAttendanceData()">📤 Export CSV</button>
+                            <button class="btn btn-secondary" onclick="exportAttendanceData()"> Export CSV</button>
                         </div>
                     </div>
                 </div>
@@ -10570,7 +10617,7 @@ function showAttendanceManagementPanel() {
                     <div class="analytics-grid">
                         <div class="analytics-card">
                             <h5>Attendance Trends</h5>
-                            <div class="chart-placeholder">📈 Trend Chart</div>
+                            <div class="chart-placeholder"> Trend Chart</div>
                         </div>
                         <div class="analytics-card">
                             <h5>Low Attendance Alert</h5>
@@ -10675,7 +10722,7 @@ async function loadBranchesConfig() {
                     <div style="font-weight: 500; color: var(--text-primary);">${branch.displayName}</div>
                     <div style="font-size: 12px; color: var(--text-secondary);">${branch.name}</div>
                 </div>
-                <button class="btn btn-danger btn-sm" onclick="deleteBranch('${branch.name}', '${branch.displayName}')">🗑️</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteBranch('${branch.name}', '${branch.displayName}')"></button>
             </div>
         `).join('');
 
@@ -10701,7 +10748,7 @@ async function loadSemestersConfig() {
         container.innerHTML = data.semesters.map(semester => `
             <div class="config-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--border-color);">
                 <div style="font-weight: 500; color: var(--text-primary);">Semester ${semester}</div>
-                <button class="btn btn-danger btn-sm" onclick="deleteSemester('${semester}')">🗑️</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteSemester('${semester}')"></button>
             </div>
         `).join('');
 
@@ -10730,7 +10777,7 @@ async function loadDepartmentsConfig() {
                     <div style="font-weight: 500; color: var(--text-primary);">${dept.name}</div>
                     <div style="font-size: 12px; color: var(--text-secondary);">${dept.code}</div>
                 </div>
-                <button class="btn btn-danger btn-sm" onclick="deleteDepartment('${dept.value}', '${dept.name}')">🗑️</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteDepartment('${dept.value}', '${dept.name}')"></button>
             </div>
         `).join('');
 
@@ -10744,7 +10791,7 @@ async function loadDepartmentsConfig() {
 function showAddBranchModal() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>➕ Add New Branch</h2>
+        <h2> Add New Branch</h2>
         <form id="addBranchForm">
             <div class="form-group">
                 <label>Branch Name *</label>
@@ -10797,7 +10844,7 @@ function showAddBranchModal() {
 function showAddSemesterModal() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>➕ Add New Semester</h2>
+        <h2> Add New Semester</h2>
         <form id="addSemesterForm">
             <div class="form-group">
                 <label>Semester Number *</label>
@@ -10845,7 +10892,7 @@ function showAddSemesterModal() {
 function showAddDepartmentModal() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>➕ Add New Department</h2>
+        <h2> Add New Department</h2>
         <form id="addDepartmentForm">
             <div class="form-group">
                 <label>Department Code *</label>
@@ -10966,7 +11013,7 @@ async function loadDepartmentsConfig() {
                     <div style="font-weight: 500; color: var(--text-primary);">${dept.name}</div>
                     <div style="font-size: 12px; color: var(--text-secondary);">${dept.code}</div>
                 </div>
-                <button class="btn btn-danger btn-sm" onclick="deleteDepartment('${dept.value}', '${dept.name}')">🗑️</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteDepartment('${dept.value}', '${dept.name}')"></button>
             </div>
         `).join('');
 
@@ -10980,7 +11027,7 @@ async function loadDepartmentsConfig() {
 function showAddDepartmentModal() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
-        <h2>➕ Add New Department</h2>
+        <h2> Add New Department</h2>
         <form id="addDepartmentForm">
             <div class="form-group">
                 <label>Department Code *</label>
@@ -11104,7 +11151,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // Load Period Reports
 async function loadPeriodReport() {
     try {
-        console.log('📊 Loading period report...');
+        console.log(' Loading period report...');
         
         const date = document.getElementById('periodReportDate').value;
         const semester = document.getElementById('periodReportSemester').value;
@@ -11152,7 +11199,7 @@ function renderPeriodReportTable(records) {
         tbody.innerHTML = `
             <tr>
                 <td colspan="10" class="empty-state">
-                    <div class="empty-state-icon">📊</div>
+                    <div class="empty-state-icon"></div>
                     <div class="empty-state-title">No Records Found</div>
                     <div class="empty-state-description">Try adjusting your filters</div>
                 </td>
@@ -11221,7 +11268,7 @@ async function loadStudentsForManualMarking() {
             return;
         }
         
-        console.log('📋 Loading students for manual marking...', { semester, branch, date, period });
+        console.log(' Loading students for manual marking...', { semester, branch, date, period });
         
         // Get students for this semester and branch
         const studentsResponse = await fetch(`${SERVER_URL}/api/students`);
@@ -11268,7 +11315,7 @@ function renderManualMarkingTable(students, attendanceMap) {
         tbody.innerHTML = `
             <tr>
                 <td colspan="5" class="empty-state">
-                    <div class="empty-state-icon">👥</div>
+                    <div class="empty-state-icon"></div>
                     <div class="empty-state-title">No Students Found</div>
                     <div class="empty-state-description">No students in this semester and branch</div>
                 </td>
@@ -11292,10 +11339,10 @@ function renderManualMarkingTable(students, attendanceMap) {
                 <td><span class="daily-status ${statusClass}">${currentStatus}</span></td>
                 <td>
                     <button class="action-btn edit" onclick="markStudentPresent('${student.enrollmentNo}', '${student.name}')">
-                        ✓ Present
+                         Present
                     </button>
                     <button class="action-btn delete" onclick="markStudentAbsent('${student.enrollmentNo}', '${student.name}')">
-                        ✗ Absent
+                         Absent
                     </button>
                 </td>
             </tr>
@@ -11326,7 +11373,7 @@ async function markStudentAbsent(enrollmentNo, studentName) {
 // Submit Manual Marking
 async function submitManualMarking(enrollmentNo, period, status, reason, date) {
     try {
-        console.log('✏️ Submitting manual marking...', { enrollmentNo, period, status, reason });
+        console.log(' Submitting manual marking...', { enrollmentNo, period, status, reason });
         
         const response = await fetch(`${SERVER_URL}/api/attendance/manual-mark`, {
             method: 'POST',
@@ -11402,7 +11449,7 @@ function toggleAllStudentsMarking(checked) {
 // Load Audit Trail
 async function loadAuditTrail() {
     try {
-        console.log('📝 Loading audit trail...');
+        console.log(' Loading audit trail...');
         
         const enrollmentNo = document.getElementById('auditTrailEnrollment').value;
         const date = document.getElementById('auditTrailDate').value;
@@ -11436,7 +11483,7 @@ function renderAuditTrailTable(records) {
         tbody.innerHTML = `
             <tr>
                 <td colspan="10" class="empty-state">
-                    <div class="empty-state-icon">📝</div>
+                    <div class="empty-state-icon"></div>
                     <div class="empty-state-title">No Audit Records Found</div>
                     <div class="empty-state-description">Try adjusting your filters</div>
                 </td>
@@ -11680,16 +11727,16 @@ async function saveAttendanceThreshold() {
     }
 }
 
-// ── Theme System ──────────────────────────────────────────────────────────────
+//  Theme System 
 
 var THEME_META = {
-    dark:     { icon: '🌙', label: 'Dark' },
-    light:    { icon: '☀️', label: 'Light' },
-    slate:    { icon: '🩶', label: 'Slate' },
-    blossom:  { icon: '🌸', label: 'Blossom' },
-    matcha:   { icon: '🍵', label: 'Matcha' },
-    peach:    { icon: '🍑', label: 'Peach' },
-    clay:     { icon: '🧸', label: 'Clay' },
+    dark:     { icon: '', label: 'Dark' },
+    light:    { icon: '', label: 'Light' },
+    slate:    { icon: '', label: 'Slate' },
+    blossom:  { icon: '', label: 'Blossom' },
+    matcha:   { icon: '', label: 'Matcha' },
+    peach:    { icon: '', label: 'Peach' },
+    clay:     { icon: '', label: 'Clay' },
 };
 
 function applyTheme(theme) {
@@ -11737,13 +11784,13 @@ document.addEventListener('click', (e) => {
     applyTheme(valid.includes(saved) ? saved : 'dark');
 })();
 
-// ── Layout System ─────────────────────────────────────────────────────────────
-// NOTE: No top-level const/var for meta — defined inline to avoid TDZ issues
+//  Layout System 
+// NOTE: No top-level const/var for meta  defined inline to avoid TDZ issues
 
 function getLayoutMeta(layout) {
     var map = {
-        default: { icon: '⬜', label: 'Default' },
-        compact: { icon: '▪️',  label: 'Compact' },
+        default: { icon: '', label: 'Default' },
+        compact: { icon: '',  label: 'Compact' },
     };
     return map[layout] || map['default'];
 }
@@ -11808,144 +11855,144 @@ switchSection = function(sectionName) {
     }
 };
 
-// Init layout after DOM is ready — safe, no TDZ risk
+// Init layout after DOM is ready  safe, no TDZ risk
 document.addEventListener('DOMContentLoaded', function() {
     var saved = localStorage.getItem('adminLayout') || 'default';
     applyLayout(VALID_LAYOUTS.indexOf(saved) !== -1 ? saved : 'default');
 });
 
 
-// ─── WALKTHROUGH ──────────────────────────────────────────────────────────────
+//  WALKTHROUGH 
 const WT_STEPS = [
     {
-        icon: '👋',
+        icon: '',
         title: 'Welcome to LetsBunk Admin Panel',
         body: `You're about to set up the attendance system for your college.<br><br>
                This quick tour walks you through the <strong>exact order</strong> to configure everything so the system works correctly from day one.<br><br>
-               <div class="wt-tip">💡 Each step depends on the previous one — follow the order and you'll be done in minutes.</div>`,
+               <div class="wt-tip"> Each step depends on the previous one  follow the order and you'll be done in minutes.</div>`,
         section: null
     },
     {
-        icon: '⚙️',
-        title: 'Step 1 — Settings (Start Here)',
-        body: `Go to <span class="wt-tag">⚙️ Settings</span> first. Everything else depends on this.<br><br>
+        icon: '',
+        title: 'Step 1  Settings (Start Here)',
+        body: `Go to <span class="wt-tag"> Settings</span> first. Everything else depends on this.<br><br>
                Add your college's:<br>
-               • <strong>Branches</strong> — e.g. <em>cse comp, Data Science, ECE</em><br>
-               • <strong>Semesters</strong> — e.g. <em>1, 2, 3, 4, 5, 6, 7, 8</em><br>
-               • <strong>Departments</strong> — e.g. <em>Computer Science, Mathematics</em><br>
-               • <strong>Attendance Threshold</strong> — default 75%<br><br>
-               <div class="wt-warn">⚠️ Without branches and semesters, no other section will work — dropdowns will be empty.</div>`,
+                <strong>Branches</strong>  e.g. <em>cse comp, Data Science, ECE</em><br>
+                <strong>Semesters</strong>  e.g. <em>1, 2, 3, 4, 5, 6, 7, 8</em><br>
+                <strong>Departments</strong>  e.g. <em>Computer Science, Mathematics</em><br>
+                <strong>Attendance Threshold</strong>  default 75%<br><br>
+               <div class="wt-warn"> Without branches and semesters, no other section will work  dropdowns will be empty.</div>`,
         section: 'settings',
         nav: 'settings'
     },
     {
-        icon: '⏰',
-        title: 'Step 2 — Period Settings',
-        body: `Go to <span class="wt-tag">⏰ Period Settings</span> and set your college's actual class timings.<br><br>
+        icon: '',
+        title: 'Step 2  Period Settings',
+        body: `Go to <span class="wt-tag"> Period Settings</span> and set your college's actual class timings.<br><br>
                Example:<br>
-               <strong>P1:</strong> 09:00 – 09:50 &nbsp; <strong>P2:</strong> 09:50 – 10:40<br>
-               <strong>P3:</strong> 10:40 – 11:30 &nbsp; <strong>P4:</strong> 11:30 – 12:20<br>
-               <strong>P5:</strong> 12:20 – 13:10 &nbsp; <strong>P6:</strong> 13:10 – 14:00<br><br>
+               <strong>P1:</strong> 09:00  09:50 &nbsp; <strong>P2:</strong> 09:50  10:40<br>
+               <strong>P3:</strong> 10:40  11:30 &nbsp; <strong>P4:</strong> 11:30  12:20<br>
+               <strong>P5:</strong> 12:20  13:10 &nbsp; <strong>P6:</strong> 13:10  14:00<br><br>
                Click <strong>"Save & Apply to All Timetables"</strong> after setting times.<br><br>
-               <div class="wt-warn">⚠️ Wrong period times = wrong attendance. The system uses these times to identify which class is currently running.</div>`,
+               <div class="wt-warn"> Wrong period times = wrong attendance. The system uses these times to identify which class is currently running.</div>`,
         section: 'periods',
         nav: 'periods'
     },
     {
-        icon: '🏫',
-        title: 'Step 3 — Classrooms',
-        body: `Go to <span class="wt-tag">🏫 Classrooms</span> and add every classroom.<br><br>
+        icon: '',
+        title: 'Step 3  Classrooms',
+        body: `Go to <span class="wt-tag"> Classrooms</span> and add every classroom.<br><br>
                For each room you need:<br>
-               • <strong>Room Number</strong> — e.g. <em>A101</em><br>
-               • <strong>Building</strong> — e.g. <em>Block A</em><br>
-               • <strong>Capacity</strong><br>
-               • <strong>WiFi BSSID</strong> — the MAC address of the WiFi router in that room<br><br>
-               <div class="wt-warn">⚠️ The BSSID is critical — it's how the app verifies a student is physically in the correct classroom. Without it, check-in will fail.</div>
-               <div class="wt-tip">💡 To find a BSSID: connect to the classroom WiFi on your phone → use a WiFi analyzer app → copy the MAC address of that network.</div>`,
+                <strong>Room Number</strong>  e.g. <em>A101</em><br>
+                <strong>Building</strong>  e.g. <em>Block A</em><br>
+                <strong>Capacity</strong><br>
+                <strong>WiFi BSSID</strong>  the MAC address of the WiFi router in that room<br><br>
+               <div class="wt-warn"> The BSSID is critical  it's how the app verifies a student is physically in the correct classroom. Without it, check-in will fail.</div>
+               <div class="wt-tip"> To find a BSSID: connect to the classroom WiFi on your phone  use a WiFi analyzer app  copy the MAC address of that network.</div>`,
         section: 'classrooms',
         nav: 'classrooms'
     },
     {
-        icon: '📚',
-        title: 'Step 4 — Subjects',
-        body: `Go to <span class="wt-tag">📚 Subjects</span> and add every subject for each semester+branch.<br><br>
+        icon: '',
+        title: 'Step 4  Subjects',
+        body: `Go to <span class="wt-tag"> Subjects</span> and add every subject for each semester+branch.<br><br>
                Required for each subject:<br>
-               • <strong>Subject Code</strong> — e.g. <em>CS301</em><br>
-               • <strong>Subject Name</strong> — e.g. <em>Data Structures</em> (this appears in attendance records)<br>
-               • <strong>Semester + Branch</strong><br>
-               • <strong>Type</strong> — Theory / Lab / Practical<br><br>
+                <strong>Subject Code</strong>  e.g. <em>CS301</em><br>
+                <strong>Subject Name</strong>  e.g. <em>Data Structures</em> (this appears in attendance records)<br>
+                <strong>Semester + Branch</strong><br>
+                <strong>Type</strong>  Theory / Lab / Practical<br><br>
                Use <strong>Import CSV</strong> to add many subjects at once.<br><br>
-               <div class="wt-tip">💡 Subject names must match exactly what you'll put in the timetable — the calendar filter uses these names.</div>`,
+               <div class="wt-tip"> Subject names must match exactly what you'll put in the timetable  the calendar filter uses these names.</div>`,
         section: 'subjects',
         nav: 'subjects'
     },
     {
-        icon: '👨‍🏫',
-        title: 'Step 5 — Teachers',
-        body: `Go to <span class="wt-tag">👨‍🏫 Teachers</span> and add every teacher.<br><br>
+        icon: '',
+        title: 'Step 5  Teachers',
+        body: `Go to <span class="wt-tag"> Teachers</span> and add every teacher.<br><br>
                Required fields:<br>
-               • <strong>Employee ID</strong> — their login ID for the app<br>
-               • <strong>Name, Email, Password</strong><br>
-               • <strong>Department</strong> — from Step 1<br>
-               • <strong>Subjects Taught</strong> — select from the subjects you added in Step 4<br>
-               • <strong>Date of Birth</strong><br><br>
-               <div class="wt-tip">💡 Enable "Can Edit Timetable" for teachers who should be able to modify the class schedule.</div>`,
+                <strong>Employee ID</strong>  their login ID for the app<br>
+                <strong>Name, Email, Password</strong><br>
+                <strong>Department</strong>  from Step 1<br>
+                <strong>Subjects Taught</strong>  select from the subjects you added in Step 4<br>
+                <strong>Date of Birth</strong><br><br>
+               <div class="wt-tip"> Enable "Can Edit Timetable" for teachers who should be able to modify the class schedule.</div>`,
         section: 'teachers',
         nav: 'teachers'
     },
     {
-        icon: '👨‍🎓',
-        title: 'Step 6 — Students',
-        body: `Go to <span class="wt-tag">👨‍🎓 Students</span> and add all students.<br><br>
+        icon: '',
+        title: 'Step 6  Students',
+        body: `Go to <span class="wt-tag"> Students</span> and add all students.<br><br>
                Use <strong>Bulk Import (CSV)</strong> for large batches. Required columns:<br>
                <code style="font-size:12px;background:var(--bg-secondary);padding:2px 6px;border-radius:4px">enrollmentNo, name, email, branch, semester, dob</code><br><br>
-               • <strong>Enrollment No</strong> = their login ID in the app<br>
-               • <strong>Branch + Semester</strong> must match exactly what you added in Step 1<br>
-               • <strong>DOB</strong> = default password (format: YYYY-MM-DD)<br><br>
-               <div class="wt-warn">⚠️ Branch and semester must match Settings exactly — a typo means the student won't see the right timetable.</div>`,
+                <strong>Enrollment No</strong> = their login ID in the app<br>
+                <strong>Branch + Semester</strong> must match exactly what you added in Step 1<br>
+                <strong>DOB</strong> = default password (format: YYYY-MM-DD)<br><br>
+               <div class="wt-warn"> Branch and semester must match Settings exactly  a typo means the student won't see the right timetable.</div>`,
         section: 'students',
         nav: 'students'
     },
     {
-        icon: '📅',
-        title: 'Step 7 — Timetable',
-        body: `Go to <span class="wt-tag">📅 Timetable</span> and create a schedule for each Semester+Branch.<br><br>
+        icon: '',
+        title: 'Step 7  Timetable',
+        body: `Go to <span class="wt-tag"> Timetable</span> and create a schedule for each Semester+Branch.<br><br>
                For each day, assign:<br>
-               • <strong>Subject</strong> to each period slot<br>
-               • <strong>Teacher</strong> for that subject<br>
-               • <strong>Room</strong> from your classrooms list<br><br>
+                <strong>Subject</strong> to each period slot<br>
+                <strong>Teacher</strong> for that subject<br>
+                <strong>Room</strong> from your classrooms list<br><br>
                Use <strong>Auto Fill</strong> to quickly populate all slots, then adjust manually.<br><br>
-               <div class="wt-tip">💡 Create one timetable per Semester+Branch combination. Students and teachers will see their own timetable automatically based on their profile.</div>`,
+               <div class="wt-tip"> Create one timetable per Semester+Branch combination. Students and teachers will see their own timetable automatically based on their profile.</div>`,
         section: 'timetable',
         nav: 'timetable'
     },
     {
-        icon: '📆',
-        title: 'Step 8 — Academic Calendar (Optional)',
-        body: `Go to <span class="wt-tag">📆 Calendar</span> to add holidays, exam dates, and events.<br><br>
+        icon: '',
+        title: 'Step 8  Academic Calendar (Optional)',
+        body: `Go to <span class="wt-tag"> Calendar</span> to add holidays, exam dates, and events.<br><br>
                These appear in the student and teacher app calendar view. Not required for attendance to work but recommended.<br><br>
-               <div class="wt-tip">💡 Holidays marked here will show as 🏖️ badges on the calendar so students know there's no class.</div>`,
+               <div class="wt-tip"> Holidays marked here will show as  badges on the calendar so students know there's no class.</div>`,
         section: 'calendar',
         nav: 'calendar'
     },
     {
-        icon: '🔧',
-        title: 'Step 9 — Final Setup (One-Time)',
-        body: `Go to <span class="wt-tag">📆 Calendar</span> and run these three buttons in order:<br><br>
-               1. <strong>🔧 DB Migrate</strong> — fixes any data inconsistencies<br>
-               2. <strong>🔄 Backfill History</strong> — populates subject history so the calendar filter works<br>
-               3. <strong>🔁 Resync Attendance</strong> — recalculates all attendance summaries<br><br>
-               <div class="wt-tip">💡 These are safe to run multiple times. Run them again anytime you make bulk changes to students or timetables.</div>`,
+        icon: '',
+        title: 'Step 9  Final Setup (One-Time)',
+        body: `Go to <span class="wt-tag"> Calendar</span> and run these three buttons in order:<br><br>
+               1. <strong> DB Migrate</strong>  fixes any data inconsistencies<br>
+               2. <strong> Backfill History</strong>  populates subject history so the calendar filter works<br>
+               3. <strong> Resync Attendance</strong>  recalculates all attendance summaries<br><br>
+               <div class="wt-tip"> These are safe to run multiple times. Run them again anytime you make bulk changes to students or timetables.</div>`,
         section: 'calendar',
         nav: 'calendar'
     },
     {
-        icon: '🎉',
+        icon: '',
         title: 'You\'re All Set!',
         body: `Your LetsBunk system is configured and ready.<br><br>
                <strong>Students</strong> can now log in to the app with their enrollment number and DOB, start the timer when they're in class, and track their attendance.<br><br>
                <strong>Teachers</strong> can log in to view live attendance, send random rings, and manage their timetable.<br><br>
-               <div class="wt-tip">💡 You can restart this walkthrough anytime from <strong>⚙️ Settings → Restart Setup Walkthrough</strong>.</div>`,
+               <div class="wt-tip"> You can restart this walkthrough anytime from <strong> Settings  Restart Setup Walkthrough</strong>.</div>`,
         section: null
     }
 ];
@@ -11979,7 +12026,7 @@ function renderWalkthroughStep() {
     const prevBtn = document.getElementById('wtPrevBtn');
     const nextBtn = document.getElementById('wtNextBtn');
     prevBtn.style.display = isFirst ? 'none' : 'block';
-    nextBtn.textContent   = isLast ? '✅ Finish' : 'Next →';
+    nextBtn.textContent   = isLast ? ' Finish' : 'Next ';
     nextBtn.className     = isLast ? 'wt-btn wt-btn-finish' : 'wt-btn wt-btn-next';
 
     // Navigate to the relevant section
@@ -12120,13 +12167,13 @@ async function loadAttendanceHistory() {
 
     if (!semesterFilter || !courseFilter) {
         tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;">
-            <div style="font-size:40px;margin-bottom:12px;">📊</div>
+            <div style="font-size:40px;margin-bottom:12px;"></div>
             <h3>Select Branch and Semester</h3></td></tr>`;
         return;
     }
 
     tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;">
-        <div style="font-size:40px;margin-bottom:12px;">⏳</div>
+        <div style="font-size:40px;margin-bottom:12px;"></div>
         <h3>Loading...</h3></td></tr>`;
 
     try {
@@ -12179,9 +12226,9 @@ async function loadAttendanceHistory() {
         }
 
     } catch (err) {
-        console.error('❌ loadAttendanceHistory:', err);
+        console.error(' loadAttendanceHistory:', err);
         tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:#ef4444;">
-            ❌ Failed to load: ${err.message}</td></tr>`;
+             Failed to load: ${err.message}</td></tr>`;
         showNotification('Failed to load attendance history', 'error');
     }
 }
@@ -12214,7 +12261,7 @@ function renderAttendanceHistoryTable(students) {
         const statusBg    = pct >= 75 ? 'rgba(34,197,94,.15)' : 'rgba(239,68,68,.15)';
         const statusColor = pct >= 75 ? '#22c55e' : '#ef4444';
 
-        // Subject pills — max 3 shown
+        // Subject pills  max 3 shown
         const subjectPills = (sum.subjects || []).slice(0, 3).map(sub => {
             const c = sub.percentage >= 75 ? '#22c55e' : sub.percentage >= 50 ? '#f59e0b' : '#ef4444';
             return `<span title="${sub.subject}: ${sub.present}/${sub.total} (${sub.percentage}%)"
@@ -12222,7 +12269,7 @@ function renderAttendanceHistoryTable(students) {
                 font-size:11px;font-weight:600;background:rgba(0,217,255,.08);color:var(--text-secondary);
                 border:1px solid var(--border-color);white-space:nowrap;">
                 <span style="width:6px;height:6px;border-radius:50%;background:${c};flex-shrink:0;"></span>
-                ${sub.subject.length > 10 ? sub.subject.slice(0,10)+'…' : sub.subject}
+                ${sub.subject.length > 10 ? sub.subject.slice(0,10)+'' : sub.subject}
                 <span style="color:${c};">${sub.percentage}%</span>
             </span>`;
         }).join('');
@@ -12269,7 +12316,7 @@ function renderAttendanceHistoryTable(students) {
 
             <td style="padding:14px 16px;">
                 <div style="display:flex;flex-wrap:wrap;gap:4px;">
-                    ${subjectPills || '<span style="font-size:11px;color:var(--text-secondary);">—</span>'}
+                    ${subjectPills || '<span style="font-size:11px;color:var(--text-secondary);"></span>'}
                     ${extraSubjects}
                 </div>
             </td>
@@ -12295,3 +12342,1016 @@ async function exportAttendanceReport() {
     if (end)   url += `&endDate=${end}`;
     window.open(url, '_blank');
 }
+
+
+// ========================================
+// ATTENDANCE SHOWCASE - Analytics Dashboard (CORRECTED)
+// ========================================
+
+let showcaseData = {
+    students: [],
+    branches: [],
+    semesters: [],
+    teachers: [],
+    subjects: [],
+    attendanceRecords: []
+};
+
+async function initAttendanceShowcase() {
+    console.log('Initializing Attendance Showcase...');
+    await loadShowcaseBranches();
+    await loadShowcaseSemesters();
+    await loadShowcaseTeachers();
+    setupShowcaseViewSwitcher();
+    restoreShowcaseSelections();
+    attachSubjectViewListeners();
+    console.log('Attendance Showcase initialized');
+}
+
+// Save a showcase dropdown value to localStorage
+function _saveShowcaseSel(key, value) {
+    try { localStorage.setItem('showcase_' + key, value); } catch(_) {}
+}
+
+// Restore all saved dropdown selections after dropdowns are populated
+function restoreShowcaseSelections() {
+    const ids = [
+        'showcaseBranch', 'showcaseSemester',
+        'subjectViewBranch', 'subjectViewSemester', 'subjectViewSelect',
+        'teacherViewSelect', 'teacherViewBranch', 'teacherViewSemester'
+    ];
+    ids.forEach(id => {
+        const saved = localStorage.getItem('showcase_' + id);
+        const el = document.getElementById(id);
+        if (saved && el) el.value = saved;
+    });
+    // Restore active view tab
+    const savedView = localStorage.getItem('showcase_activeView') || 'student';
+    document.querySelectorAll('.showcase-view-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.showcase-view').forEach(v => v.style.display = 'none');
+    const activeBtn = document.querySelector('.showcase-view-btn[data-view="' + savedView + '"]');
+    const activeView = document.getElementById(savedView + 'View');
+    if (activeBtn) activeBtn.classList.add('active');
+    if (activeView) activeView.style.display = 'block';
+
+    // If subject view has branch+semester already selected, populate subjects now
+    const svBranch = document.getElementById('subjectViewBranch');
+    const svSemester = document.getElementById('subjectViewSemester');
+    if (svBranch && svBranch.value && svSemester && svSemester.value) {
+        loadSubjectsForShowcase();
+    }
+}
+
+async function loadShowcaseBranches() {
+    try {
+        const response = await fetch(`${SERVER_URL}/api/config/branches`);
+        const data = await response.json();
+        if (data.success) {
+            showcaseData.branches = data.branches;
+            const branchSelects = ['showcaseBranch', 'subjectViewBranch', 'teacherViewBranch'];
+            branchSelects.forEach(selectId => {
+                const select = document.getElementById(selectId);
+                if (select) {
+                    select.innerHTML = selectId === 'teacherViewBranch'
+                        ? '<option value="">All Branches</option>'
+                        : '<option value="">Select Branch</option>';
+                    data.branches.forEach(branch => {
+                        const option = document.createElement('option');
+                        option.value = branch.name || branch;
+                        option.textContent = branch.displayName || branch.name || branch;
+                        select.appendChild(option);
+                    });
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Error loading branches:', error);
+    }
+}
+
+async function loadShowcaseSemesters() {
+    try {
+        const response = await fetch(`${SERVER_URL}/api/config/semesters`);
+        const data = await response.json();
+        if (data.success) {
+            showcaseData.semesters = data.semesters;
+            const semesterSelects = ['showcaseSemester', 'subjectViewSemester', 'teacherViewSemester'];
+            semesterSelects.forEach(selectId => {
+                const select = document.getElementById(selectId);
+                if (select) {
+                    select.innerHTML = selectId === 'teacherViewSemester'
+                        ? '<option value="">All Semesters</option>'
+                        : '<option value="">Select Semester</option>';
+                    data.semesters.forEach(semester => {
+                        const option = document.createElement('option');
+                        option.value = semester;
+                        option.textContent = `Semester ${semester}`;
+                        select.appendChild(option);
+                    });
+                }
+            });
+        }
+    } catch (error) {
+        console.error('Error loading semesters:', error);
+    }
+}
+
+async function loadShowcaseTeachers() {
+    try {
+        const response = await fetch(`${SERVER_URL}/api/teachers`);
+        const data = await response.json();
+        if (data.success) {
+            showcaseData.teachers = data.teachers;
+            const select = document.getElementById('teacherViewSelect');
+            if (select) {
+                select.innerHTML = '<option value="">Select Teacher</option>';
+                data.teachers.forEach(teacher => {
+                    const option = document.createElement('option');
+                    // period records store teacher field as the name string
+                    option.value = teacher.name;
+                    option.textContent = `${teacher.name} (${teacher.employeeId})`;
+                    select.appendChild(option);
+                });
+                // Restore saved selection
+                const saved = localStorage.getItem('showcase_teacherViewSelect');
+                if (saved) select.value = saved;
+            }
+        }
+    } catch (error) {
+        console.error('Error loading teachers:', error);
+    }
+}
+
+function setupShowcaseViewSwitcher() {
+    document.querySelectorAll('.showcase-view-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            document.querySelectorAll('.showcase-view-btn').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.showcase-view').forEach(v => v.style.display = 'none');
+            e.target.classList.add('active');
+            const view = e.target.dataset.view;
+            document.getElementById(view + 'View').style.display = 'block';
+            _saveShowcaseSel('activeView', view);
+        });
+    });
+
+    // Persist dropdown selections on change
+    const persistIds = [
+        'showcaseBranch', 'showcaseSemester',
+        'subjectViewBranch', 'subjectViewSemester', 'subjectViewSelect',
+        'teacherViewSelect', 'teacherViewBranch', 'teacherViewSemester'
+    ];
+    persistIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', () => _saveShowcaseSel(id, el.value));
+    });
+}
+
+// ========== STUDENT VIEW ==========
+async function loadShowcaseStudents() {
+    const branch = document.getElementById('showcaseBranch').value;
+    const semester = document.getElementById('showcaseSemester').value;
+    if (!branch || !semester) {
+        alert('Please select both branch and semester');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`${SERVER_URL}/api/students?branch=${encodeURIComponent(branch)}&semester=${semester}`);
+        const data = await response.json();
+        if (data.success) {
+            const container = document.getElementById('studentListContainer');
+            container.innerHTML = '<div style="text-align: center; padding: 20px;">Loading attendance data...</div>';
+            const studentItems = [];
+            
+            for (const student of data.students) {
+                try {
+                    const attendanceResponse = await fetch(`${SERVER_URL}/api/attendance/summary/${student.enrollmentNo}`);
+                    const attendanceData = await attendanceResponse.json();
+                    let percentage = 0;
+                    // summary endpoint returns data.summary.overallPercentage
+                    if (attendanceData.success && attendanceData.summary) {
+                        percentage = attendanceData.summary.overallPercentage || 0;
+                    }
+                    studentItems.push({ student, percentage, attendanceData });
+                } catch (error) {
+                    console.error(`Error loading attendance for ${student.enrollmentNo}:`, error);
+                    studentItems.push({ student, percentage: 0, attendanceData: null });
+                }
+            }
+            renderStudentList(studentItems);
+        }
+    } catch (error) {
+        console.error('Error loading students:', error);
+        alert('Error loading students');
+    }
+}
+
+function renderStudentList(studentItems) {
+    const container = document.getElementById('studentListContainer');
+    if (studentItems.length === 0) {
+        container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No students found</div>';
+        return;
+    }
+    
+    let html = '<div class="showcase-student-grid">';
+    studentItems.forEach(item => {
+        const { student, percentage } = item;
+        const percentageColor = percentage >= 75 ? '#28a745' : percentage >= 50 ? '#ffc107' : '#dc3545';
+        html += `
+            <div class="showcase-student-card">
+                <div class="student-card-header">
+                    <div class="student-info">
+                        <h4>${student.name}</h4>
+                        <p>${student.enrollmentNo}</p>
+                    </div>
+                    <div class="student-percentage" style="color: ${percentageColor}; font-size: 28px; font-weight: bold;">
+                        ${percentage}%
+                    </div>
+                </div>
+                <div class="student-card-actions">
+                    <button class="btn btn-small btn-primary" onclick="showStudentCalendar('${student.enrollmentNo}', '${student.name}')">
+                         View Calendar
+                    </button>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+    container.innerHTML = html;
+}
+
+async function showStudentCalendar(enrollmentNo, studentName) {
+    try {
+        const response = await fetch(`${SERVER_URL}/api/attendance/student/${enrollmentNo}/dates`);
+        const data = await response.json();
+        if (data.success) {
+            // data.dates = array of objects: { date: "2026-04-05T00:00:00.000Z", status: "present"|"absent", ... }
+            const dateObjects = data.dates || [];
+            const presentSet = new Set();
+            const absentSet  = new Set();
+            dateObjects.forEach(d => {
+                if (!d || !d.date) return;
+                const dt = new Date(d.date);
+                if (isNaN(dt.getTime())) return;
+                const key = dt.toISOString().split('T')[0]; // "YYYY-MM-DD"
+                if (d.status === 'present') presentSet.add(key);
+                else absentSet.add(key);
+            });
+            const calendarHtml = buildAttendanceCalendar(presentSet, absentSet, enrollmentNo);
+            document.getElementById('calendarTitle').textContent = `${studentName}  Attendance Calendar`;
+            document.getElementById('calendarContainer').innerHTML = calendarHtml || '<p style="padding:20px;color:var(--text-secondary)">No attendance data found.</p>';
+            document.getElementById('calendarModal').style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error loading calendar:', error);
+        alert('Error loading calendar');
+    }
+}
+
+function buildAttendanceCalendar(presentSet, absentSet, enrollmentNo) {
+    const allDates = [...presentSet, ...absentSet];
+    if (allDates.length === 0) return '<p style="padding:20px;color:var(--text-secondary)">No attendance records found.</p>';
+
+    const months = [...new Set(allDates.map(d => d.slice(0, 7)))].sort();
+    let html = '';
+
+    months.forEach(monthKey => {
+        const [year, month] = monthKey.split('-');
+        const monthNum = parseInt(month, 10);
+        const yearNum  = parseInt(year,  10);
+
+        html += `<div class="calendar-month"><h4>${new Date(yearNum, monthNum - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h4><div class="calendar-grid">`;
+        ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(d => { html += `<div class="calendar-day-header">${d}</div>`; });
+
+        const firstDay = new Date(yearNum, monthNum - 1, 1);
+        const lastDay  = new Date(yearNum, monthNum, 0);
+
+        for (let i = 0; i < firstDay.getDay(); i++) {
+            html += `<div class="calendar-day other-month"></div>`;
+        }
+        for (let d = 1; d <= lastDay.getDate(); d++) {
+            const ds = `${year}-${month}-${String(d).padStart(2, '0')}`;
+            let cls  = 'no-class';
+            if (presentSet.has(ds))     cls = 'present';
+            else if (absentSet.has(ds)) cls = 'absent';
+            const click = cls !== 'no-class' ? `onclick="showPeriodBreakdown('${enrollmentNo}', '${ds}')"` : '';
+            html += `<div class="calendar-day ${cls}" ${click}>${d}</div>`;
+        }
+        html += `</div></div>`;
+    });
+    return html;
+}
+
+async function showPeriodBreakdown(enrollmentNo, date) {
+    // Show skeleton immediately
+    document.getElementById('periodTitle').textContent = `Period Breakdown - ${new Date(date).toLocaleDateString()}`;
+    document.getElementById('periodListContainer').innerHTML = `
+        <div class="period-breakdown">
+            ${Array.from({length: 5}, () => `
+            <div class="period-item" style="border-left:4px solid var(--border);">
+                <div class="period-info" style="flex:1;">
+                    <div class="skeleton sk-row-cell" style="width:120px;margin-bottom:6px;"></div>
+                    <div class="skeleton sk-row-cell" style="width:180px;height:12px;"></div>
+                </div>
+                <div class="skeleton sk-row-cell" style="width:60px;height:32px;border-radius:6px;"></div>
+            </div>`).join('')}
+        </div>`;
+    document.getElementById('periodModal').style.display = 'block';
+
+    try {
+        // 1. Get student info to know their semester/branch
+        const studentRes = await fetch(`${SERVER_URL}/api/students?enrollmentNo=${enrollmentNo}`);
+        const studentData = await studentRes.json();
+        const student = studentData.students?.[0] || studentData.student || null;
+        const semester = student?.semester || '';
+        const branch   = student?.branch   || '';
+
+        if (!semester || !branch) throw new Error('Could not determine student semester/branch');
+
+        // 2. Fetch in parallel: all classes held that day + student's period records + audit trail
+        const [historyRes, periodRes, auditRes, recordRes] = await Promise.all([
+            fetch(`${SERVER_URL}/api/timetable-history/day?date=${date}&semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`),
+            fetch(`${SERVER_URL}/api/attendance/period-report?enrollmentNo=${enrollmentNo}&date=${date}&limit=20`),
+            fetch(`${SERVER_URL}/api/attendance/audit-trail?enrollmentNo=${enrollmentNo}&date=${date}&limit=50`),
+            fetch(`${SERVER_URL}/api/attendance/records?studentId=${enrollmentNo}`)
+        ]);
+
+        const historyData = await historyRes.json();
+        const periodData  = await periodRes.json();
+        const auditData   = await auditRes.json();
+        const recordData  = await recordRes.json();
+
+        // 3. Build lookup maps
+        // PeriodAttendance records keyed by period
+        const periodMap = {};
+        (periodData.records || []).forEach(r => { periodMap[r.period] = r; });
+
+        // Audit records keyed by period — flag if modified during class time
+        const auditMap = {};
+        (auditData.records || []).forEach(a => {
+            if (!auditMap[a.period]) auditMap[a.period] = [];
+            auditMap[a.period].push(a);
+        });
+
+        // Per-period time data from AttendanceRecord.lectures
+        const lectureMap = {};
+        if (recordData.success && recordData.records) {
+            const dayRecord = recordData.records.find(r => {
+                const rd = new Date(r.date);
+                return !isNaN(rd.getTime()) && rd.toISOString().split('T')[0] === date;
+            });
+            if (dayRecord?.lectures) {
+                dayRecord.lectures.forEach(l => { if (l.period) lectureMap[l.period] = l; });
+            }
+        }
+
+        // 4. Use TimetableHistory as the master list of classes held that day
+        //    Fall back to PeriodAttendance records if TimetableHistory is empty (older data)
+        let classesList = historyData.periods || [];
+        if (classesList.length === 0) {
+            // Fallback: build from PeriodAttendance records
+            classesList = Object.values(periodMap).map(r => ({
+                period: r.period, subject: r.subject,
+                teacher: r.teacher, teacherName: r.teacherName,
+                room: r.room, startTime: null, endTime: null
+            }));
+        }
+
+        if (classesList.length === 0) {
+            document.getElementById('periodListContainer').innerHTML =
+                '<p style="text-align:center;color:var(--text-secondary);padding:20px;">No classes were held on this day.</p>';
+            return;
+        }
+
+        // 5. Render
+        let html = '<div class="period-breakdown">';
+        let presentCount = 0;
+
+        classesList.forEach(cls => {
+            const rec         = periodMap[cls.period];
+            const status      = rec ? rec.status : 'absent';
+            const isPresent   = status === 'present';
+            if (isPresent) presentCount++;
+
+            const statusColor = isPresent ? '#28a745' : '#dc3545';
+            const statusIcon  = isPresent ? '✓' : '✗';
+
+            // Time percentage
+            const lec         = lectureMap[cls.period];
+            const attendedSec = lec ? lec.attended : (rec?.timerSeconds || 0);
+            const totalSec    = lec ? lec.total : (
+                cls.startTime && cls.endTime
+                    ? (timeStrToMinutes(cls.endTime) - timeStrToMinutes(cls.startTime)) * 60
+                    : 3600
+            );
+            const timePct     = totalSec > 0 ? Math.min(100, Math.round((attendedSec / totalSec) * 100)) : 0;
+            const attendedMin = Math.floor(attendedSec / 60);
+            const totalMin    = Math.floor(totalSec    / 60);
+            const pctColor    = timePct >= 75 ? '#28a745' : timePct >= 50 ? '#ffc107' : '#dc3545';
+
+            // Audit / edit warning
+            const audits = auditMap[cls.period] || [];
+            const duringClassEdits = audits.filter(a => {
+                if (!cls.startTime || !cls.endTime) return false;
+                const editTime = new Date(a.modifiedAt);
+                const [sh, sm] = cls.startTime.split(':').map(Number);
+                const [eh, em] = cls.endTime.split(':').map(Number);
+                const editMins = editTime.getHours() * 60 + editTime.getMinutes();
+                return editMins >= sh * 60 + sm && editMins <= eh * 60 + em;
+            });
+            const hasEditWarning = duringClassEdits.length > 0;
+            const editBadge = hasEditWarning
+                ? `<span title="${duringClassEdits.map(a => `Edited by ${a.modifierName} (${a.modifierRole}): ${a.oldStatus}→${a.newStatus}`).join('\n')}"
+                    style="font-size:10px;background:#f59e0b22;color:#f59e0b;border:1px solid #f59e0b55;
+                    border-radius:4px;padding:1px 5px;margin-left:6px;cursor:help;">⚠ edited</span>`
+                : '';
+
+            const timeLabel = cls.startTime && cls.endTime
+                ? `<span style="font-size:11px;color:var(--text-secondary);margin-left:8px;">${cls.startTime}–${cls.endTime}</span>`
+                : '';
+
+            html += `
+                <div class="period-item" style="border-left:4px solid ${statusColor};">
+                    <div class="period-info" style="flex:1;">
+                        <h5>${cls.period}: ${cls.subject || ''}${timeLabel}${editBadge}</h5>
+                        <p>${cls.teacherName || cls.teacher || 'No teacher'} &nbsp;&nbsp; Room ${cls.room || 'N/A'}</p>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <div style="text-align:right;">
+                            <div style="font-size:13px;font-weight:700;color:${pctColor};">${timePct}%</div>
+                            <div style="font-size:11px;color:var(--text-secondary);">${attendedMin}/${totalMin} min</div>
+                        </div>
+                        <div class="period-status" style="color:${statusColor};font-size:18px;">${statusIcon}</div>
+                    </div>
+                </div>`;
+        });
+
+        const percentage = Math.round((presentCount / classesList.length) * 100);
+        const pColor = percentage >= 75 ? '#28a745' : percentage >= 50 ? '#ffc107' : '#dc3545';
+        html += `<div style="margin-top:16px;padding:15px;background:var(--bg-hover);border-radius:8px;
+                    display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+            <span style="color:var(--text-secondary);font-size:13px;">Periods attended</span>
+            <span style="font-size:20px;font-weight:700;color:${pColor};">${presentCount}/${classesList.length} &nbsp;=&nbsp; ${percentage}%</span>
+        </div>`;
+        html += '</div>';
+
+        document.getElementById('periodListContainer').innerHTML = html;
+
+    } catch (error) {
+        console.error('Error loading period breakdown:', error);
+        document.getElementById('periodListContainer').innerHTML =
+            `<div style="padding:20px;text-align:center;color:#dc3545;">
+                <div style="font-size:32px;margin-bottom:8px;">⚠</div>
+                <div style="font-weight:600;">Failed to load breakdown</div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-top:4px;">${error.message}</div>
+                <button class="btn btn-primary" style="margin-top:12px;" onclick="showPeriodBreakdown('${enrollmentNo}','${date}')">Retry</button>
+            </div>`;
+    }
+}
+
+// Helper: "HH:MM" → total minutes
+function timeStrToMinutes(t) {
+    if (!t) return 0;
+    const [h, m] = t.split(':').map(Number);
+    return h * 60 + (m || 0);
+}
+
+// ========== SUBJECT VIEW ==========
+async function loadShowcaseSubject() {
+    const branch   = document.getElementById('subjectViewBranch').value;
+    const semester = document.getElementById('subjectViewSemester').value;
+    const subject  = document.getElementById('subjectViewSelect').value;
+    const fromDate = document.getElementById('subjectViewFrom').value;   // YYYY-MM-DD or ''
+    const toDate   = document.getElementById('subjectViewTo').value;     // YYYY-MM-DD or ''
+
+    if (!branch || !semester || !subject) {
+        alert('Please select branch, semester, and subject');
+        return;
+    }
+
+    const container = document.getElementById('subjectCalendarContainer');
+    container.innerHTML = `
+        <div class="skeleton-calendar-wrap">
+            <div class="skeleton sk-month-title"></div>
+            <div class="sk-grid">
+                ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(d => `<div class="skeleton sk-cell sk-header"></div>`).join('')}
+                ${Array.from({length: 35}, () => `<div class="skeleton sk-cell"></div>`).join('')}
+            </div>
+            <div class="skeleton sk-month-title" style="width:120px;"></div>
+            <div class="sk-grid">
+                ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(() => `<div class="skeleton sk-cell sk-header"></div>`).join('')}
+                ${Array.from({length: 28}, () => `<div class="skeleton sk-cell"></div>`).join('')}
+            </div>
+        </div>`;
+
+    try {
+        const response = await fetch(`${SERVER_URL}/api/attendance/period-report?limit=10000`);
+        const data = await response.json();
+
+        if (!data.success || !data.records) {
+            container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-secondary);">No data available</div>';
+            return;
+        }
+
+        // Filter records for this subject/branch/semester
+        let subjectRecords = data.records.filter(r =>
+            r.subject === subject && r.semester === semester && r.branch === branch
+        );
+
+        // Apply from/to date filter
+        if (fromDate) subjectRecords = subjectRecords.filter(r => {
+            const dt = new Date(r.date);
+            return !isNaN(dt.getTime()) && dt.toISOString().split('T')[0] >= fromDate;
+        });
+        if (toDate) subjectRecords = subjectRecords.filter(r => {
+            const dt = new Date(r.date);
+            return !isNaN(dt.getTime()) && dt.toISOString().split('T')[0] <= toDate;
+        });
+
+        if (subjectRecords.length === 0) {
+            container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-secondary);">No records found for this subject</div>';
+            return;
+        }
+
+        // Get unique dates when subject was taught (YYYY-MM-DD)
+        const taughtDates = new Set(subjectRecords.map(r => {
+            const dt = new Date(r.date);
+            return isNaN(dt.getTime()) ? null : dt.toISOString().split('T')[0];
+        }).filter(Boolean));
+
+        container.innerHTML = buildSubjectCalendar(taughtDates, subject, branch, semester);
+
+    } catch (error) {
+        console.error('Error loading subject:', error);
+        container.innerHTML = '<div style="text-align:center;padding:40px;color:red;">Error loading data</div>';
+    }
+}
+
+function buildSubjectCalendar(taughtDates, subject, branch, semester) {
+    if (taughtDates.size === 0) return '<p style="padding:20px;color:var(--text-secondary)">No classes found.</p>';
+
+    // Group by month
+    const monthSet = new Set([...taughtDates].map(d => d.slice(0, 7)));
+    const months   = [...monthSet].sort();
+
+    let html = `
+        <div style="margin-bottom:18px;">
+            <h4 style="color:var(--text-primary);margin:0 0 6px 0;">${subject}</h4>
+            <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--text-secondary);">
+                <span><span style="display:inline-block;width:12px;height:12px;background:#28a745;border-radius:3px;margin-right:4px;vertical-align:middle;"></span>Subject held &mdash; tap to see attendance</span>
+                <span><span style="display:inline-block;width:12px;height:12px;background:var(--bg-hover);border-radius:3px;margin-right:4px;vertical-align:middle;border:1px solid var(--border);"></span>No class</span>
+            </div>
+        </div>
+        <div class="showcase-calendar-grid">
+    `;
+
+    months.forEach(monthKey => {
+        const [year, month] = monthKey.split('-');
+        const monthNum = parseInt(month, 10);
+        const yearNum  = parseInt(year, 10);
+        const firstDay = new Date(yearNum, monthNum - 1, 1);
+        const lastDay  = new Date(yearNum, monthNum, 0);
+
+        html += `<div class="calendar-month">
+            <h4>${firstDay.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</h4>
+            <div class="calendar-grid">`;
+
+        ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(d => {
+            html += `<div class="calendar-day-header">${d}</div>`;
+        });
+
+        // Leading empty cells
+        for (let i = 0; i < firstDay.getDay(); i++) {
+            html += `<div class="calendar-day other-month"></div>`;
+        }
+
+        for (let d = 1; d <= lastDay.getDate(); d++) {
+            const ds = `${year}-${month}-${String(d).padStart(2, '0')}`;
+            if (taughtDates.has(ds)) {
+                // Subject was taught Ã¢â‚¬â€ green, clickable
+                html += `<div class="calendar-day present" style="cursor:pointer;" onclick="showSubjectDateAttendance('${ds}','${subject}','${branch}','${semester}')" title="Tap to see attendance">${d}</div>`;
+            } else {
+                // No class Ã¢â‚¬â€ neutral, not clickable
+                html += `<div class="calendar-day no-class">${d}</div>`;
+            }
+        }
+
+        html += `</div></div>`;
+    });
+
+    html += '</div>';
+    return html;
+}
+
+// Pagination state for subject date modal
+let _subjectDatePage = 1;
+const _subjectDatePageSize = 15;
+let _subjectDateAllRows = [];
+let _subjectDateContext = {};
+
+async function showSubjectDateAttendance(date, subject, branch, semester) {
+    document.getElementById('subjectDateTitle').textContent = `${subject}`;
+    document.getElementById('subjectDateContent').innerHTML = `
+        <div class="skeleton-stats">
+            ${Array.from({length: 6}, () => `<div class="skeleton sk-stat"></div>`).join('')}
+        </div>
+        <table class="skeleton-table">
+            <tbody>
+                ${Array.from({length: 8}, (_, i) => `
+                <tr>
+                    <td style="width:36px;"><div class="skeleton sk-row-cell" style="width:18px;"></div></td>
+                    <td><div class="skeleton sk-row-cell" style="width:${70 + (i % 4) * 20}px;"></div></td>
+                    <td><div class="skeleton sk-row-cell" style="width:60px;"></div></td>
+                    <td style="text-align:center;"><div class="skeleton sk-row-cell" style="width:50px;margin:0 auto;"></div></td>
+                    <td style="text-align:center;"><div class="skeleton sk-avatar"></div></td>
+                    <td style="text-align:center;"><div class="skeleton sk-row-cell" style="width:40px;margin:0 auto;"></div></td>
+                </tr>`).join('')}
+            </tbody>
+        </table>`;
+    document.getElementById('subjectDateModal').style.display = 'block';
+
+    try {
+        // Fetch students + all period records in parallel
+        const [studentsRes, periodsRes] = await Promise.all([
+            fetch(`${SERVER_URL}/api/students?branch=${encodeURIComponent(branch)}&semester=${encodeURIComponent(semester)}`),
+            fetch(`${SERVER_URL}/api/attendance/period-report?limit=10000`)
+        ]);
+        const studentsData = await studentsRes.json();
+        const periodsData  = await periodsRes.json();
+
+        if (!studentsData.success) {
+            document.getElementById('subjectDateContent').innerHTML = '<p style="padding:20px;color:red;">Failed to load students.</p>';
+            return;
+        }
+
+        const allStudents = studentsData.students || [];
+        const allRecords  = periodsData.records   || [];
+
+        // Records for this subject on this date
+        const dayRecords = allRecords.filter(r => {
+            if (r.subject !== subject || r.semester !== semester || r.branch !== branch) return false;
+            const dt = new Date(r.date);
+            return !isNaN(dt.getTime()) && dt.toISOString().split('T')[0] === date;
+        });
+
+        // A student is "present" on this day if ANY record for them is present
+        const presentOnDay = new Set(
+            dayRecords.filter(r => r.status === 'present').map(r => r.enrollmentNo)
+        );
+        const appearedOnDay = new Set(dayRecords.map(r => r.enrollmentNo));
+
+        // Overall subject stats per student (all dates)
+        const subjectRecords = allRecords.filter(r =>
+            r.subject === subject && r.semester === semester && r.branch === branch
+        );
+        const totByStudent = {};
+        const preByStudent = {};
+        subjectRecords.forEach(r => {
+            // Count unique dates per student (not periods)
+            const dt = new Date(r.date);
+            if (isNaN(dt.getTime())) return;
+            const dk = dt.toISOString().split('T')[0];
+            const key = `${r.enrollmentNo}__${dk}`;
+            if (!totByStudent[key]) {
+                totByStudent[r.enrollmentNo] = (totByStudent[r.enrollmentNo] || 0) + 1;
+                if (r.status === 'present') {
+                    preByStudent[r.enrollmentNo] = (preByStudent[r.enrollmentNo] || 0) + 1;
+                }
+            }
+        });
+
+        // Build rows Ã¢â‚¬â€ every student in the class
+        _subjectDateAllRows = allStudents.map(s => {
+            const tot = totByStudent[s.enrollmentNo] || 0;
+            const pre = preByStudent[s.enrollmentNo] || 0;
+            const pct = tot > 0 ? Math.round((pre / tot) * 100) : 0;
+            const status = presentOnDay.has(s.enrollmentNo) ? 'present'
+                         : appearedOnDay.has(s.enrollmentNo) ? 'absent'
+                         : 'absent';
+            return { name: s.name, enrollmentNo: s.enrollmentNo, status, subjectPct: pct, subjectPre: pre, subjectTot: tot };
+        });
+
+        const presentCount = _subjectDateAllRows.filter(r => r.status === 'present').length;
+        const total        = _subjectDateAllRows.length;
+        const pct          = total > 0 ? Math.round((presentCount / total) * 100) : 0;
+        const [y, m, d]    = date.split('-');
+        const formattedDate = new Date(+y, +m - 1, +d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+
+        _subjectDateContext = { date, subject, branch, semester, formattedDate };
+        document.getElementById('subjectDateTitle').textContent = `${subject} \u2014 ${formattedDate}`;
+
+        // Populate the subject switcher dropdown in the modal
+        const switcher = document.getElementById('modalSubjectSwitcher');
+        if (switcher) {
+            const subjectSelect = document.getElementById('subjectViewSelect');
+            switcher.innerHTML = '';
+            if (subjectSelect) {
+                Array.from(subjectSelect.options).forEach(opt => {
+                    if (!opt.value) return;
+                    const o = document.createElement('option');
+                    o.value = opt.value;
+                    o.textContent = opt.textContent;
+                    if (opt.value === subject) o.selected = true;
+                    switcher.appendChild(o);
+                });
+            }
+        }
+
+        _subjectDatePage = 1;
+        renderSubjectDatePage(presentCount, total, pct, branch, semester);
+
+    } catch (error) {
+        console.error('Error loading subject date attendance:', error);
+        document.getElementById('subjectDateContent').innerHTML = '<p style="padding:20px;color:red;">Error loading data.</p>';
+    }
+}
+
+function renderSubjectDatePage(presentCount, total, pct, branch, semester) {
+    const { subject, formattedDate } = _subjectDateContext;
+    const pageSize   = _subjectDatePageSize;
+    const totalPages = Math.max(1, Math.ceil(_subjectDateAllRows.length / pageSize));
+    const page       = Math.min(_subjectDatePage, totalPages);
+    const start      = (page - 1) * pageSize;
+    const pageRows   = _subjectDateAllRows.slice(start, start + pageSize);
+    const pctColor   = pct >= 75 ? '#28a745' : pct >= 50 ? '#ffc107' : '#dc3545';
+
+    let html = `
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:18px;">
+            <div class="stat-card" style="flex:1;min-width:70px;"><span class="stat-label">Branch</span><span class="stat-value" style="font-size:13px;">${branch}</span></div>
+            <div class="stat-card" style="flex:1;min-width:70px;"><span class="stat-label">Sem</span><span class="stat-value" style="font-size:13px;">${semester}</span></div>
+            <div class="stat-card" style="flex:1;min-width:70px;"><span class="stat-label">Total</span><span class="stat-value">${total}</span></div>
+            <div class="stat-card" style="flex:1;min-width:70px;"><span class="stat-label">Present</span><span class="stat-value" style="color:#28a745;">${presentCount}</span></div>
+            <div class="stat-card" style="flex:1;min-width:70px;"><span class="stat-label">Absent</span><span class="stat-value" style="color:#dc3545;">${total - presentCount}</span></div>
+            <div class="stat-card" style="flex:1;min-width:70px;"><span class="stat-label">Day %</span><span class="stat-value" style="color:${pctColor};">${pct}%</span></div>
+        </div>
+        <table class="data-table" style="width:100%;">
+            <thead><tr>
+                <th style="width:36px;">#</th>
+                <th>Student Name</th>
+                <th>Enroll No</th>
+                <th style="text-align:center;">Today</th>
+                <th style="text-align:center;">Mark</th>
+                <th style="text-align:center;">Subject %</th>
+            </tr></thead>
+            <tbody>
+    `;
+
+    pageRows.forEach((row, i) => {
+        const isP  = row.status === 'present';
+        const sc   = isP ? '#28a745' : '#dc3545';
+        const mark = isP ? 'P' : 'A';
+        const bg   = isP ? 'rgba(40,167,69,0.06)' : 'rgba(220,53,69,0.06)';
+        const spc  = row.subjectPct >= 75 ? '#28a745' : row.subjectPct >= 50 ? '#ffc107' : '#dc3545';
+        html += `<tr style="background:${bg};">
+            <td style="color:var(--text-secondary);font-size:12px;">${start + i + 1}</td>
+            <td style="font-weight:500;">${row.name}</td>
+            <td style="color:var(--text-secondary);font-size:13px;">${row.enrollmentNo}</td>
+            <td style="text-align:center;color:${sc};font-weight:600;font-size:13px;">${row.status.toUpperCase()}</td>
+            <td style="text-align:center;"><span style="display:inline-block;width:26px;height:26px;line-height:26px;border-radius:50%;background:${sc};color:#fff;font-weight:700;font-size:12px;">${mark}</span></td>
+            <td style="text-align:center;"><span style="font-weight:700;color:${spc};">${row.subjectPct}%</span><span style="font-size:11px;color:var(--text-secondary);display:block;">${row.subjectPre}/${row.subjectTot}</span></td>
+        </tr>`;
+    });
+
+    html += `</tbody></table>`;
+
+    if (totalPages > 1) {
+        html += `<div style="display:flex;align-items:center;justify-content:space-between;margin-top:16px;flex-wrap:wrap;gap:8px;">
+            <span style="color:var(--text-secondary);font-size:13px;">Showing ${start + 1}\u2013${Math.min(start + pageSize, _subjectDateAllRows.length)} of ${_subjectDateAllRows.length}</span>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">`;
+        for (let p = 1; p <= totalPages; p++) {
+            const active = p === page;
+            html += `<button onclick="_subjectDateGoPage(${p},${presentCount},${total},${pct},'${branch}','${semester}')"
+                style="padding:5px 11px;border-radius:6px;border:1px solid var(--border);cursor:pointer;font-weight:${active?'700':'400'};
+                background:${active?'var(--primary)':'var(--bg-card)'};color:${active?'#fff':'var(--text-primary)'};">${p}</button>`;
+        }
+        html += `</div></div>`;
+    }
+
+    document.getElementById('subjectDateContent').innerHTML = html;
+}
+
+function _subjectDateGoPage(page, presentCount, total, pct, branch, semester) {
+    _subjectDatePage = page;
+    renderSubjectDatePage(presentCount, total, pct, branch, semester);
+}
+
+async function switchSubjectDate(newSubject) {
+    if (!newSubject) return;
+    const { date, branch, semester } = _subjectDateContext;
+    await showSubjectDateAttendance(date, newSubject, branch, semester);
+}
+
+// ========== TEACHER VIEW ==========
+async function loadShowcaseTeacher() {
+    const teacherId = document.getElementById('teacherViewSelect').value;
+    if (!teacherId) {
+        alert('Please select a teacher');
+        return;
+    }
+
+    const filterBranch   = document.getElementById('teacherViewBranch').value;
+    const filterSemester = document.getElementById('teacherViewSemester').value;
+
+    try {
+        const container = document.getElementById('teacherClassesContainer');
+        container.innerHTML = '<div style="text-align: center; padding: 20px;">Loading teacher classes...</div>';
+
+        const response = await fetch(`${SERVER_URL}/api/attendance/period-report?limit=10000`);
+        const data = await response.json();
+
+        if (data.success && data.records) {
+            let teacherRecords = data.records.filter(r => r.teacher === teacherId);
+
+            // Apply optional branch / semester filters
+            if (filterBranch)   teacherRecords = teacherRecords.filter(r => r.branch   === filterBranch);
+            if (filterSemester) teacherRecords = teacherRecords.filter(r => r.semester === filterSemester);
+
+            const classesMap = {};
+            teacherRecords.forEach(record => {
+                const key = `${record.semester}||${record.branch}`;
+                if (!classesMap[key]) {
+                    classesMap[key] = { semester: record.semester, branch: record.branch, records: [] };
+                }
+                classesMap[key].records.push(record);
+            });
+
+            renderTeacherClasses(teacherId, classesMap);
+        }
+    } catch (error) {
+        console.error('Error loading teacher:', error);
+        alert('Error loading teacher data');
+    }
+}
+
+function renderTeacherClasses(teacherName, classesMap) {
+    const container = document.getElementById('teacherClassesContainer');
+    
+    let html = `<div style="margin-bottom: 20px;"><h3>${teacherName} - Classes</h3></div>`;
+    
+    if (Object.keys(classesMap).length === 0) {
+        html += '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No classes found</div>';
+    } else {
+        html += '<div class="showcase-student-grid">';
+        Object.entries(classesMap).forEach(([key, classData]) => {
+            const presentCount = classData.records.filter(r => r.status === 'present').length;
+            const totalCount = classData.records.length;
+            const percentage = Math.round((presentCount / totalCount) * 100);
+            
+            html += `
+                <div class="showcase-student-card">
+                    <div class="student-card-header">
+                        <div class="student-info">
+                            <h4>${classData.branch}</h4>
+                            <p>Semester ${classData.semester}</p>
+                        </div>
+                        <div class="student-percentage" style="color: #007bff; font-size: 24px; font-weight: bold;">
+                            ${percentage}%
+                        </div>
+                    </div>
+                    <div class="student-card-actions">
+                        <button class="btn btn-small btn-primary" onclick="showTeacherClassDetails('${teacherName}', '${classData.semester}', '${classData.branch}')">
+                             View Details
+                        </button>
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+    }
+    
+    container.innerHTML = html;
+}
+
+async function showTeacherClassDetails(teacherId, semester, branch) {
+    try {
+        const response = await fetch(`${SERVER_URL}/api/attendance/period-report?limit=10000`);
+        const data = await response.json();
+        
+        if (data.success && data.records) {
+            const classRecords = data.records.filter(r => 
+                r.teacher === teacherId && 
+                r.semester === semester && 
+                r.branch === branch
+            );
+            
+            const presentCount = classRecords.filter(r => r.status === 'present').length;
+            const totalCount = classRecords.length;
+            const percentage = Math.round((presentCount / totalCount) * 100);
+            
+            let html = `
+                <div style="margin-bottom: 20px; padding: 15px; background: var(--bg-hover); border-radius: 8px; color: var(--text-primary);">
+                    <strong>Total Lectures: ${totalCount} | Present: ${presentCount} | Percentage: ${percentage}%</strong>
+                </div>
+                <div class="period-breakdown">
+            `;
+            
+            classRecords.forEach(record => {
+                const status = record.status === 'present' ? '' : '';
+                const statusColor = record.status === 'present' ? '#28a745' : '#dc3545';
+                html += `
+                    <div class="period-item" style="border-left: 4px solid ${statusColor};">
+                        <div class="period-info">
+                            <h5>${new Date(record.date).toLocaleDateString()} - ${record.period}</h5>
+                            <p>${record.subject}</p>
+                        </div>
+                        <div class="period-status" style="color: ${statusColor};">${status}</div>
+                    </div>
+                `;
+            });
+            
+            html += '</div>';
+            
+            document.getElementById('teacherClassTitle').textContent = `${branch} - Semester ${semester}`;
+            document.getElementById('teacherClassContent').innerHTML = html;
+            document.getElementById('teacherClassModal').style.display = 'block';
+        }
+    } catch (error) {
+        console.error('Error loading class details:', error);
+        alert('Error loading class details');
+    }
+}
+
+// ========== MODAL CLOSE FUNCTIONS ==========
+function closeCalendarModal() {
+    const modal = document.getElementById('calendarModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function closePeriodModal() {
+    const modal = document.getElementById('periodModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function closeSubjectCalendarModal() {
+    const modal = document.getElementById('subjectCalendarModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function closeSubjectDateModal() {
+    const modal = document.getElementById('subjectDateModal');
+    if (modal) modal.style.display = 'none';
+}
+
+function closeTeacherClassModal() {
+    const modal = document.getElementById('teacherClassModal');
+    if (modal) modal.style.display = 'none';
+}
+
+// ========== INITIALIZATION ==========
+document.addEventListener('DOMContentLoaded', () => {
+    // Attach subject view change listeners (also re-attached in initAttendanceShowcase)
+    attachSubjectViewListeners();
+});
+
+function attachSubjectViewListeners() {
+    const subjectViewBranch = document.getElementById('subjectViewBranch');
+    const subjectViewSemester = document.getElementById('subjectViewSemester');
+    if (subjectViewBranch) {
+        subjectViewBranch.removeEventListener('change', loadSubjectsForShowcase);
+        subjectViewBranch.addEventListener('change', loadSubjectsForShowcase);
+    }
+    if (subjectViewSemester) {
+        subjectViewSemester.removeEventListener('change', loadSubjectsForShowcase);
+        subjectViewSemester.addEventListener('change', loadSubjectsForShowcase);
+    }
+}
+
+async function loadSubjectsForShowcase() {
+    const branch = document.getElementById('subjectViewBranch').value;
+    const semester = document.getElementById('subjectViewSemester').value;
+    
+    if (!branch || !semester) {
+        document.getElementById('subjectViewSelect').innerHTML = '<option value="">Select Subject</option>';
+        return;
+    }
+
+    console.log(`Loading subjects for branch="${branch}" semester="${semester}"`);
+    
+    try {
+        const response = await fetch(`${SERVER_URL}/api/attendance/subjects?branch=${encodeURIComponent(branch)}&semester=${encodeURIComponent(semester)}`);
+        const data = await response.json();
+        console.log('Subjects response:', data);
+        
+        const select = document.getElementById('subjectViewSelect');
+        select.innerHTML = '<option value="">Select Subject</option>';
+
+        if (data.success && data.subjects && data.subjects.length > 0) {
+            data.subjects.forEach(subject => {
+                const option = document.createElement('option');
+                option.value = typeof subject === 'string' ? subject : (subject.subjectName || subject.shortName);
+                option.textContent = typeof subject === 'string' ? subject : (subject.subjectName || subject.shortName);
+                select.appendChild(option);
+            });
+        } else {
+            select.innerHTML = '<option value="">No subjects found</option>';
+        }
+    } catch (error) {
+        console.error('Error loading subjects:', error);
+        document.getElementById('subjectViewSelect').innerHTML = '<option value="">Error loading subjects</option>';
+    }
+}
+
+
+
+
+

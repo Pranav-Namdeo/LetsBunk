@@ -123,8 +123,12 @@
                     <span class="icon">📆</span>
                     <span>Calendar</span>
                 </button>
-                <button class="nav-item" data-section="attendance" data-tooltip="Attendance History">
+                <button class="nav-item" data-section="attendance-showcase" data-tooltip="Attendance Analytics">
                     <span class="icon">📊</span>
+                    <span>Attendance</span>
+                </button>
+                <button class="nav-item" data-section="attendance" data-tooltip="Attendance History">
+                    <span class="icon">📋</span>
                     <span>Attendance History</span>
                 </button>
                 <button class="nav-item" data-section="period-reports" data-tooltip="Period Reports">
@@ -447,6 +451,7 @@
                             <button class="btn btn-warning" id="bulkEditSubjectsBtn">✏️ Bulk Edit</button>
                             <button class="btn btn-danger" id="bulkDeleteSubjectsBtn">🗑️ Bulk Delete</button>
                             <button class="btn btn-primary" id="addSubjectBtn">➕ Add Subject</button>
+                            <button class="btn btn-danger" onclick="purgeOrphanSubjects()" title="Remove attendance records whose subject is not in this list">🧹 Purge Ghost Subjects</button>
                         </div>
                     </div>
 
@@ -611,6 +616,139 @@
                                 <!-- Classroom rows will be added here -->
                             </tbody>
                         </table>
+                    </div>
+                </section>
+
+                <!-- Attendance Showcase Section -->
+                <section id="attendance-showcase-section" class="section">
+                    <div class="section-header">
+                        <h2 class="section-title">📊 Attendance Analytics</h2>
+                        <p style="color: var(--text-secondary); margin-top: 5px;">View detailed attendance data by student, subject, or teacher</p>
+                    </div>
+
+                    <!-- View Selector -->
+                    <div class="showcase-view-selector">
+                        <button class="showcase-view-btn active" data-view="student">👤 Student View</button>
+                        <button class="showcase-view-btn" data-view="subject">📚 Subject View</button>
+                        <button class="showcase-view-btn" data-view="teacher">👨‍🏫 Teacher View</button>
+                    </div>
+
+                    <!-- Student View -->
+                    <div id="studentView" class="showcase-view active">
+                        <div class="showcase-filters">
+                            <select id="showcaseBranch" class="filter-select">
+                                <option value="">Select Branch</option>
+                            </select>
+                            <select id="showcaseSemester" class="filter-select">
+                                <option value="">Select Semester</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="loadShowcaseStudents()">🔍 Load Students</button>
+                        </div>
+                        <div id="studentListContainer" class="showcase-list-container">
+                            <!-- Student list will be inserted here -->
+                        </div>
+                    </div>
+
+                    <!-- Subject View -->
+                    <div id="subjectView" class="showcase-view" style="display:none;">
+                        <div class="showcase-filters">
+                            <select id="subjectViewBranch" class="filter-select">
+                                <option value="">Select Branch</option>
+                            </select>
+                            <select id="subjectViewSemester" class="filter-select">
+                                <option value="">Select Semester</option>
+                            </select>
+                            <select id="subjectViewSelect" class="filter-select">
+                                <option value="">Select Subject</option>
+                            </select>
+                            <input type="date" id="subjectViewFrom" class="filter-select" title="From date" style="cursor:pointer;">
+                            <input type="date" id="subjectViewTo" class="filter-select" title="To date" style="cursor:pointer;">
+                            <button class="btn btn-primary" onclick="loadShowcaseSubject()">🔍 Load Subject</button>
+                        </div>
+                        <div id="subjectCalendarContainer" class="showcase-list-container">
+                            <!-- Subject calendar will be inserted here -->
+                        </div>
+                    </div>
+
+                    <!-- Teacher View -->
+                    <div id="teacherView" class="showcase-view" style="display:none;">
+                        <div class="showcase-filters">
+                            <select id="teacherViewSelect" class="filter-select">
+                                <option value="">Select Teacher</option>
+                            </select>
+                            <select id="teacherViewBranch" class="filter-select">
+                                <option value="">All Branches</option>
+                            </select>
+                            <select id="teacherViewSemester" class="filter-select">
+                                <option value="">All Semesters</option>
+                            </select>
+                            <button class="btn btn-primary" onclick="loadShowcaseTeacher()">🔍 Load Teacher</button>
+                        </div>
+                        <div id="teacherClassesContainer" class="showcase-list-container">
+                            <!-- Teacher classes will be inserted here -->
+                        </div>
+                    </div>
+
+                    <!-- Calendar Modal (for Student View) -->
+                    <div id="calendarModal" class="modal" style="display:none;">
+                        <div class="modal-content modal-large">
+                            <span class="close" onclick="closeCalendarModal()">&times;</span>
+                            <h3 id="calendarTitle">Attendance Calendar</h3>
+                            <div id="calendarContainer" class="calendar-container">
+                                <!-- Calendar will be inserted here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Period Breakdown Modal (for Student View) -->
+                    <div id="periodModal" class="modal" style="display:none;">
+                        <div class="modal-content">
+                            <span class="close" onclick="closePeriodModal()">&times;</span>
+                            <h3 id="periodTitle">Period Breakdown</h3>
+                            <div id="periodListContainer" class="period-list-container">
+                                <!-- Period list will be inserted here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Subject Calendar Modal (for Subject View) -->
+                    <div id="subjectCalendarModal" class="modal" style="display:none;">
+                        <div class="modal-content modal-large">
+                            <span class="close" onclick="closeSubjectCalendarModal()">&times;</span>
+                            <h3 id="subjectCalendarTitle">Subject Attendance Calendar</h3>
+                            <div id="subjectCalendarContent" class="calendar-container">
+                                <!-- Subject calendar will be inserted here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Subject Date Attendance Modal (for Subject View) -->
+                    <div id="subjectDateModal" class="modal" style="display:none;">
+                        <div class="modal-content modal-large">
+                            <span class="close" onclick="closeSubjectDateModal()">&times;</span>
+                            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:4px;">
+                                <h3 id="subjectDateTitle" style="margin:0;flex:1;">Students Attended</h3>
+                                <div style="display:flex;align-items:center;gap:8px;">
+                                    <label style="font-size:12px;color:var(--text-secondary);white-space:nowrap;">Switch Subject:</label>
+                                    <select id="modalSubjectSwitcher" class="filter-select" style="min-width:140px;" onchange="switchSubjectDate(this.value)">
+                                    </select>
+                                </div>
+                            </div>
+                            <div id="subjectDateContent" class="period-list-container">
+                                <!-- Student list for subject date will be inserted here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Teacher Class Details Modal (for Teacher View) -->
+                    <div id="teacherClassModal" class="modal" style="display:none;">
+                        <div class="modal-content modal-large">
+                            <span class="close" onclick="closeTeacherClassModal()">&times;</span>
+                            <h3 id="teacherClassTitle">Class Attendance</h3>
+                            <div id="teacherClassContent" class="period-list-container">
+                                <!-- Class attendance details will be inserted here -->
+                            </div>
+                        </div>
                     </div>
                 </section>
 

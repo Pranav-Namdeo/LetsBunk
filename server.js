@@ -1138,6 +1138,62 @@ app.delete('/api/subjects/:subjectCode', async (req, res) => {
     }
 });
 
+// ─── POST /api/admin/purge-orphan-subjects ────────────────────────────────────
+// Deletes PeriodAttendance, TimetableHistory, AttendanceRecord, and DailyAttendance
+// records whose subject name is NOT in the Subject collection for that semester+branch.
+// Call once to clean up corrupt seed/test data.
+app.post('/api/admin/purge-orphan-subjects', async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) {
+            return res.status(503).json({ success: false, error: 'DB not connected' });
+        }
+
+        // Build a set of valid subject names per semester+branch
+        const allSubjects = await Subject.find({ isActive: { $ne: false } }, { subjectName: 1, semester: 1, branch: 1 }).lean();
+        // Map: "semester||branch" → Set of valid subjectNames
+        const validMap = {};
+        allSubjects.forEach(s => {
+            const key = `${s.semester}||${s.branch}`;
+            if (!validMap[key]) validMap[key] = new Set();
+            validMap[key].add(s.subjectName);
+        });
+
+        // Helper: build $or query for orphan records
+        // A record is orphan if its subject is NOT in the valid set for its semester+branch
+        // We do this per-key to keep it precise
+        const results = { periodAttendance: 0, timetableHistory: 0, attendanceRecord: 0, dailyAttendance: 0 };
+
+        for (const [key, validSubjects] of Object.entries(validMap)) {
+            const [semester, branch] = key.split('||');
+
+            // Find all distinct subjects in PeriodAttendance for this sem/branch
+            const paSubjects = await PeriodAttendance.distinct('subject', { semester, branch });
+            const orphanPA   = paSubjects.filter(s => s && !validSubjects.has(s));
+            if (orphanPA.length > 0) {
+                const r = await PeriodAttendance.deleteMany({ semester, branch, subject: { $in: orphanPA } });
+                results.periodAttendance += r.deletedCount;
+                console.log(`🗑️  PeriodAttendance: deleted ${r.deletedCount} records for orphan subjects [${orphanPA.join(', ')}] (${semester}/${branch})`);
+            }
+
+            // TimetableHistory
+            const thSubjects = await TimetableHistory.distinct('subject', { semester, branch });
+            const orphanTH   = thSubjects.filter(s => s && !validSubjects.has(s));
+            if (orphanTH.length > 0) {
+                const r = await TimetableHistory.deleteMany({ semester, branch, subject: { $in: orphanTH } });
+                results.timetableHistory += r.deletedCount;
+                console.log(`🗑️  TimetableHistory: deleted ${r.deletedCount} records for orphan subjects [${orphanTH.join(', ')}] (${semester}/${branch})`);
+            }
+        }
+
+        // AttendanceRecord and DailyAttendance don't store subject directly — skip
+        console.log(`✅ Purge complete:`, results);
+        res.json({ success: true, deleted: results });
+    } catch (error) {
+        console.error('❌ Error purging orphan subjects:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Get subjects grouped by semester and branch
 app.get('/api/subjects/grouped/by-semester-branch', async (req, res) => {
     try {
@@ -4135,7 +4191,8 @@ app.get('/api/attendance/student/:enrollmentNo/subject-stats', async (req, res) 
 
 // ─── GET /api/attendance/subjects ────────────────────────────────────────────
 // Returns subject names for a given semester + branch.
-// Merges: Subject collection (configured subjects) + PeriodAttendance distinct subjects (actual attendance).
+// Source of truth: Subject collection only (configured subjects).
+// PeriodAttendance is NOT merged — it may contain stale/seed data.
 app.get('/api/attendance/subjects', async (req, res) => {
     try {
         const { semester, branch } = req.query;
@@ -4146,19 +4203,13 @@ app.get('/api/attendance/subjects', async (req, res) => {
             return res.json({ success: true, subjects: [] });
         }
 
-        // 1. From Subject collection — use subjectName field
         const configuredSubjects = await Subject.find(
             { semester: semester.toString(), branch, isActive: { $ne: false } },
             { subjectName: 1, shortName: 1 }
         ).lean();
-        const fromSubjects = configuredSubjects.map(s => s.subjectName).filter(Boolean);
 
-        // 2. From PeriodAttendance — subjects that actually have attendance records
-        const fromAttendance = await PeriodAttendance.distinct('subject', { semester, branch });
-
-        // Merge and deduplicate
-        const merged = [...new Set([...fromSubjects, ...fromAttendance.filter(Boolean)])].sort();
-        res.json({ success: true, subjects: merged });
+        const subjects = configuredSubjects.map(s => s.subjectName).filter(Boolean).sort();
+        res.json({ success: true, subjects });
     } catch (error) {
         console.error('❌ Error fetching subjects:', error);
         res.status(500).json({ success: false, error: error.message });
@@ -4205,6 +4256,34 @@ app.get('/api/attendance/subject-dates', async (req, res) => {
         res.json({ success: true, dates });
     } catch (error) {
         console.error('❌ Error fetching subject dates:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// ─── GET /api/timetable-history/day ──────────────────────────────────────────
+// Returns all periods held on a specific date for a semester+branch.
+// Used by the Period Breakdown modal to show every class, not just attended ones.
+app.get('/api/timetable-history/day', async (req, res) => {
+    try {
+        const { date, semester, branch } = req.query;
+        if (!date || !semester || !branch) {
+            return res.status(400).json({ success: false, error: 'date, semester and branch are required' });
+        }
+        if (mongoose.connection.readyState !== 1) {
+            return res.json({ success: true, periods: [] });
+        }
+        const midnight = new Date(date); midnight.setHours(0, 0, 0, 0);
+        const nextDay  = new Date(midnight); nextDay.setDate(nextDay.getDate() + 1);
+
+        const periods = await TimetableHistory.find({
+            date: { $gte: midnight, $lt: nextDay },
+            semester: semester.toString(),
+            branch
+        }).sort({ period: 1 }).lean();
+
+        res.json({ success: true, periods });
+    } catch (error) {
+        console.error('❌ Error fetching timetable history day:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
