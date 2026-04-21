@@ -195,6 +195,10 @@ export default function App() {
   // Timer state (deprecated - kept for compatibility with period-based system)
   const [isRunning] = useState(false); // Always false in period-based system
 
+  // Party popper state — shown when attendance threshold is reached
+  const [showPartyPopper, setShowPartyPopper] = useState(false);
+  const prevAttendanceStatus = useRef(null);
+
   // Offline Timer Service state
   const [offlineTimerState, setOfflineTimerState] = useState({
     isRunning: false,
@@ -209,6 +213,16 @@ export default function App() {
     pendingSyncCount: 0
   });
   const [offlineTimerInitialized, setOfflineTimerInitialized] = useState(false);
+
+  // Fire party popper when attendance status transitions to 'present'
+  useEffect(() => {
+    const current = offlineTimerState.attendanceStatus;
+    if (current === 'present' && prevAttendanceStatus.current !== 'present') {
+      setShowPartyPopper(true);
+      setTimeout(() => setShowPartyPopper(false), 3500);
+    }
+    prevAttendanceStatus.current = current;
+  }, [offlineTimerState.attendanceStatus]);
 
   // Teacher-specific timetable states
   const [showTimetable, setShowTimetable] = useState(false);
@@ -1049,13 +1063,21 @@ export default function App() {
                   
                 case 'lecture_ended':
                   // Lecture period has ended - timer automatically stopped
-                  Alert.alert(
-                    '⏰ Lecture Period Ended',
-                    `The lecture period for ${event.lecture.subject} has ended.\n\nTimer automatically stopped and attendance synced.\n\nAttended: ${event.attendedMinutes} minutes`,
-                    [{ text: 'OK' }]
-                  );
-                  // Persist the final attendance record now that the lecture is complete
+                  // Don't show alert — auto-continue to next period will handle it
                   saveAttendanceToServer();
+                  break;
+
+                case 'period_auto_continued':
+                  // Timer auto-started for next period (no face verification needed)
+                  setOfflineTimerState(prev => ({
+                    ...prev,
+                    isRunning: true,
+                    isPaused: false,
+                    timerSeconds: 0,
+                    currentLecture: event.lecture,
+                    attendanceStatus: 'absent',
+                    thresholdSeconds: null
+                  }));
                   break;
               }
               
@@ -5921,9 +5943,67 @@ export default function App() {
           userRole={selectedRole}
           notificationBadge={notificationBadge}
         />
+
+        {/* Party Popper — shown when attendance threshold is reached */}
+        {showPartyPopper && <PartyPopper />}
       </View>
     );
   }
+}
+
+// ── Party Popper component ────────────────────────────────────────────────────
+const EMOJIS = ['🎉','🎊','✨','🌟','💥','🎈','🥳','⭐','🎆','🎇'];
+const PARTICLE_COUNT = 18;
+
+function PartyPopper() {
+  const particles = useRef(
+    Array.from({ length: PARTICLE_COUNT }, (_, i) => ({
+      anim:  new Animated.Value(0),
+      angle: (i / PARTICLE_COUNT) * 2 * Math.PI,
+      emoji: EMOJIS[i % EMOJIS.length],
+      dist:  120 + Math.random() * 80,
+      size:  18 + Math.floor(Math.random() * 14),
+    }))
+  ).current;
+
+  useEffect(() => {
+    Animated.stagger(30, particles.map(p =>
+      Animated.sequence([
+        Animated.timing(p.anim, { toValue: 1, duration: 700, useNativeDriver: true }),
+        Animated.timing(p.anim, { toValue: 0, duration: 600, delay: 800, useNativeDriver: true }),
+      ])
+    )).start();
+  }, []);
+
+  return (
+    <View pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, alignItems: 'center', justifyContent: 'center', zIndex: 9999 }}>
+      {/* Central badge */}
+      <Animated.View style={{ alignItems: 'center', opacity: particles[0].anim, transform: [{ scale: particles[0].anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.3, 1.3, 1] }) }] }}>
+        <View style={{ backgroundColor: '#22c55e', borderRadius: 50, paddingHorizontal: 24, paddingVertical: 12, shadowColor: '#22c55e', shadowOpacity: 0.8, shadowRadius: 20, elevation: 20 }}>
+          <Text style={{ fontSize: 22, fontWeight: '800', color: '#fff' }}>🎉 Attendance Marked!</Text>
+        </View>
+      </Animated.View>
+
+      {/* Burst particles */}
+      {particles.map((p, i) => (
+        <Animated.Text
+          key={i}
+          style={{
+            position: 'absolute',
+            fontSize: p.size,
+            opacity: p.anim,
+            transform: [
+              { translateX: p.anim.interpolate({ inputRange: [0, 1], outputRange: [0, Math.cos(p.angle) * p.dist] }) },
+              { translateY: p.anim.interpolate({ inputRange: [0, 1], outputRange: [0, Math.sin(p.angle) * p.dist - 40] }) },
+              { scale:      p.anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 1.2, 0.8] }) },
+            ],
+          }}
+        >
+          {p.emoji}
+        </Animated.Text>
+      ))}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({

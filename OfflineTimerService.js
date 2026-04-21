@@ -86,6 +86,8 @@ class OfflineTimerService {
     this.wasManuallyStoppedInSameLecture = false;
     this.lastVerifiedLecture = null;
     this.lastFaceVerificationTime = null;
+    this.verifiedToday = false;          // true after first face-verify of the day
+    this.verifiedTodayDate = null;       // date string "YYYY-MM-DD" of verification
     
     // Sync queue for offline updates
     this.syncQueue = [];
@@ -222,15 +224,20 @@ class OfflineTimerService {
         // Same lecture continuation with existing timer (any re-entry) — skip face verify
         const isSameLectureContinuation = isSameLecture && this.timerSeconds > 0;
 
+        // Already verified today (period transition) — skip face verify
+        const todayStr = new Date().toISOString().split('T')[0];
+        const isAlreadyVerifiedToday = this.verifiedToday && this.verifiedTodayDate === todayStr;
+
         // Face verify only needed for: new lecture OR first start of the day (no lastVerifiedLecture)
-        const needsFaceVerification = !isSameLecture ||
-          (!isWiFiResumeInSameLecture && !isManualRestartInSameLecture && !isSameLectureContinuation);
+        const needsFaceVerification = !isAlreadyVerifiedToday && (!isSameLecture ||
+          (!isWiFiResumeInSameLecture && !isManualRestartInSameLecture && !isSameLectureContinuation));
 
         let faceVerificationResult = { success: true };
 
         if (!needsFaceVerification) {
-          // Skip face verification — WiFi resume, manual restart, or same lecture continuation
-          const reason = isWiFiResumeInSameLecture ? 'WiFi resume in same lecture'
+          // Skip face verification — WiFi resume, manual restart, same lecture, or already verified today
+          const reason = isAlreadyVerifiedToday ? 'already verified today (period transition)'
+            : isWiFiResumeInSameLecture ? 'WiFi resume in same lecture'
             : isManualRestartInSameLecture ? 'manual restart in same lecture'
             : 'same lecture continuation';
           console.log(`🔄 Skipping face verification — ${reason}`);
@@ -256,6 +263,8 @@ class OfflineTimerService {
           // Update face verification tracking
           this.lastFaceVerificationTime = _getBootMs() || Date.now();
           this.lastVerifiedLecture = { ...lectureInfo };
+          this.verifiedToday = true;
+          this.verifiedTodayDate = new Date().toISOString().split('T')[0];
 
           // Reset timer only for new lecture
           if (!isSameLecture) {
@@ -264,6 +273,14 @@ class OfflineTimerService {
           } else {
             console.log('📚 First start of day — continuing from:', this.timerSeconds);
           }
+        }
+
+        // For period transitions (already verified today, different lecture) — always reset timer to 0
+        if (isAlreadyVerifiedToday && !isSameLecture) {
+          console.log('📚 Period transition — resetting timer to 0 for new period');
+          this.timerSeconds = 0;
+          this.attendanceStatus = 'absent';
+          this.thresholdSeconds = null;
         }
 
         // Step 3: Set lecture context and start timer
@@ -1073,6 +1090,33 @@ class OfflineTimerService {
             finalSeconds: this.timerSeconds,
             attendedMinutes: Math.floor(this.timerSeconds / 60)
           });
+
+          // Auto-continue: if already verified today, start next period automatically
+          if (this.verifiedToday && this.verifiedTodayDate === new Date().toISOString().split('T')[0]) {
+            console.log('🔄 Auto-continuing to next period (already verified today)...');
+            // Small delay to let the current period fully close
+            setTimeout(async () => {
+              try {
+                const { getLectureInfo } = require('./ServerTime');
+                const nextLecture = await getLectureInfo();
+                if (nextLecture && nextLecture.subject) {
+                  console.log('📚 Next period found:', nextLecture.subject, '— auto-starting timer');
+                  const result = await this.startTimer(nextLecture);
+                  if (result.success) {
+                    this.notifyListeners({
+                      type: 'period_auto_continued',
+                      lecture: nextLecture,
+                      timerSeconds: 0
+                    });
+                  }
+                } else {
+                  console.log('⏰ No next period active — staying idle');
+                }
+              } catch (e) {
+                console.log('⚠️ Auto-continue check failed:', e.message);
+              }
+            }, 3000); // 3s gap between periods
+          }
         }
       } else {
         console.log('⏰ Skipping lecture end check (timer not active or no lecture)');
