@@ -5564,18 +5564,6 @@ export default function App() {
                   </Text>
                 )}
               </TouchableOpacity>
-
-              {/* Last Sync Info */}
-              {offlineTimerState.lastSyncTime && (
-                <Text style={{
-                  fontSize: 10,
-                  color: theme.textSecondary,
-                  textAlign: 'center',
-                  marginTop: 10,
-                }}>
-                  Last sync: {new Date(offlineTimerState.lastSyncTime).toLocaleTimeString()}
-                </Text>
-              )}
             </View>
           )}
 

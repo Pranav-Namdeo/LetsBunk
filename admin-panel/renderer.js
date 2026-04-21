@@ -2310,11 +2310,55 @@ function renderAdvancedTimetableEditor(timetable) {
 
     // Initialize keyboard shortcuts
     initKeyboardShortcuts();
+
+    // Apply live "now" dot after render, then poll every 60s
+    applyCurrentPeriodDot();
+    clearInterval(window._currentPeriodPollTimer);
+    window._currentPeriodPollTimer = setInterval(applyCurrentPeriodDot, 60000);
 }
 
 // Keep old function for backward compatibility
 function renderTimetableEditor(timetable) {
     renderAdvancedTimetableEditor(timetable);
+}
+
+// ── Live "now" dot on timetable ───────────────────────────────────────────────
+async function applyCurrentPeriodDot() {
+    // Remove any existing dots first
+    document.querySelectorAll('.tt-live-dot').forEach(el => el.remove());
+    document.querySelectorAll('.tt-cell-live').forEach(el => el.classList.remove('tt-cell-live'));
+
+    try {
+        const res  = await fetch(`${SERVER_URL}/api/timetable/current-period`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!data.success || !data.active?.length) return;
+
+        // currentTimetable is the one currently displayed — match by semester+branch
+        if (!currentTimetable) return;
+        const match = data.active.find(a =>
+            String(a.semester) === String(currentTimetable.semester) &&
+            a.branch === currentTimetable.branch
+        );
+        if (!match) return;
+
+        // Days shown in the grid (0-based row index, skipping header row)
+        const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+        const dayNames = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+        const dayRowIdx = dayNames.indexOf(match.day); // 0=Sun … 6=Sat
+        if (dayRowIdx === -1) return;
+
+        const cellId = `cell-${dayRowIdx}-${match.periodIdx}`;
+        const cell   = document.getElementById(cellId);
+        if (!cell) return;
+
+        cell.classList.add('tt-cell-live');
+
+        const dot = document.createElement('div');
+        dot.className = 'tt-live-dot';
+        dot.title     = `Now: ${match.subject} (${match.startTime}–${match.endTime})`;
+        cell.appendChild(dot);
+    } catch (_) { /* silent — timetable still works without the dot */ }
 }
 
 
@@ -12589,6 +12633,7 @@ async function showStudentCalendar(enrollmentNo, studentName) {
             const dateObjects = data.dates || [];
             const presentSet = new Set();
             const absentSet  = new Set();
+            const liveSet    = new Set();
             dateObjects.forEach(d => {
                 if (!d || !d.date) return;
                 const dt = new Date(d.date);
@@ -12596,8 +12641,9 @@ async function showStudentCalendar(enrollmentNo, studentName) {
                 const key = dt.toISOString().split('T')[0]; // "YYYY-MM-DD"
                 if (d.status === 'present') presentSet.add(key);
                 else absentSet.add(key);
+                if (d.isLive) liveSet.add(key);
             });
-            const calendarHtml = buildAttendanceCalendar(presentSet, absentSet, enrollmentNo);
+            const calendarHtml = buildAttendanceCalendar(presentSet, absentSet, enrollmentNo, liveSet);
             document.getElementById('calendarTitle').textContent = `${studentName}  Attendance Calendar`;
             document.getElementById('calendarContainer').innerHTML = calendarHtml || '<p style="padding:20px;color:var(--text-secondary)">No attendance data found.</p>';
             document.getElementById('calendarModal').style.display = 'block';
@@ -12608,8 +12654,8 @@ async function showStudentCalendar(enrollmentNo, studentName) {
     }
 }
 
-function buildAttendanceCalendar(presentSet, absentSet, enrollmentNo) {
-    const allDates = [...presentSet, ...absentSet];
+function buildAttendanceCalendar(presentSet, absentSet, enrollmentNo, liveSet = new Set()) {
+    const allDates = [...presentSet, ...absentSet, ...liveSet];
     if (allDates.length === 0) return '<p style="padding:20px;color:var(--text-secondary)">No attendance records found.</p>';
 
     const months = [...new Set(allDates.map(d => d.slice(0, 7)))].sort();
@@ -12631,11 +12677,13 @@ function buildAttendanceCalendar(presentSet, absentSet, enrollmentNo) {
         }
         for (let d = 1; d <= lastDay.getDate(); d++) {
             const ds = `${year}-${month}-${String(d).padStart(2, '0')}`;
-            let cls  = 'no-class';
+            const isLive = liveSet.has(ds);
+            let cls = 'no-class';
             if (presentSet.has(ds))     cls = 'present';
             else if (absentSet.has(ds)) cls = 'absent';
-            const click = cls !== 'no-class' ? `onclick="showPeriodBreakdown('${enrollmentNo}', '${ds}')"` : '';
-            html += `<div class="calendar-day ${cls}" ${click}>${d}</div>`;
+            const click = (cls !== 'no-class' || isLive) ? `onclick="showPeriodBreakdown('${enrollmentNo}', '${ds}')"` : '';
+            const liveDot = isLive ? `<span class="cal-live-dot" title="Session in progress"></span>` : '';
+            html += `<div class="calendar-day ${cls}${isLive ? ' cal-live' : ''}" style="${isLive ? 'cursor:pointer;' : ''}" ${click}>${d}${liveDot}</div>`;
         }
         html += `</div></div>`;
     });

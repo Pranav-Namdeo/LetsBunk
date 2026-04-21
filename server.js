@@ -659,10 +659,55 @@ app.get('/api/timetable/:semester/:branch', async (req, res) => {
     }
 });
 
+// ─── GET /api/timetable/current-period ───────────────────────────────────────
+// Returns the currently active period for every timetable (all semester/branch combos).
+// Used by the admin timetable view to show a live "now" dot on the active cell.
+app.get('/api/timetable/current-period', async (req, res) => {
+    try {
+        if (mongoose.connection.readyState !== 1) return res.json({ success: true, active: [] });
+
+        const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+        const now  = new Date();
+        const currentDay  = days[now.getDay()];
+        const currentMins = now.getHours() * 60 + now.getMinutes();
+
+        const timetables = await Timetable.find({}).lean();
+        const active = [];
+
+        for (const tt of timetables) {
+            const daySchedule = tt.timetable?.[currentDay] || [];
+            for (let i = 0; i < daySchedule.length; i++) {
+                const slot = daySchedule[i];
+                const pInfo = tt.periods?.[i];
+                if (!pInfo || slot.isBreak || !slot.subject) continue;
+                const start = timeToMinutes(pInfo.startTime);
+                const end   = timeToMinutes(pInfo.endTime);
+                if (currentMins >= start && currentMins < end) {
+                    active.push({
+                        semester: tt.semester,
+                        branch:   tt.branch,
+                        day:      currentDay,
+                        periodIdx: i,          // 0-based index
+                        periodNum: i + 1,      // 1-based (P1, P2…)
+                        subject:  slot.subject,
+                        startTime: pInfo.startTime,
+                        endTime:   pInfo.endTime
+                    });
+                    break; // only one active period per timetable at a time
+                }
+            }
+        }
+
+        res.json({ success: true, active, day: currentDay, time: `${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}` });
+    } catch (error) {
+        console.error('❌ Error fetching current period:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.post('/api/timetable', async (req, res) => {
     try {
         const { semester, branch, periods, timetable } = req.body;
-
         if (mongoose.connection.readyState === 1) {
             let existingTimetable = await Timetable.findOne({ semester, branch });
             if (existingTimetable) {
@@ -6542,13 +6587,49 @@ app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
             const midnight = new Date(r.date); midnight.setHours(0,0,0,0);
             const key = midnight.toISOString();
             const existing = dateMap.get(key);
-            // Prefer 'present' over 'absent', and more lectures over fewer
             if (!existing ||
                 (r.status === 'present' && existing.status !== 'present') ||
                 (r.status === existing.status && (r.lectures?.length || 0) > (existing.lectures?.length || 0))) {
                 dateMap.set(key, { ...r, date: midnight });
             }
         }
+
+        // ── Inject today from PeriodAttendance + live timer state ────────────
+        // This ensures today shows on the calendar even before end-of-day sync
+        const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
+        const todayKey = todayMidnight.toISOString();
+        if (!dateMap.has(todayKey)) {
+            try {
+                const tomorrow = new Date(todayMidnight); tomorrow.setDate(tomorrow.getDate() + 1);
+                const todayPeriods = await PeriodAttendance.find({
+                    enrollmentNo,
+                    date: { $gte: todayMidnight, $lt: tomorrow }
+                }).lean();
+
+                // Also check live in-memory timer state
+                const liveState = liveTimerState.get(enrollmentNo);
+
+                if (todayPeriods.length > 0 || liveState) {
+                    const presentCount = todayPeriods.filter(p => p.status === 'present').length;
+                    const totalCount   = todayPeriods.length;
+                    // If timer is running, count as 'active' day — show as present on calendar
+                    const isRunning    = liveState?.isRunning || false;
+                    const liveStatus   = liveState?.status || (presentCount > 0 ? 'present' : 'absent');
+                    const dayStatus    = (presentCount > 0 || isRunning) ? 'present' : 'absent';
+
+                    dateMap.set(todayKey, {
+                        date:          todayMidnight,
+                        status:        dayStatus,
+                        dayPercentage: totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0,
+                        totalAttended: 0,
+                        totalClassTime: 0,
+                        lectures:      todayPeriods,
+                        _isLive:       true
+                    });
+                }
+            } catch (_) { /* non-fatal — calendar still works without today */ }
+        }
+
         const deduped = [...dateMap.values()].sort((a, b) => new Date(b.date) - new Date(a.date));
 
         const totalDays      = deduped.length;
@@ -6566,8 +6647,8 @@ app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
                 totalMinutes: totalAttended % 60
             },
             dates: deduped.map(r => {
-                const attended   = Number(r.totalAttended)  || 0; // minutes
-                const total      = Number(r.totalClassTime) || 0; // minutes
+                const attended   = Number(r.totalAttended)  || 0;
+                const total      = Number(r.totalClassTime) || 0;
                 const percentage = total > 0
                     ? Math.round((attended / total) * 100)
                     : (Number(r.dayPercentage) || (r.status === 'present' ? 100 : 0));
@@ -6575,9 +6656,10 @@ app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
                     date:         r.date,
                     status:       r.status || 'absent',
                     lectureCount: r.lectures ? r.lectures.length : 0,
-                    attended,     // minutes — frontend divides by 60 for hours
-                    total,        // minutes
-                    percentage
+                    attended,
+                    total,
+                    percentage,
+                    isLive:       r._isLive || false
                 };
             })
         });

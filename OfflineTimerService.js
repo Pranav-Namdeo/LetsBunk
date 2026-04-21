@@ -210,25 +210,34 @@ class OfflineTimerService {
 
         console.log('✅ BSSID validation passed');
 
-        // Step 2: Check if this is a restart in the same lecture
-        // Covers: manual stop+restart, WiFi drop+reconnect+re-verify, any re-entry same period
+        // Step 2: Determine if face verification is needed
         const isSameLecture = this.isSameLecture(lectureInfo);
-        const isManualRestartInSameLecture = this.wasManuallyStoppedInSameLecture &&
-                                            isSameLecture &&
-                                            this.lastVerifiedLecture;
 
-        // Also treat any same-lecture re-start with existing timer as a continuation
-        const isSameLectureContinuation = isSameLecture && this.timerSeconds > 0 && this.lastVerifiedLecture;
+        // WiFi reconnect in same lecture — never ask for face verify, just resume
+        const isWiFiResumeInSameLecture = this.pausedDueToWiFiLoss && isSameLecture;
+
+        // Manual stop+restart in same lecture — skip face verify
+        const isManualRestartInSameLecture = this.wasManuallyStoppedInSameLecture && isSameLecture;
+
+        // Same lecture continuation with existing timer (any re-entry) — skip face verify
+        const isSameLectureContinuation = isSameLecture && this.timerSeconds > 0;
+
+        // Face verify only needed for: new lecture OR first start of the day (no lastVerifiedLecture)
+        const needsFaceVerification = !isSameLecture ||
+          (!isWiFiResumeInSameLecture && !isManualRestartInSameLecture && !isSameLectureContinuation);
 
         let faceVerificationResult = { success: true };
 
-        if (isManualRestartInSameLecture || isSameLectureContinuation) {
-          // Skip face verification — continuing same lecture
-          console.log('🔄 Same lecture continuation - skipping face verification');
+        if (!needsFaceVerification) {
+          // Skip face verification — WiFi resume, manual restart, or same lecture continuation
+          const reason = isWiFiResumeInSameLecture ? 'WiFi resume in same lecture'
+            : isManualRestartInSameLecture ? 'manual restart in same lecture'
+            : 'same lecture continuation';
+          console.log(`🔄 Skipping face verification — ${reason}`);
           console.log('📚 Continuing from timer value:', this.timerSeconds);
         } else {
-          // Perform face verification for new lecture or first start
-          console.log('👤 Step 2: Starting face verification...');
+          // Perform face verification: new lecture or first start of the day
+          console.log('👤 Step 2: Starting face verification (new lecture or first start)...');
           faceVerificationResult = await this.performFaceVerification();
 
           if (!faceVerificationResult.success) {
@@ -248,12 +257,12 @@ class OfflineTimerService {
           this.lastFaceVerificationTime = _getBootMs() || Date.now();
           this.lastVerifiedLecture = { ...lectureInfo };
 
-          // Reset timer for new lecture
+          // Reset timer only for new lecture
           if (!isSameLecture) {
-            console.log('📚 New lecture detected - resetting timer');
+            console.log('📚 New lecture detected - resetting timer to 0');
             this.timerSeconds = 0;
           } else {
-            console.log('📚 Same lecture with face verification - continuing from:', this.timerSeconds);
+            console.log('📚 First start of day — continuing from:', this.timerSeconds);
           }
         }
 
@@ -263,7 +272,7 @@ class OfflineTimerService {
         this.authorizedBSSID = bssidCheck.expectedBSSID;
 
         // Only reset attendance tracking when switching to a NEW lecture.
-        // For same-lecture re-starts (manual or re-verify), preserve accumulated state.
+        // For same-lecture re-starts (WiFi resume, manual, continuation), preserve accumulated state.
         if (!isSameLecture) {
           this.thresholdSeconds = null;
           this.attendanceStatus = 'absent';
@@ -272,6 +281,7 @@ class OfflineTimerService {
         // Start timer
         this.isRunning = true;
         this.isPaused = false;
+        this.pausedDueToWiFiLoss = false;
 
         // Start counting
         this.startCounting();
@@ -289,26 +299,25 @@ class OfflineTimerService {
           lecture: this.currentLecture,
           faceVerified: faceVerificationResult.success,
           bssidAuthorized: true,
-          skippedFaceVerification: isManualRestartInSameLecture || isSameLectureContinuation
+          skippedFaceVerification: !needsFaceVerification
         });
 
-        // Step 4: Register check-in on server (creates PeriodAttendance { verificationType: 'initial' })
-        // This is required so that offline-sync doesn't get 403 "No verified check-in for today"
-        if (!isManualRestartInSameLecture && !isSameLectureContinuation) {
+        // Step 4: Register check-in on server only when face verification actually ran
+        if (needsFaceVerification) {
           await this.registerCheckIn(lectureInfo, bssidCheck.currentBSSID, faceVerificationResult);
         }
 
         // Try to sync with server
         await this.syncToServer();
 
-        console.log('✅ Offline timer started successfully', (isManualRestartInSameLecture || isSameLectureContinuation) ? '(face verification skipped - same lecture)' : '(with face verification)');
+        console.log('✅ Offline timer started successfully', !needsFaceVerification ? '(face verification skipped)' : '(with face verification)');
         return {
           success: true,
           timerSeconds: this.timerSeconds,
           isNewLecture: !isSameLecture,
           faceVerified: faceVerificationResult.success,
           bssidAuthorized: true,
-          skippedFaceVerification: isManualRestartInSameLecture || isSameLectureContinuation
+          skippedFaceVerification: !needsFaceVerification
         };
 
       } catch (error) {
@@ -519,7 +528,7 @@ class OfflineTimerService {
       console.log('📚 Lecture comparison result:', isSameLecture ? 'SAME LECTURE' : 'DIFFERENT LECTURE');
       
       if (!isSameLecture && this.wasRunningBeforeDisconnect) {
-        // Scenario 2: Different lecture - sync previous lecture data first
+        // Different lecture detected - sync previous lecture data first
         console.log('📊 Different lecture detected - syncing previous lecture data...');
         
         // Store previous lecture data for final sync
@@ -532,30 +541,15 @@ class OfflineTimerService {
         // Perform final sync of previous lecture
         await this.syncPreviousLectureData();
         
-        // Reset timer for new lecture
-        console.log('🔄 Resetting timer for new lecture');
+        // Reset timer ONLY for lecture change — WiFi events never reset the timer
+        console.log('🔄 Lecture changed — resetting timer to 0');
         this.timerSeconds = 0;
       }
       
-      // Step 3: Face re-verification (mandatory for all reconnections)
-      console.log('👤 Step 3: Performing mandatory face re-verification...');
-      const faceVerificationResult = await this.performFaceVerification();
-      
-      if (!faceVerificationResult.success) {
-        console.error('❌ Face re-verification failed:', faceVerificationResult.error);
-        return {
-          success: false,
-          error: 'Face re-verification failed on reconnection',
-          reason: faceVerificationResult.reason,
-          step: 'face_verification'
-        };
-      }
-      
-      console.log('✅ Face re-verification passed');
-      
-      // Step 4: Handle timer resumption based on scenario
+      // Step 3: Resume or start timer — NO face verification on WiFi reconnect
+      // Face verify is only required on: new lecture, day change, or random ring
       if (isSameLecture && this.wasRunningBeforeDisconnect) {
-        // Scenario 1: Same lecture - resume from paused state
+        // Same lecture — resume from where it was paused
         console.log('▶️ Same lecture - resuming timer from paused state');
         console.log(`   Resuming from: ${this.timerSeconds} seconds`);
         
@@ -581,29 +575,37 @@ class OfflineTimerService {
         });
         
       } else {
-        // Scenario 2: Different lecture or wasn't running - start fresh
-        console.log('🆕 Different lecture or timer wasn\'t running - starting fresh');
+        // Different lecture or timer wasn't running before disconnect
+        console.log('🆕 Different lecture or timer wasn\'t running - starting');
+        
+        // If it's a different lecture, reset timer (already done above if wasRunningBeforeDisconnect)
+        // If it wasn't running before disconnect and it's a different lecture, reset now
+        if (!isSameLecture) {
+          console.log('🔄 Different lecture — resetting timer to 0');
+          this.timerSeconds = 0;
+        }
+        // If same lecture but wasn't running — keep timer value, just resume
         
         // Set new lecture context
         this.currentLecture = newLectureInfo;
         this.lectureStartTime = _getBootMs() || Date.now();
         this.authorizedBSSID = bssidCheck.expectedBSSID;
         
-        // Start fresh timer
+        // Start timer
         this.isRunning = true;
         this.isPaused = false;
         this.pausedDueToWiFiLoss = false;
         this.wasRunningBeforeDisconnect = false;
         
-        // Start counting from 0
+        // Start counting from current value (0 if new lecture, preserved if same)
         this.startCounting();
         
         // Notify listeners
         this.notifyListeners({
-          type: 'timer_started_after_reconnection',
+          type: isSameLecture ? 'timer_resumed_after_reconnection' : 'timer_started_after_reconnection',
           timerSeconds: this.timerSeconds,
           lecture: this.currentLecture,
-          scenario: 'different_lecture'
+          scenario: isSameLecture ? 'same_lecture_not_running' : 'different_lecture'
         });
       }
       
