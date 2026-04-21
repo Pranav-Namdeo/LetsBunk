@@ -12659,63 +12659,51 @@ async function showPeriodBreakdown(enrollmentNo, date) {
     document.getElementById('periodModal').style.display = 'block';
 
     try {
-        // 1. Get student info to know their semester/branch
-        const studentRes = await fetch(`${SERVER_URL}/api/students?enrollmentNo=${enrollmentNo}`);
-        const studentData = await studentRes.json();
-        const student = studentData.students?.[0] || studentData.student || null;
-        const semester = student?.semester || '';
-        const branch   = student?.branch   || '';
+        // 1. Fetch period records first — they carry semester/branch directly
+        const periodRes  = await fetch(`${SERVER_URL}/api/attendance/period-report?enrollmentNo=${enrollmentNo}&date=${date}&limit=20`);
+        const periodData = await periodRes.json();
+        const periodRecords = periodData.records || [];
 
-        if (!semester || !branch) throw new Error('Could not determine student semester/branch');
+        // Build period map keyed by period id
+        const periodMap = {};
+        periodRecords.forEach(r => { periodMap[r.period] = r; });
 
-        // 2. Fetch in parallel: all classes held that day + student's period records + audit trail
-        const [historyRes, periodRes, auditRes, recordRes] = await Promise.all([
-            fetch(`${SERVER_URL}/api/timetable-history/day?date=${date}&semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`),
-            fetch(`${SERVER_URL}/api/attendance/period-report?enrollmentNo=${enrollmentNo}&date=${date}&limit=20`),
-            fetch(`${SERVER_URL}/api/attendance/audit-trail?enrollmentNo=${enrollmentNo}&date=${date}&limit=50`),
-            fetch(`${SERVER_URL}/api/attendance/records?studentId=${enrollmentNo}`)
-        ]);
+        // Derive semester/branch from period records (kept for future use)
+        const semester = periodRecords[0]?.semester || '';
+        const branch   = periodRecords[0]?.branch   || '';
 
-        const historyData = await historyRes.json();
-        const periodData  = await periodRes.json();
-        const auditData   = await auditRes.json();
-        const recordData  = await recordRes.json();
+        // 2. Fetch remaining data in parallel — only tested, deployed endpoints
+        const [auditData] = await Promise.allSettled([
+            fetch(`${SERVER_URL}/api/attendance/audit-trail?enrollmentNo=${enrollmentNo}&date=${date}&limit=50`).then(r => r.ok ? r.json() : { records: [] })
+        ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : {}));
 
         // 3. Build lookup maps
-        // PeriodAttendance records keyed by period
-        const periodMap = {};
-        (periodData.records || []).forEach(r => { periodMap[r.period] = r; });
-
-        // Audit records keyed by period — flag if modified during class time
         const auditMap = {};
         (auditData.records || []).forEach(a => {
             if (!auditMap[a.period]) auditMap[a.period] = [];
             auditMap[a.period].push(a);
         });
 
-        // Per-period time data from AttendanceRecord.lectures
-        const lectureMap = {};
-        if (recordData.success && recordData.records) {
-            const dayRecord = recordData.records.find(r => {
-                const rd = new Date(r.date);
-                return !isNaN(rd.getTime()) && rd.toISOString().split('T')[0] === date;
-            });
-            if (dayRecord?.lectures) {
-                dayRecord.lectures.forEach(l => { if (l.period) lectureMap[l.period] = l; });
-            }
-        }
+        // 4. Build classes list from PeriodAttendance (source of truth for deployed server)
+        const classesList = Object.values(periodMap)
+            .sort((a, b) => a.period.localeCompare(b.period))
+            .map(r => {
+                // Time data from PeriodAttendance.timerSeconds (real-time sync from mobile)
+                const attendedSec = r.timerSeconds || 0;
+                const totalSec = (r.startTime && r.endTime)
+                    ? (timeStrToMinutes(r.endTime) - timeStrToMinutes(r.startTime)) * 60
+                    : 3600;  // default 60 min
+                const timePct = totalSec > 0 ? Math.min(100, Math.round((attendedSec / totalSec) * 100)) : 0;
 
-        // 4. Use TimetableHistory as the master list of classes held that day
-        //    Fall back to PeriodAttendance records if TimetableHistory is empty (older data)
-        let classesList = historyData.periods || [];
-        if (classesList.length === 0) {
-            // Fallback: build from PeriodAttendance records
-            classesList = Object.values(periodMap).map(r => ({
-                period: r.period, subject: r.subject,
-                teacher: r.teacher, teacherName: r.teacherName,
-                room: r.room, startTime: null, endTime: null
-            }));
-        }
+                return {
+                    period: r.period, subject: r.subject,
+                    teacher: r.teacher, teacherName: r.teacherName,
+                    room: r.room,
+                    startTime: r.startTime || null,
+                    endTime:   r.endTime   || null,
+                    attendedSec, totalSec, timePct
+                };
+            });
 
         if (classesList.length === 0) {
             document.getElementById('periodListContainer').innerHTML =
@@ -12736,17 +12724,10 @@ async function showPeriodBreakdown(enrollmentNo, date) {
             const statusColor = isPresent ? '#28a745' : '#dc3545';
             const statusIcon  = isPresent ? '✓' : '✗';
 
-            // Time percentage
-            const lec         = lectureMap[cls.period];
-            const attendedSec = lec ? lec.attended : (rec?.timerSeconds || 0);
-            const totalSec    = lec ? lec.total : (
-                cls.startTime && cls.endTime
-                    ? (timeStrToMinutes(cls.endTime) - timeStrToMinutes(cls.startTime)) * 60
-                    : 3600
-            );
-            const timePct     = totalSec > 0 ? Math.min(100, Math.round((attendedSec / totalSec) * 100)) : 0;
-            const attendedMin = Math.floor(attendedSec / 60);
-            const totalMin    = Math.floor(totalSec    / 60);
+            // Time data already calculated in classesList
+            const timePct     = cls.timePct;
+            const attendedMin = Math.floor(cls.attendedSec / 60);
+            const totalMin    = Math.floor(cls.totalSec    / 60);
             const pctColor    = timePct >= 75 ? '#28a745' : timePct >= 50 ? '#ffc107' : '#dc3545';
 
             // Audit / edit warning
