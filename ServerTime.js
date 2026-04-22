@@ -30,6 +30,8 @@ class ServerTime {
     this.lastSyncBootMs = 0;   // boot-relative ms at last sync — spoof-proof anchor
     this._cachedBootElapsedMs = 0; // updated every second via updateBootCache()
     this._cacheUpdatedAt = 0;      // wall-clock ms when cache was last refreshed
+    this._nowCache = 0;            // cached result of now() — refreshed every 500ms
+    this._nowCacheAt = 0;          // wall-clock ms when _nowCache was set
     this.syncInterval = null;
     this.bootCacheInterval = null;
     this.isSynced = false;
@@ -230,33 +232,36 @@ class ServerTime {
    *   3. No sync yet:                Date.now() + serverTimeOffset
    */
   now() {
-    if (!this.lastServerTime) {
-      // No server sync yet — use boot-elapsed + offset as best estimate
-      // Boot-elapsed is spoof-proof; offset defaults to 0 until first sync
-      if (this._cachedBootElapsedMs > 0) {
-        // We have a boot anchor but no server time yet — just return boot-relative ms
-        // (will be corrected on first sync)
-        return this._cachedBootElapsedMs + this.serverTimeOffset;
-      }
-      // Absolute last resort — native not available at all
-      return Date.now() + this.serverTimeOffset;
+    // ── 500ms result cache — avoids recomputing on every timer tick ──────────
+    const wallNow = Date.now();
+    if (this._nowCache && (wallNow - this._nowCacheAt) < 500) {
+      return this._nowCache;
     }
 
-    // ── Primary: boot-relative elapsed (cannot be spoofed) ───────────────────
-    if (this.lastSyncBootMs > 0 && TimerModule && TimerModule.getBootElapsedMs) {
+    let result;
+    if (!this.lastServerTime) {
+      if (this._cachedBootElapsedMs > 0) {
+        result = this._cachedBootElapsedMs + this.serverTimeOffset;
+      } else {
+        result = wallNow + this.serverTimeOffset;
+      }
+    } else if (this.lastSyncBootMs > 0 && TimerModule && TimerModule.getBootElapsedMs) {
       try {
-        // Synchronous read from shared static field via a cached value
-        // We update _cachedBootElapsedMs every tick via updateBootCache()
-        if (this._cachedBootElapsedMs > 0 && (Date.now() - this._cacheUpdatedAt) < 3000) {
+        if (this._cachedBootElapsedMs > 0 && (wallNow - this._cacheUpdatedAt) < 3000) {
           const elapsedSinceSync = this._cachedBootElapsedMs - this.lastSyncBootMs;
-          return this.lastServerTime + elapsedSinceSync;
+          result = this.lastServerTime + elapsedSinceSync;
         }
       } catch (_) {}
     }
 
-    // ── Fallback: device time elapsed (less secure but always available) ─────
-    const elapsedSinceSync = Date.now() - this.lastSyncDeviceTime;
-    return this.lastServerTime + elapsedSinceSync;
+    if (result === undefined) {
+      const elapsedSinceSync = wallNow - this.lastSyncDeviceTime;
+      result = this.lastServerTime + elapsedSinceSync;
+    }
+
+    this._nowCache = result;
+    this._nowCacheAt = wallNow;
+    return result;
   }
 
   /**

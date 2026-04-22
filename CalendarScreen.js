@@ -143,13 +143,20 @@ export default function CalendarScreen({
         }
     };
 
-    // ── teacher: subject list ─────────────────────────────────────────────────
+    // ── teacher: subject list — cached, only fetches once per semester/branch ──
+    const subjectListCacheRef = React.useRef({});
     const fetchSubjectList = async () => {
+        const cacheKey = `${semester}||${branch}`;
+        if (subjectListCacheRef.current[cacheKey]) {
+            setSubjectList(subjectListCacheRef.current[cacheKey]);
+            setSelectedSubject(prev => prev || subjectListCacheRef.current[cacheKey][0] || '');
+            return;
+        }
         try {
             const data = await apiFetch(`${socketUrl}/api/attendance/subjects?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`);
             if (data.success && data.subjects?.length > 0) {
+                subjectListCacheRef.current[cacheKey] = data.subjects;
                 setSubjectList(data.subjects);
-                // Only auto-select if nothing is selected yet
                 setSelectedSubject(prev => prev || data.subjects[0]);
             } else {
                 setSubjectList([]);
@@ -192,7 +199,6 @@ export default function CalendarScreen({
             const data = await apiFetch(`${socketUrl}/api/attendance/records?studentId=${encodeURIComponent(studentId)}`);
             if (data.success && data.records) {
                 const aMap = {}, rMap = {};
-                let mp = 0, ma = 0;
                 data.records.forEach(r => {
                     const d   = new Date(r.date);
                     const key = d.toDateString();
@@ -201,14 +207,10 @@ export default function CalendarScreen({
                     r.dayPercentage  = Number(r.dayPercentage)  || 0;
                     aMap[key] = r.status;
                     rMap[key] = r;
-                    if (d.getMonth() === currentDate.getMonth() &&
-                        d.getFullYear() === currentDate.getFullYear()) {
-                        if (r.status === 'present') mp++; else ma++;
-                    }
                 });
                 setAttendanceData(aMap);
                 setAttendanceRecords(rMap);
-                setMonthStats({ present: mp, absent: ma, total: mp + ma });
+                // Month stats computed in render from currentDate — see attendancePct below
             } else {
                 setFetchError('No attendance records found.');
             }
@@ -318,16 +320,40 @@ export default function CalendarScreen({
         if (!date) return false;
         if (!isTeacher) return !!attendanceData[date.toDateString()];
         if (filterMode === 'day') return !!attendanceData[date.toDateString()];
-        // subject mode: check activeDates set (ISO midnight strings)
-        const midnight = new Date(date); midnight.setHours(0, 0, 0, 0);
-        return activeDates.has(midnight.toISOString());
+        // subject mode: compare YYYY-MM-DD strings to avoid timezone issues
+        const dateStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
+        // activeDates contains ISO strings like "2026-04-22T00:00:00.000Z" — extract date part
+        for (const iso of activeDates) {
+            if (iso.startsWith(dateStr)) return true;
+        }
+        return false;
     };
 
     const getHoliday = (date) => date ? holidays[date.toDateString()] : null;
 
     const days = getDaysInMonth(currentDate);
-    const attendancePct = monthStats.total > 0
-        ? ((monthStats.present / monthStats.total) * 100).toFixed(1) : 0;
+
+    // Compute month stats for the currently viewed month from attendanceData
+    // This ensures navigating months shows correct stats for that month
+    const currentMonthStats = React.useMemo(() => {
+        const yr = currentDate.getFullYear();
+        const mo = currentDate.getMonth();
+        let present = 0, absent = 0;
+        Object.entries(attendanceData).forEach(([key, val]) => {
+            const d = new Date(key);
+            if (d.getFullYear() === yr && d.getMonth() === mo) {
+                const status = typeof val === 'string' ? val : val?.status;
+                if (status === 'present') present++;
+                else absent++;
+            }
+        });
+        return { present, absent, total: present + absent };
+    }, [attendanceData, currentDate]);
+
+    // For teacher mode, monthStats is set directly from fetch; for student use computed
+    const displayStats = isTeacher ? monthStats : currentMonthStats;
+    const attendancePct = displayStats.total > 0
+        ? ((displayStats.present / displayStats.total) * 100).toFixed(1) : 0;
 
     // ── render ────────────────────────────────────────────────────────────────
     return (
@@ -367,7 +393,11 @@ export default function CalendarScreen({
                                     styles.modeBtn,
                                     filterMode === mode && { backgroundColor: theme.primary }
                                 ]}
-                                onPress={() => setFilterMode(mode)}
+                                onPress={() => {
+                                setFilterMode(mode);
+                                // Reset subject selection when switching modes to avoid stale data
+                                if (mode !== filterMode) setSelectedSubject('');
+                            }}
                             >
                                 <Text style={[
                                     styles.modeBtnText,
@@ -411,11 +441,11 @@ export default function CalendarScreen({
             <View style={[styles.statsCard, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
                 <View style={styles.statsRow}>
                     <View style={styles.statItem}>
-                        <Text style={[styles.statValue, { color: '#10b981' }]}>{monthStats.present}</Text>
+                        <Text style={[styles.statValue, { color: '#10b981' }]}>{displayStats.present}</Text>
                         <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Present</Text>
                     </View>
                     <View style={styles.statItem}>
-                        <Text style={[styles.statValue, { color: '#ef4444' }]}>{monthStats.absent}</Text>
+                        <Text style={[styles.statValue, { color: '#ef4444' }]}>{displayStats.absent}</Text>
                         <Text style={[styles.statLabel, { color: theme.textSecondary }]}>Absent</Text>
                     </View>
                     <View style={styles.statItem}>
@@ -460,6 +490,13 @@ export default function CalendarScreen({
                             style={{ marginTop: 10, padding: 8, borderRadius: 8, backgroundColor: 'rgba(0,217,255,0.1)' }}>
                             <Text style={{ color: theme.primary, fontSize: 13 }}>🔄 Retry</Text>
                         </TouchableOpacity>
+                    </View>
+                ) : Object.keys(attendanceData).length === 0 && !isTeacher ? (
+                    <View style={styles.loadingContainer}>
+                        <Text style={{ fontSize: 40, marginBottom: 8 }}>📅</Text>
+                        <Text style={{ color: theme.textSecondary, textAlign: 'center', fontSize: 14 }}>
+                            No attendance recorded yet.{'\n'}Your history will appear here once classes begin.
+                        </Text>
                     </View>
                 ) : (
                     <View style={styles.daysGrid}>

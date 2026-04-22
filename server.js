@@ -1,4 +1,7 @@
 // Deployment trigger - Updated March 20, 2026 - v2.10 - Fix student socket room rejoin after server restart.
+// Force IST timezone — all period times are stored as IST strings (HH:MM)
+process.env.TZ = 'Asia/Kolkata';
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -1333,11 +1336,11 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
     try {
         const { teacherId } = req.params;
 
-        // Get current day and time in UTC (critical for proper class detection)
+        // Get current day and time in IST (TZ forced to Asia/Kolkata at startup)
         const now = new Date();
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDay = days[now.getUTCDay()];
-        const currentTime = now.getUTCHours() * 60 + now.getUTCMinutes(); // minutes since midnight (UTC)
+        const currentDay = days[now.getDay()];
+        const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
 
         console.log(`🔍 Finding current class for teacher: ${teacherId} at ${now.toLocaleTimeString()}`);
 

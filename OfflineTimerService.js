@@ -88,6 +88,11 @@ class OfflineTimerService {
     this.lastFaceVerificationTime = null;
     this.verifiedToday = false;          // true after first face-verify of the day
     this.verifiedTodayDate = null;       // date string "YYYY-MM-DD" of verification
+
+    // Face embedding cache — fetched once per day, re-fetched after 7 days or on change
+    this._cachedFaceEmbedding = null;
+    this._cachedFaceEmbeddingDate = null; // "YYYY-MM-DD" when embedding was cached
+    this._midnightResetTimer = null;
     
     // Sync queue for offline updates
     this.syncQueue = [];
@@ -149,6 +154,9 @@ class OfflineTimerService {
       
       // Setup lecture end time monitoring
       this.setupLectureEndMonitoring();
+
+      // Setup midnight reset for verifiedToday flag
+      this._scheduleMidnightReset();
       
       // Initial connectivity check and notification
       await this.checkInternetConnectivity();
@@ -412,48 +420,62 @@ class OfflineTimerService {
   }
 
   /**
-   * Get student's face embedding from server
+   * Get student's face embedding from server.
+   * Cached locally — only re-fetches after 7 days or if cache is empty.
    */
   async getStudentFaceData() {
     try {
+      const todayStr = new Date().toISOString().split('T')[0];
+
+      // Return cached embedding if it's less than 7 days old
+      if (this._cachedFaceEmbedding && this._cachedFaceEmbeddingDate) {
+        const cachedDate = new Date(this._cachedFaceEmbeddingDate);
+        const daysDiff = (Date.now() - cachedDate.getTime()) / (1000 * 60 * 60 * 24);
+        if (daysDiff < 7) {
+          console.log('📦 Using cached face embedding (cached on', this._cachedFaceEmbeddingDate, ')');
+          return { success: true, embedding: this._cachedFaceEmbedding, enrolledAt: this._cachedFaceEmbeddingDate };
+        }
+      }
+
+      console.log('📡 Fetching fresh face embedding from server...');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
       const response = await fetch(`${this.serverUrl}/api/students/${this.studentId}/face-data`, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
-        timeout: 10000 // 10 second timeout
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`Server error: ${response.status}`);
       }
 
       const data = await response.json();
-      
+
       if (!data.success) {
-        return {
-          success: false,
-          error: data.error || 'Failed to get face data'
-        };
+        return { success: false, error: data.error || 'Failed to get face data' };
       }
-      
+
       if (!data.faceEmbedding || !Array.isArray(data.faceEmbedding)) {
-        return {
-          success: false,
-          error: 'No face embedding found. Please enroll your face first.'
-        };
+        return { success: false, error: 'No face embedding found. Please enroll your face first.' };
       }
-      
-      return {
-        success: true,
-        embedding: data.faceEmbedding,
-        enrolledAt: data.enrolledAt
-      };
-      
+
+      // Cache the embedding
+      this._cachedFaceEmbedding = data.faceEmbedding;
+      this._cachedFaceEmbeddingDate = todayStr;
+      console.log('✅ Face embedding fetched and cached');
+
+      return { success: true, embedding: data.faceEmbedding, enrolledAt: data.enrolledAt };
+
     } catch (error) {
       console.error('❌ Error fetching face data:', error);
-      return {
-        success: false,
-        error: `Failed to fetch face data: ${error.message}`
-      };
+      // If we have a stale cache, use it rather than failing completely
+      if (this._cachedFaceEmbedding) {
+        console.warn('⚠️ Using stale cached face embedding due to fetch error');
+        return { success: true, embedding: this._cachedFaceEmbedding, enrolledAt: this._cachedFaceEmbeddingDate };
+      }
+      return { success: false, error: `Failed to fetch face data: ${error.message}` };
     }
   }
 
@@ -1094,11 +1116,16 @@ class OfflineTimerService {
           // Auto-continue: if already verified today, start next period automatically
           if (this.verifiedToday && this.verifiedTodayDate === new Date().toISOString().split('T')[0]) {
             console.log('🔄 Auto-continuing to next period (already verified today)...');
-            // Small delay to let the current period fully close
-            setTimeout(async () => {
+            
+            // Retry logic for period transition
+            let retryCount = 0;
+            const maxRetries = 5;
+            
+            const attemptAutoStart = async () => {
               try {
                 const { getLectureInfo } = require('./ServerTime');
                 const nextLecture = await getLectureInfo();
+                
                 if (nextLecture && nextLecture.subject) {
                   console.log('📚 Next period found:', nextLecture.subject, '— auto-starting timer');
                   const result = await this.startTimer(nextLecture);
@@ -1108,14 +1135,31 @@ class OfflineTimerService {
                       lecture: nextLecture,
                       timerSeconds: 0
                     });
+                    return true;
+                  } else {
+                    console.warn('⚠️ Failed to auto-start next period:', result.error);
                   }
                 } else {
-                  console.log('⏰ No next period active — staying idle');
+                  console.log(`⏰ No next period active yet (retry ${retryCount + 1}/${maxRetries})...`);
+                }
+                
+                if (retryCount < maxRetries) {
+                  retryCount++;
+                  setTimeout(attemptAutoStart, 5000); // Retry every 5s
+                } else {
+                  console.log('⏰ Reached max retries for auto-continue — staying idle');
                 }
               } catch (e) {
                 console.log('⚠️ Auto-continue check failed:', e.message);
+                if (retryCount < maxRetries) {
+                  retryCount++;
+                  setTimeout(attemptAutoStart, 5000);
+                }
               }
-            }, 3000); // 3s gap between periods
+              return false;
+            };
+
+            setTimeout(attemptAutoStart, 3000); // Initial 3s gap
           }
         }
       } else {
@@ -1224,6 +1268,30 @@ class OfflineTimerService {
     
     // Initial check
     this.checkInternetConnectivity();
+  }
+
+  /**
+   * Schedule verifiedToday flag reset at midnight.
+   * Uses a one-shot timeout that re-schedules itself each day.
+   */
+  _scheduleMidnightReset() {
+    if (this._midnightResetTimer) {
+      clearTimeout(this._midnightResetTimer);
+      this._midnightResetTimer = null;
+    }
+    const now = new Date();
+    const midnight = new Date(now);
+    midnight.setHours(24, 0, 0, 0); // next midnight
+    const msUntilMidnight = midnight.getTime() - now.getTime();
+    this._midnightResetTimer = setTimeout(() => {
+      console.log('🌙 Midnight — resetting verifiedToday and face embedding cache');
+      this.verifiedToday = false;
+      this.verifiedTodayDate = null;
+      this._cachedFaceEmbedding = null;
+      this._cachedFaceEmbeddingDate = null;
+      // Re-schedule for the next midnight
+      this._scheduleMidnightReset();
+    }, msUntilMidnight);
   }
 
   /**
@@ -1834,6 +1902,11 @@ class OfflineTimerService {
       this.lectureEndCheckInterval = null;
     }
     
+    if (this._midnightResetTimer) {
+      clearTimeout(this._midnightResetTimer);
+      this._midnightResetTimer = null;
+    }
+
     if (this.appStateSubscription) {
       this.appStateSubscription.remove();
       this.appStateSubscription = null;

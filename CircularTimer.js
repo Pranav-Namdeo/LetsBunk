@@ -45,6 +45,7 @@ export default function CircularTimer({
   onLongPressCenter = () => { },
   timetable = null,
   currentDay = null,
+  currentPeriodNumber = null, // pass the active period number (1-based) from parent
 }) {
   const safeTheme = {
     primary: theme.primary || '#d97706',
@@ -244,6 +245,7 @@ export default function CircularTimer({
           return {
             id: i + 1,
             label: shortLabel || 'CLASS',
+            fullLabel: subject,   // original name shown in tooltip on tap
             room: slot.room || '',
             time: slot.time || '',
             color: color,
@@ -303,6 +305,15 @@ export default function CircularTimer({
       y: CENTER + ringCenterRadius * Math.sin(midAngle),
     };
   };
+
+  // Pre-compute segment paths and centers — defined after createSegmentPath and getSegmentCenter
+  const segmentPaths = React.useMemo(() => {
+    return segments.map(seg => ({
+      id: seg.id,
+      path: createSegmentPath(seg.start, seg.end),
+      center: getSegmentCenter(seg),
+    }));
+  }, [segments]);
 
   // Pan responder for touch
   const panResponder = useRef(
@@ -383,69 +394,48 @@ export default function CircularTimer({
             </LinearGradient>
           </Defs>
 
-          {/* Segments with smooth morph animation */}
-          {segments.map((seg) => {
+          {/* Segments — use pre-computed paths to avoid recalculation on every render */}
+          {segmentPaths.map((sp, idx) => {
+            const seg = segments[idx];
             const isActive = activeSegment === seg.id;
-            const centerPos = getSegmentCenter(seg);
+            // Highlight the currently active period with a brighter ring
+            const isCurrentPeriod = currentPeriodNumber != null && seg.id === currentPeriodNumber;
+            const centerPos = sp.center;
 
             return (
               <G key={seg.id}>
                 {/* Normal segment */}
                 <Path
-                  d={createSegmentPath(seg.start, seg.end)}
+                  d={sp.path}
                   fill={seg.color}
-                  stroke={safeTheme.background}
-                  strokeWidth="2"
+                  stroke={isCurrentPeriod ? '#ffffff' : safeTheme.background}
+                  strokeWidth={isCurrentPeriod ? 3 : 2}
                   opacity={isActive ? 0.3 : 1}
-                  fillOpacity={isActive ? 0.3 : 0.95}
+                  fillOpacity={isActive ? 0.3 : isCurrentPeriod ? 1 : 0.95}
                 />
+
+                {/* Pulsing outer ring for current period */}
+                {isCurrentPeriod && !isActive && (
+                  <Path
+                    d={sp.path}
+                    fill="none"
+                    stroke="#ffffff"
+                    strokeWidth="2"
+                    opacity="0.6"
+                  />
+                )}
 
                 {/* Active segment as animated floating circle */}
                 {isActive && (
                   <G opacity={circleScale}>
-                    {/* Outer border circle */}
-                    <Circle
-                      cx={centerPos.x}
-                      cy={centerPos.y}
-                      r="28"
-                      fill="none"
-                      stroke={safeTheme.cardBackground}
-                      strokeWidth="3"
-                      opacity="0.9"
-                    />
-                    
-                    {/* Main colored circle */}
-                    <Circle
-                      cx={centerPos.x}
-                      cy={centerPos.y}
-                      r="25"
-                      fill={seg.color}
-                      opacity="0.95"
-                    />
-                    
-                    {/* Subject name text */}
-                    <SvgText
-                      x={centerPos.x}
-                      y={centerPos.y - 4}
-                      textAnchor="middle"
-                      fontSize="9"
-                      fontWeight="bold"
-                      fill="#ffffff"
-                    >
-                      {seg.label}
+                    <Circle cx={centerPos.x} cy={centerPos.y} r="28" fill="none" stroke={safeTheme.cardBackground} strokeWidth="3" opacity="0.9" />
+                    <Circle cx={centerPos.x} cy={centerPos.y} r="25" fill={seg.color} opacity="0.95" />
+                    {/* Show full subject name in tooltip bubble */}
+                    <SvgText x={centerPos.x} y={centerPos.y - 4} textAnchor="middle" fontSize="9" fontWeight="bold" fill="#ffffff">
+                      {seg.fullLabel || seg.label}
                     </SvgText>
-                    
-                    {/* Room number text */}
                     {seg.room && (
-                      <SvgText
-                        x={centerPos.x}
-                        y={centerPos.y + 7}
-                        textAnchor="middle"
-                        fontSize="7"
-                        fontWeight="500"
-                        fill="#ffffff"
-                        opacity="0.9"
-                      >
+                      <SvgText x={centerPos.x} y={centerPos.y + 7} textAnchor="middle" fontSize="7" fontWeight="500" fill="#ffffff" opacity="0.9">
                         {seg.room}
                       </SvgText>
                     )}

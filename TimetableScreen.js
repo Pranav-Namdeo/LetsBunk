@@ -65,11 +65,6 @@ export default function TimetableScreen({
       console.log('Final teacher identifier:', teacherIdentifier);
       
       if (!teacherIdentifier) {
-        Alert.alert(
-          'Debug Info',
-          `loginId: ${loginId}\nuserData: ${JSON.stringify(userData)}\n\nNo identification found!`,
-          [{ text: 'OK' }]
-        );
         throw new Error('No teacher identification available');
       }
       
@@ -203,17 +198,6 @@ export default function TimetableScreen({
       setCurrentDay(getCurrentDayIndex());
     }
   }, [timetable]);
-
-  // Force refresh when screen is focused
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // Check if timetable needs refresh every 30 seconds
-      if (semester && branch && socketUrl) {
-        fetchTimetable();
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [semester, branch, socketUrl]);
 
   const fetchTimetable = async () => {
     if (!socketUrl) {
@@ -490,8 +474,8 @@ export default function TimetableScreen({
     const periodIndex = updatedTimetable.timetable[dayKey].findIndex(p => p.period === periodNumber);
 
     if (periodIndex !== -1) {
-      // If subject is "Break", mark as break, otherwise it's a regular period
-      const isBreakPeriod = editSubject.toLowerCase() === 'break';
+      // If subject is "Break" (any case), mark as break, otherwise it's a regular period
+      const isBreakPeriod = editSubject.trim().toLowerCase() === 'break';
       
       updatedTimetable.timetable[dayKey][periodIndex] = {
         ...updatedTimetable.timetable[dayKey][periodIndex],
@@ -542,39 +526,49 @@ export default function TimetableScreen({
     return timetable.timetable[dayName] || [];
   };
 
+  // Pre-build a lookup map: dayKey → { periodNumber → slot }
+  // This replaces the O(n²) find() call in getSubjectForPeriod
+  const periodLookup = useMemo(() => {
+    if (!timetable?.timetable) return {};
+    const map = {};
+    Object.entries(timetable.timetable).forEach(([dayKey, slots]) => {
+      map[dayKey] = {};
+      (slots || []).forEach(slot => {
+        if (slot && slot.period != null) {
+          map[dayKey][slot.period] = slot;
+        }
+      });
+    });
+    return map;
+  }, [timetable]);
+
   const getSubjectForPeriod = (day, periodNum) => {
-    if (!timetable || !timetable.timetable) {
-      console.log('⚠️ No timetable data');
-      return null;
-    }
-    if (day < 0 || day >= DAYS.length) return null;
-
+    if (!timetable?.timetable || day < 0 || day >= DAYS.length) return null;
     const dayName = DAYS[day].toLowerCase();
-    const schedule = timetable.timetable[dayName] || [];
-
-    // Debug: Log for period 1 of each day to see what's being fetched
-    if (periodNum === 1) {
-      const subject = schedule.find(s => s && s.period === periodNum);
-      console.log(`📅 ${dayName} Period 1:`, subject?.subject || 'none');
-    }
-
-    return schedule.find(s => s && s.period === periodNum);
+    return periodLookup[dayName]?.[periodNum] ?? null;
   };
 
   const getCurrentPeriod = () => {
     try {
+      // Use actual period settings from timetable instead of hardcoded 9 AM
+      const periods = timetable?.periods;
+      if (!periods || periods.length === 0) return null;
+
       const now = getServerTime().nowDate();
-      const hour = now.getHours();
-      if (hour >= 9 && hour < 17) {
-        return hour - 8; // Period 1 starts at 9 AM
+      const currentMins = now.getHours() * 60 + now.getMinutes();
+
+      for (const p of periods) {
+        if (!p.startTime || !p.endTime) continue;
+        const [sh, sm] = p.startTime.split(':').map(Number);
+        const [eh, em] = p.endTime.split(':').map(Number);
+        const start = sh * 60 + sm;
+        const end   = eh * 60 + em;
+        if (currentMins >= start && currentMins < end) {
+          return p.number;
+        }
       }
       return null;
     } catch {
-      const now = new Date();
-      const hour = now.getHours();
-      if (hour >= 9 && hour < 17) {
-        return hour - 8;
-      }
       return null;
     }
   };
@@ -762,12 +756,6 @@ export default function TimetableScreen({
 
             {getPeriods().map((period) => {
               const subject = getSubjectForPeriod(currentDay, period.number);
-
-              // Debug: Log what list view is showing
-              if (period.number === 1) {
-                console.log(`📋 LIST VIEW - ${DAYS[currentDay]} Period 1:`, subject?.subject);
-              }
-
               const isCurrentPeriod = currentPeriod === period.number;
               const isBreak = subject?.isBreak;
 
@@ -870,12 +858,6 @@ export default function TimetableScreen({
                     </View>
                     {DAYS.map((day, dayIndex) => {
                       const subject = getSubjectForPeriod(dayIndex, period.number);
-
-                      // Debug: Log what table view is showing
-                      if (period.number === 1 && dayIndex === 0) {
-                        console.log(`📊 TABLE VIEW - Monday Period 1:`, subject?.subject);
-                      }
-
                       return (
                         <TouchableOpacity
                           key={day}

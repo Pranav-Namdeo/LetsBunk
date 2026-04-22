@@ -43,6 +43,7 @@ import CircularTimer from './CircularTimer';
 import { requestStartupPermissions } from './PermissionManager';
 import LoginScreen from './LoginScreen';
 import SplashScreenView from './SplashScreen';
+import { showToast, ToastContainer } from './Toast';
 
 // Configuration - Import from centralized config
 import { SERVER_BASE_URL, API_URL as CONFIG_API_URL, SOCKET_URL as CONFIG_SOCKET_URL } from './config';
@@ -96,7 +97,7 @@ async function _refreshAppBootCache() {
       _appBootMsCache = bootElapsedMs;
       _appBootMsCacheAt = Date.now();
     }
-  } catch (_) {}
+  } catch (_) { }
 }
 function _appGetBootMs() {
   if (_appBootMsCache > 0) {
@@ -304,7 +305,8 @@ export default function App() {
     if (selectedRole === 'student' && !showLogin) {
       const wifiCheckInterval = setInterval(async () => {
         if (currentClassInfo) {
-          await isConnectedToClassroomWiFi();
+          // Background check: silence alerts to avoid spamming the user
+          await isConnectedToClassroomWiFi(true); 
         }
       }, 60000); // Check every 60s — background only, no display
 
@@ -504,7 +506,7 @@ export default function App() {
             // Get stored student data
             const storedSemester = await AsyncStorage.getItem(SEMESTER_KEY);
             const storedBranch = await AsyncStorage.getItem(BRANCH_KEY);
-            
+
             if (storedSemester && storedBranch) {
               console.log('📚 Auto-loading student data:', storedSemester, storedBranch);
               setSemester(storedSemester);
@@ -755,15 +757,15 @@ export default function App() {
           if (!prev.isRunning) return prev;
           // Only update if subject actually changed (period boundary crossed)
           if (prev.currentLecture?.subject === period.subject &&
-              prev.currentLecture?.startTime === period.startTime) return prev;
+            prev.currentLecture?.startTime === period.startTime) return prev;
           const updatedLecture = {
             ...prev.currentLecture,
-            subject:   period.subject   || prev.currentLecture?.subject,
-            teacher:   period.teacher   || period.teacherName || prev.currentLecture?.teacher,
-            room:      period.room      || prev.currentLecture?.room,
+            subject: period.subject || prev.currentLecture?.subject,
+            teacher: period.teacher || period.teacherName || prev.currentLecture?.teacher,
+            room: period.room || prev.currentLecture?.room,
             startTime: period.startTime || prev.currentLecture?.startTime,
-            endTime:   period.endTime   || prev.currentLecture?.endTime,
-            period:    period.period    || prev.currentLecture?.period,
+            endTime: period.endTime || prev.currentLecture?.endTime,
+            period: period.period || prev.currentLecture?.period,
           };
           // Also update OfflineTimerService's internal currentLecture
           if (OfflineTimerService.isRunning) {
@@ -811,11 +813,9 @@ export default function App() {
 
     // Face cache removed - no longer needed
 
-    console.log('📋 About to load config and setup socket...');
+    console.log('📋 About to load config...');
     loadConfig();
-    console.log('📋 Config loaded, now calling setupSocket()...');
-    setupSocket();
-    console.log('📋 setupSocket() called!');
+    console.log('📋 Config loaded!');
 
     // Handle app state changes (background/foreground)
     const subscription = AppState.addEventListener('change', async nextAppState => {
@@ -823,11 +823,11 @@ export default function App() {
         // App came to foreground - period-based attendance (no timer)
         console.log('📱 App came to foreground');
         backgroundTimeRef.current = null;
-        
+
         // Refresh data for students when app comes to foreground
         if (selectedRoleRef.current === 'student') {
           console.log('🔄 Refreshing data after app came to foreground...');
-          
+
           // Rejoin class room in case socket reconnected while in background
           const currentSem = semesterRef.current;
           const currentBranch = branchRef.current;
@@ -840,7 +840,7 @@ export default function App() {
             console.log('📅 Fetching latest timetable...');
             await fetchTimetable(currentSem, currentBranch);
           }
-          
+
           // Refresh BSSID schedule - get enrollment number from storage
           try {
             const storedUserData = await AsyncStorage.getItem('@user_data');
@@ -854,7 +854,7 @@ export default function App() {
           } catch (error) {
             console.error('❌ Error refreshing BSSID schedule:', error);
           }
-          
+
           console.log('✅ Data refresh complete');
         }
       } else if (nextAppState.match(/inactive|background/)) {
@@ -874,7 +874,13 @@ export default function App() {
       }
       subscription.remove();
     };
-  }, [selectedRole]);
+  }, []); // Only run once on mount
+
+  // Dedicated socket initialization/reconnection effect
+  useEffect(() => {
+    console.log('🔌 Socket effect triggered - Identity:', studentId || loggedInUserId || 'anonymous');
+    setupSocket(studentId || loggedInUserId, selectedRole);
+  }, [studentId, loggedInUserId, selectedRole]);
 
   // Initialize OfflineTimerService when student logs in
   useEffect(() => {
@@ -882,9 +888,9 @@ export default function App() {
       const initializeOfflineTimer = async () => {
         try {
           console.log('🔧 Initializing OfflineTimerService for student:', studentId);
-          
+
           const success = await OfflineTimerService.initialize(studentId, SOCKET_URL);
-          
+
           if (success) {
             // Update student data for BSSID validation
             if (userData) {
@@ -893,11 +899,11 @@ export default function App() {
                 branch: userData.branch
               });
             }
-            
+
             // Setup event listeners
             const unsubscribe = OfflineTimerService.addListener((event) => {
               console.log('🔔 OfflineTimer event:', event.type);
-              
+
               switch (event.type) {
                 case 'timer_tick':
                   setOfflineTimerState(prev => ({
@@ -905,7 +911,7 @@ export default function App() {
                     timerSeconds: event.timerSeconds
                   }));
                   break;
-                  
+
                 case 'timer_started':
                   setOfflineTimerState(prev => ({
                     ...prev,
@@ -915,7 +921,7 @@ export default function App() {
                     currentLecture: event.lecture
                   }));
                   break;
-                  
+
                 case 'timer_stopped':
                   setOfflineTimerState(prev => ({
                     ...prev,
@@ -927,52 +933,43 @@ export default function App() {
                   }));
                   // Alert if stopped because student left classroom while screen was off
                   if (event.reason === 'wifi_left_classroom_background') {
-                    Alert.alert(
-                      '📶 Left Classroom',
-                      'Your attendance timer was stopped because you left the classroom WiFi network while the screen was off.',
-                      [{ text: 'OK' }]
-                    );
+                    showToast('📶 Left classroom WiFi — timer stopped', 'warning');
                   }
                   break;
-                  
+
                 case 'timer_paused':
                   setOfflineTimerState(prev => ({
                     ...prev,
                     isPaused: true
                   }));
                   break;
-                  
+
                 case 'timer_resumed':
                   setOfflineTimerState(prev => ({
                     ...prev,
                     isPaused: false
                   }));
                   break;
-                  
+
                 case 'bssid_unauthorized':
                 case 'wifi_disconnected':
-                  Alert.alert(
-                    '📶 WiFi Issue',
-                    event.type === 'bssid_unauthorized' 
-                      ? 'You are no longer connected to the authorized classroom WiFi. Timer has been stopped.'
-                      : 'WiFi connection lost. Timer has been stopped.',
-                    [{ text: 'OK' }]
+                  showToast(
+                    event.type === 'bssid_unauthorized'
+                      ? '📶 Left authorized WiFi — timer stopped'
+                      : '📶 WiFi disconnected — timer stopped',
+                    'warning'
                   );
                   break;
-                  
+
                 case 'missed_random_ring': {
                   const missedRingId = event.ringId || 'unknown';
                   if (!shownMissedRingIds.current.has(missedRingId)) {
                     shownMissedRingIds.current.add(missedRingId);
-                    Alert.alert(
-                      '🔔 Random Ring Missed',
-                      'A random ring was triggered while you were offline. Please respond immediately.',
-                      [{ text: 'OK' }]
-                    );
+                    showToast('🔔 Random ring missed — please respond immediately', 'error', 5000);
                   }
                   break;
                 }
-                  
+
                 case 'wifi_reconnected':
                   // WiFi reconnected - check if we need to handle reconnection
                   if (event.needsReconnectionHandling) {
@@ -980,27 +977,17 @@ export default function App() {
                     handleWiFiReconnectionEvent(event.currentBSSID);
                   }
                   break;
-                  
+
                 case 'timer_resumed_after_reconnection':
-                  Alert.alert(
-                    '✅ Timer Resumed',
-                    event.scenario === 'same_lecture' 
-                      ? 'WiFi reconnected to same lecture. Timer resumed from where it left off.'
-                      : 'WiFi reconnected. Timer resumed.',
-                    [{ text: 'OK' }]
-                  );
+                  console.log('✅ Timer resumed after reconnection');
+                  // Silent resumption preferred for better UX
                   break;
-                  
+
                 case 'timer_started_after_reconnection':
-                  Alert.alert(
-                    '🆕 New Lecture Started',
-                    event.scenario === 'different_lecture'
-                      ? 'WiFi reconnected to different lecture. Previous lecture data synced. New timer started.'
-                      : 'WiFi reconnected. Timer started.',
-                    [{ text: 'OK' }]
-                  );
+                  console.log('🆕 New lecture started after reconnection');
+                  // Silent start preferred for better UX
                   break;
-                  
+
                 case 'connectivity_changed':
                   // Update offline timer state with connectivity info
                   setOfflineTimerState(prev => ({
@@ -1010,7 +997,7 @@ export default function App() {
                     isConnectedToAuthorizedWiFi: event.hasAuthorizedWiFi,
                     pendingSyncCount: event.pendingSyncs
                   }));
-                  
+
                   // Show connectivity status changes to user
                   if (!event.hasInternet && event.hasAuthorizedWiFi) {
                     console.log('📶 App went offline - timer running locally');
@@ -1018,7 +1005,7 @@ export default function App() {
                     console.log('📶 App back online - syncing data');
                   }
                   break;
-                  
+
                 case 'sync_successful':
                   console.log('✅ Timer sync successful');
                   setOfflineTimerState(prev => ({
@@ -1036,31 +1023,23 @@ export default function App() {
                   if (event.statusCode === 403 && event.message?.includes('check-in')) {
                     // Show once — don't spam
                     setOfflineTimerState(prev => ({
-                        ...prev,
-                        isOnline: true,
-                        hasInternetConnection: true,
-                        syncError: 'Check-in required before syncing'
+                      ...prev,
+                      isOnline: true,
+                      hasInternetConnection: true,
+                      syncError: 'Check-in required before syncing'
                     }));
                   }
                   break;
-                  
+
                 case 'sync_failed':
                   console.log('⚠️ Timer sync failed:', event.error);
                   break;
-                  
+
                 case 'pending_syncs_completed':
                   console.log(`✅ Completed ${event.syncedCount} pending syncs, ${event.remainingCount} remaining`);
-                  if (event.syncedCount > 0) {
-                    // Show brief success message for auto-sync
-                    Alert.alert(
-                      '✅ Data Synced',
-                      `${event.syncedCount} pending sync${event.syncedCount > 1 ? 's' : ''} completed successfully.`,
-                      [{ text: 'OK' }],
-                      { cancelable: true }
-                    );
-                  }
+                  // Alert removed to avoid spamming - background sync should be silent
                   break;
-                  
+
                 case 'lecture_ended':
                   // Lecture period has ended - timer automatically stopped
                   // Don't show alert — auto-continue to next period will handle it
@@ -1080,19 +1059,19 @@ export default function App() {
                   }));
                   break;
               }
-              
+
               // Update state with current timer state
               const currentState = OfflineTimerService.getState();
               setOfflineTimerState(currentState);
             });
-            
+
             // Get initial state
             const initialState = OfflineTimerService.getState();
             setOfflineTimerState(initialState);
             setOfflineTimerInitialized(true);
-            
+
             console.log('✅ OfflineTimerService initialized successfully');
-            
+
             // Cleanup function
             return () => {
               unsubscribe();
@@ -1105,7 +1084,7 @@ export default function App() {
           console.error('❌ Error initializing OfflineTimerService:', error);
         }
       };
-      
+
       initializeOfflineTimer();
     }
   }, [selectedRole, studentId, showLogin, userData, offlineTimerInitialized]);
@@ -1116,12 +1095,12 @@ export default function App() {
       console.log('📶 Handling WiFi reconnection event');
       console.log('   Current BSSID:', currentBSSID);
       console.log('   Current class info:', currentClassInfo);
-      
+
       if (!currentClassInfo) {
         console.log('⚠️ No current class info available for reconnection');
         return;
       }
-      
+
       // Create lecture info from current class
       const lectureInfo = {
         subject: currentClassInfo.subject || currentClassInfo.currentLecture,
@@ -1130,18 +1109,18 @@ export default function App() {
         startTime: currentClassInfo.startTime,
         endTime: currentClassInfo.endTime
       };
-      
+
       console.log('📚 Attempting WiFi reconnection with lecture info:', lectureInfo);
-      
+
       // Call OfflineTimerService to handle reconnection
       const result = await OfflineTimerService.handleWiFiReconnection(lectureInfo);
-      
+
       if (!result.success) {
         console.error('❌ WiFi reconnection failed:', result.error);
-        
+
         let title = '📶 WiFi Reconnection Failed';
         let message = result.error;
-        
+
         // Customize message based on failure reason
         switch (result.step) {
           case 'bssid_validation':
@@ -1156,14 +1135,14 @@ export default function App() {
             message = `WiFi reconnection failed: ${result.error}`;
             break;
         }
-        
+
         Alert.alert(title, message, [{ text: 'OK' }]);
       } else {
         console.log('✅ WiFi reconnection handled successfully');
         console.log('   Scenario:', result.scenario);
         console.log('   Resumed:', result.resumed);
         console.log('   Timer seconds:', result.timerSeconds);
-        
+
         // Success message will be shown by the event listener for 
         // 'timer_resumed_after_reconnection' or 'timer_started_after_reconnection'
       }
@@ -1178,75 +1157,62 @@ export default function App() {
   };
 
   // Handle timer start/stop based on current class
+  // isTimerActionInProgress prevents multiple concurrent calls from rapid taps
+  const isTimerActionInProgress = useRef(false);
+
   const handleTimerStartStop = async () => {
-    if (!offlineTimerInitialized || !currentClassInfo) {
-      Alert.alert(
-        '⚠️ Timer Not Available',
-        'Timer is not available. Please ensure you are in a scheduled class period.',
-        [{ text: 'OK' }]
-      );
-      return;
-    }
-    
-    if (offlineTimerState.isRunning) {
-      // Stop timer
-      console.log('⏹️ Stopping timer manually');
-      const result = await OfflineTimerService.stopTimer('manual');
-      
-      if (!result.success) {
-        Alert.alert(
-          '❌ Error',
-          `Failed to stop timer: ${result.error}`,
-          [{ text: 'OK' }]
-        );
-      }
-    } else {
-      // Start timer with BSSID and face verification
-      console.log('▶️ Starting timer for current class');
-      
-      if (!currentClassInfo.currentLecture || currentClassInfo.currentLecture === 'Break') {
-        Alert.alert(
-          '⚠️ No Active Lecture',
-          'Timer can only be started during an active lecture period, not during breaks.',
-          [{ text: 'OK' }]
-        );
+    if (isTimerActionInProgress.current) return; // debounce — ignore extra taps
+    isTimerActionInProgress.current = true;
+
+    try {
+      if (!offlineTimerInitialized || !currentClassInfo) {
+        showToast('⚠️ Timer not available — no active lecture', 'warning');
         return;
       }
-      
-      // Show loading indicator for verification process
-      Alert.alert(
-        '🔐 Starting Verification',
-        'Please wait while we verify your location and identity...',
-        [],
-        { cancelable: false }
-      );
-      
+
+      if (offlineTimerState.isRunning) {
+        // Stop timer
+        console.log('⏹️ Stopping timer manually');
+        const result = await OfflineTimerService.stopTimer('manual');
+
+        if (!result.success) {
+          showToast(`❌ Failed to stop timer: ${result.error}`, 'error');
+        }
+      } else {
+      // Start timer with BSSID and face verification
+      console.log('▶️ Starting timer for current class');
+
+      if (!currentClassInfo.currentLecture || currentClassInfo.currentLecture === 'Break') {
+        showToast('⚠️ Timer only available during active lectures, not breaks', 'warning');
+        return;
+      }
+
+      // Show loading toast for verification process
+      showToast('🔐 Verifying WiFi & face — please wait…', 'info', 8000);
+
       // Extract current lecture info — prefer offline schedule (BSSIDStorage) as source of truth
       // offlinePeriod has the correct subject/teacher/room/time for the current period
       const lectureInfo = offlinePeriod ? {
-        subject:   offlinePeriod.subject   || currentClassInfo.subject,
-        teacher:   offlinePeriod.teacher   || offlinePeriod.teacherName || currentClassInfo.teacher || 'Unknown',
-        room:      offlinePeriod.room      || currentClassInfo.room || 'Unknown',
+        subject: offlinePeriod.subject || currentClassInfo.subject,
+        teacher: offlinePeriod.teacher || offlinePeriod.teacherName || currentClassInfo.teacher || 'Unknown',
+        room: offlinePeriod.room || currentClassInfo.room || 'Unknown',
         startTime: offlinePeriod.startTime || currentClassInfo.startTime,
-        endTime:   offlinePeriod.endTime   || currentClassInfo.endTime,
-        period:    offlinePeriod.period    || null,
+        endTime: offlinePeriod.endTime || currentClassInfo.endTime,
+        period: offlinePeriod.period || null,
       } : {
-        subject:   currentClassInfo.subject,
-        teacher:   currentClassInfo.teacher || 'Unknown',
-        room:      currentClassInfo.room || 'Unknown',
+        subject: currentClassInfo.subject,
+        teacher: currentClassInfo.teacher || 'Unknown',
+        room: currentClassInfo.room || 'Unknown',
         startTime: currentClassInfo.startTime,
-        endTime:   currentClassInfo.endTime
+        endTime: currentClassInfo.endTime
       };
-      
+
       const result = await OfflineTimerService.startTimer(lectureInfo);
-      
-      // Dismiss loading alert
-      Alert.alert('', '', [], { cancelable: true });
-      
+
       if (!result.success) {
         let title = '❌ Cannot Start Timer';
         let message = result.error || 'Failed to start timer';
-        
+
         // Provide specific error messages based on the step that failed
         switch (result.step) {
           case 'bssid_validation':
@@ -1267,25 +1233,33 @@ export default function App() {
             // Keep default message
             break;
         }
-        
+
         Alert.alert(title, message, [
           { text: 'OK' },
-          ...(result.step === 'face_verification' && result.reason === 'no_face_enrolled' 
-            ? [{ text: 'Open Enrollment App', onPress: () => {
-                // You could add logic here to open the enrollment app
+          // Retry button for face verification failures (except no_face_enrolled)
+          ...(result.step === 'face_verification' && result.reason !== 'no_face_enrolled'
+            ? [{ text: '🔄 Retry', onPress: () => handleStartTimer() }]
+            : []
+          ),
+          ...(result.step === 'face_verification' && result.reason === 'no_face_enrolled'
+            ? [{
+              text: 'Open Enrollment App', onPress: () => {
                 console.log('User wants to open enrollment app');
-              }}]
+              }
+            }]
             : []
           )
         ]);
       } else {
-        // Success - timer started
-        Alert.alert(
-          '✅ Timer Started',
-          `Timer started successfully!\n\n✅ WiFi: Authorized\n✅ Face: Verified (${result.faceVerified ? 'Match' : 'Unknown'})\n\nAttendance tracking is now active.`,
-          [{ text: 'OK' }]
-        );
+        // Success - timer started — vibrate to confirm face verification passed
+        try { Vibration.vibrate([0, 80, 60, 80]); } catch (_) { }
+        showToast('✅ Timer started — attendance tracking active', 'success');
       }
+      }
+    } catch (err) {
+      console.error('❌ handleTimerStartStop error:', err);
+    } finally {
+      isTimerActionInProgress.current = false;
     }
   };
 
@@ -1388,13 +1362,13 @@ export default function App() {
       // This ensures students get latest data if changes were made while they were offline
       if (selectedRoleRef.current === 'student') {
         console.log('🔄 Refreshing data after reconnection...');
-        
+
         // Refresh timetable
         if (semesterRef.current && branchRef.current) {
           console.log('📅 Fetching latest timetable...');
           await fetchTimetable(semesterRef.current, branchRef.current);
         }
-        
+
         // Refresh BSSID schedule - get enrollment number from storage
         try {
           const storedUserData = await AsyncStorage.getItem('@user_data');
@@ -1408,7 +1382,7 @@ export default function App() {
         } catch (error) {
           console.error('❌ Error refreshing BSSID schedule:', error);
         }
-        
+
         console.log('✅ Data refresh complete');
       }
 
@@ -1446,10 +1420,10 @@ export default function App() {
 
     socketRef.current.on('reconnect', async (attemptNumber) => {
       console.log(`✅ Socket reconnected after ${attemptNumber} attempts`);
-      
+
       if (selectedRoleRef.current === 'student') {
         console.log('🔄 Refreshing data after reconnection...');
-        
+
         const currentSem = semesterRef.current;
         const currentBranch = branchRef.current;
         if (currentSem && currentBranch) {
@@ -1458,7 +1432,7 @@ export default function App() {
           // Rejoin class room on reconnect
           joinClassRoom(currentSem?.toString(), currentBranch);
         }
-        
+
         // Refresh BSSID schedule - get enrollment number from storage
         try {
           const storedUserData = await AsyncStorage.getItem('@user_data');
@@ -1472,7 +1446,7 @@ export default function App() {
         } catch (error) {
           console.error('❌ Error refreshing BSSID schedule:', error);
         }
-        
+
         console.log('✅ Data refresh complete');
       }
     });
@@ -1802,16 +1776,16 @@ export default function App() {
     // Listen for BSSID schedule updates (students only)
     socketRef.current.on('bssid-schedule-update', async (data) => {
       console.log('📡 BSSID schedule update received:', data);
-      
+
       // Use ref so we always have the current studentId (avoids stale closure bug)
       if (selectedRoleRef.current === 'student' && studentIdRef.current && data.enrollmentNo === studentIdRef.current) {
         console.log(`   Reason: ${data.reason}`);
         console.log(`   Date: ${data.date}`);
         console.log(`   Periods: ${data.schedule.length}`);
-        
+
         // Update cached BSSID schedule
         const saved = await BSSIDStorage.saveDailySchedule(data.schedule);
-        
+
         if (saved) {
           console.log('✅ BSSID schedule updated in cache');
 
@@ -1825,12 +1799,12 @@ export default function App() {
               if (!prev.isRunning) return prev;
               const updatedLecture = {
                 ...prev.currentLecture,
-                subject:   updatedPeriod.subject   || prev.currentLecture?.subject,
-                teacher:   updatedPeriod.teacher   || updatedPeriod.teacherName || prev.currentLecture?.teacher,
-                room:      updatedPeriod.room      || prev.currentLecture?.room,
+                subject: updatedPeriod.subject || prev.currentLecture?.subject,
+                teacher: updatedPeriod.teacher || updatedPeriod.teacherName || prev.currentLecture?.teacher,
+                room: updatedPeriod.room || prev.currentLecture?.room,
                 startTime: updatedPeriod.startTime || prev.currentLecture?.startTime,
-                endTime:   updatedPeriod.endTime   || prev.currentLecture?.endTime,
-                period:    updatedPeriod.period    || prev.currentLecture?.period,
+                endTime: updatedPeriod.endTime || prev.currentLecture?.endTime,
+                period: updatedPeriod.period || prev.currentLecture?.period,
               };
               if (OfflineTimerService.isRunning) {
                 OfflineTimerService.currentLecture = updatedLecture;
@@ -1838,14 +1812,10 @@ export default function App() {
               return { ...prev, currentLecture: updatedLecture };
             });
           }
-          
+
           // Show notification to user
           if (data.reason === 'classroom_bssid_updated') {
-            Alert.alert(
-              '📶 WiFi Update',
-              `Classroom WiFi has been updated for ${data.affectedRoom}. Your attendance tracking will use the new WiFi network.`,
-              [{ text: 'OK' }]
-            );
+            showToast(`📶 WiFi updated for ${data.affectedRoom}`, 'info');
           } else if (data.reason === 'timetable_updated') {
             console.log('📅 Timetable updated - BSSID schedule refreshed');
           }
@@ -1923,7 +1893,7 @@ export default function App() {
           lectures: todayAttendance.lectures,
           totalAttended: totalAttendedMinutes,
           totalClassTime: todayAttendance.totalClassTime,
-          dayPercentage: todayAttendance.totalClassTime > 0 
+          dayPercentage: todayAttendance.totalClassTime > 0
             ? Math.round((totalAttendedMinutes / todayAttendance.totalClassTime) * 100)
             : todayAttendance.dayPercentage,
           clientDate: clientDate
@@ -1995,10 +1965,10 @@ export default function App() {
             }
 
             if (userData.semester) {
-              AsyncStorage.setItem(SEMESTER_KEY, userData.semester).catch(() => {});
+              AsyncStorage.setItem(SEMESTER_KEY, userData.semester).catch(() => { });
             }
             if (userData.branch) {
-              AsyncStorage.setItem(BRANCH_KEY, userData.branch).catch(() => {});
+              AsyncStorage.setItem(BRANCH_KEY, userData.branch).catch(() => { });
             }
 
             // Check if face verification is still valid for today
@@ -2070,7 +2040,7 @@ export default function App() {
   const selectTheme = async (mode) => {
     setThemeMode(mode);
     setShowThemePicker(false);
-    AsyncStorage.setItem(THEME_KEY, mode).catch(() => {});
+    AsyncStorage.setItem(THEME_KEY, mode).catch(() => { });
   };
 
   const fetchConfig = async () => {
@@ -2356,7 +2326,7 @@ export default function App() {
       // Check if refresh needed (skip check if force refresh)
       if (!forceRefresh) {
         const needsRefresh = await BSSIDStorage.needsRefresh();
-        
+
         if (!needsRefresh) {
           console.log('✅ Using cached BSSID schedule');
           return;
@@ -2364,13 +2334,13 @@ export default function App() {
       }
 
       console.log('🔄 Fetching fresh BSSID schedule...');
-      
+
       const response = await fetch(
         `${SOCKET_URL}/api/daily-bssid-schedule?enrollmentNo=${enrollmentNo}`
       );
-      
+
       const data = await response.json();
-      
+
       if (data.success && data.schedule) {
         await BSSIDStorage.saveDailySchedule(data.schedule);
         console.log(`✅ Cached ${data.schedule.length} periods for ${data.dayName}`);
@@ -2578,7 +2548,8 @@ export default function App() {
   };
 
   // WiFi validation function - SAFE IMPLEMENTATION WITH DEBUG INFO
-  const isConnectedToClassroomWiFi = async () => {
+  // Check if connected to the authorized classroom WiFi
+  const isConnectedToClassroomWiFi = async (suppressAlerts = false) => {
     try {
       console.log('📶 Starting WiFi validation...');
 
@@ -2612,8 +2583,10 @@ export default function App() {
           lastChecked: new Date().toLocaleTimeString()
         });
 
-        // In production, show user-friendly message
-        alert('⚠️ No Active Class\n\nNo classroom information available for WiFi validation.\n\nPlease ensure you have an active class scheduled.');
+        // In production, show user-friendly message only if requested
+        if (!suppressAlerts) {
+          alert('⚠️ No Active Class\n\nNo classroom information available for WiFi validation.\n\nPlease ensure you have an active class scheduled.');
+        }
         return false;
       }
 
@@ -2629,7 +2602,9 @@ export default function App() {
         });
 
         // Show user-friendly error
-        alert('⚠️ WiFi System Error\n\nWiFi validation system is not available.\n\nPlease restart the app and try again.');
+        if (!suppressAlerts) {
+          alert('⚠️ WiFi System Error\n\nWiFi validation system is not available.\n\nPlease restart the app and try again.');
+        }
         return false;
       }
 
@@ -2773,11 +2748,11 @@ export default function App() {
   // Handle face verification trigger from CircularTimer
   const handleFaceVerification = async () => {
     console.log('🔒 Face verification triggered from CircularTimer');
-    
+
     try {
       // Get stored face embedding from SecureStorage
       const storedEmbedding = await SecureStorage.getFaceEmbedding();
-      
+
       if (!storedEmbedding || storedEmbedding.length !== 192) {
         console.log('❌ No face data found or invalid');
         alert('❌ Face Data Not Found\n\nYour face data is not enrolled on this device.\n\nPlease login again to download your face data, or contact your teacher to enroll your face.');
@@ -2804,7 +2779,7 @@ export default function App() {
 
     } catch (error) {
       console.error('❌ Face verification error:', error);
-      
+
       if (error.message === 'VERIFICATION_CANCELLED') {
         alert('❌ Verification Cancelled\n\nFace verification was cancelled.');
       } else {
@@ -2943,7 +2918,7 @@ export default function App() {
 
     // 1. Check WiFi connection first (ASYNC)
     console.log('📶 Step 1: Validating WiFi connection...');
-    const wifiValid = await isConnectedToClassroomWiFi();
+    const wifiValid = await isConnectedToClassroomWiFi(false); // Explicitly show alerts for manual start
     if (!wifiValid) {
       // Check if it's a simulated bypass
       if (wifiDebugInfo.status === 'AUTHORIZED (SIMULATED)') {
@@ -2959,7 +2934,7 @@ export default function App() {
     try {
       // Get stored face embedding from SecureStorage
       const storedEmbedding = await SecureStorage.getFaceEmbedding();
-      
+
       if (!storedEmbedding || storedEmbedding.length !== 192) {
         console.log('❌ No face data found or invalid');
         alert('❌ Face Data Not Found\n\nYour face data is not enrolled on this device.\n\nPlease login again to download your face data, or contact your teacher to enroll your face.');
@@ -2985,7 +2960,7 @@ export default function App() {
 
     } catch (error) {
       console.error('❌ Face verification error:', error);
-      
+
       if (error.message === 'VERIFICATION_CANCELLED') {
         alert('❌ Verification Cancelled\n\nFace verification was cancelled.\n\nYou must complete face verification to start attendance tracking.');
       } else {
@@ -3165,7 +3140,7 @@ export default function App() {
             fetchTimetable(normalizedUser.semester, normalizedUser.branch),
             fetchDailyBSSIDSchedule(normalizedUser.enrollmentNo),
             loadTodayAttendance(studentIdValue),
-          ]).catch(() => {});
+          ]).catch(() => { });
 
           storageData.push(
             [STUDENT_NAME_KEY, normalizedUser.name],
@@ -3179,7 +3154,7 @@ export default function App() {
           if (data.user.faceEmbedding && Array.isArray(data.user.faceEmbedding)) {
             SecureStorage.saveFaceEmbedding(data.user.faceEmbedding)
               .then(success => { if (success) SecureStorage.saveEnrollmentNumber(normalizedUser.enrollmentNo); })
-              .catch(() => {});
+              .catch(() => { });
           }
         } else if (data.user.role === 'teacher') {
           // Don't set default semester/branch for teachers - let current class detection handle it
@@ -3196,7 +3171,7 @@ export default function App() {
     } catch (error) {
       // Network or connection error
       console.error('Login error:', error);
-      
+
       if (error.message === 'Network request failed') {
         setLoginError('Cannot connect to server. Please check your internet connection.');
       } else if (error.message.includes('timeout')) {
@@ -3236,16 +3211,16 @@ export default function App() {
   const onRefreshStudent = async () => {
     setRefreshingStudent(true);
     setIsOffline(false);
-    
+
     try {
       console.log('🔄 Student refresh started - checking connectivity and syncing timer...');
-      
+
       // Force sync timer data if OfflineTimerService is available
       let syncResult = null;
       if (offlineTimerInitialized) {
         console.log('⏱️ Force syncing timer data...');
         syncResult = await OfflineTimerService.forceSyncTimerData();
-        
+
         if (syncResult.success) {
           console.log('✅ Timer sync successful');
         } else {
@@ -3255,7 +3230,7 @@ export default function App() {
           }
         }
       }
-      
+
       // Test server connection
       const healthCheck = await fetch(`${SOCKET_URL}/api/health`, { timeout: 5000 });
       if (!healthCheck.ok) {
@@ -3263,39 +3238,34 @@ export default function App() {
       }
 
       // Refresh timetable and profile data
-      if (semester && branch) {
-        await fetchTimetable(semester, branch);
-      }
-      await refreshUserProfile();
+      const updatedUser = await refreshUserProfile();
       
+      const currentSem = updatedUser?.semester || semester;
+      const currentBranch = updatedUser?.branch || branch;
+
+      if (currentSem && currentBranch) {
+        await fetchTimetable(currentSem, currentBranch);
+      }
+
       // Show success message with sync info
       if (syncResult && syncResult.success) {
-        const lastSyncTime = syncResult.lastSyncTime ? new Date(syncResult.lastSyncTime).toLocaleTimeString() : 'Never';
-        Alert.alert(
-          '✅ Refresh Complete',
-          `Profile and timer data refreshed successfully.\n\nLast sync: ${lastSyncTime}${syncResult.pendingSyncs > 0 ? `\nPending syncs: ${syncResult.pendingSyncs}` : ''}`,
-          [{ text: 'OK' }]
-        );
+        showToast('✅ Refreshed successfully', 'success');
       } else if (syncResult && !syncResult.success && !syncResult.isOffline) {
-        Alert.alert(
-          '⚠️ Partial Refresh',
-          `Profile refreshed but timer sync failed: ${syncResult.error}${syncResult.pendingSyncs > 0 ? `\n\nPending syncs: ${syncResult.pendingSyncs}` : ''}`,
-          [{ text: 'OK' }]
-        );
+        if (!offlineTimerState.isRunning) {
+          showToast(`⚠️ Sync failed: ${syncResult.error || 'Unknown error'}`, 'warning');
+        } else {
+          console.warn('⚠️ Timer sync failed during refresh (timer running — suppressing):', syncResult.error);
+        }
       }
-      
+
       setIsOffline(false);
     } catch (error) {
       console.log('❌ Error refreshing student dashboard:', error);
       setIsOffline(true);
-      
+
       // Show offline message
-      Alert.alert(
-        '📶 App Offline',
-        'Unable to connect to server. The app is running in offline mode. Timer will continue locally and sync when connection is restored.',
-        [{ text: 'OK' }]
-      );
-      
+      showToast('📶 Offline — timer running locally, will sync when reconnected', 'warning', 5000);
+
       // Auto-hide offline indicator after 5 seconds
       setTimeout(() => setIsOffline(false), 5000);
     } finally {
@@ -3303,10 +3273,19 @@ export default function App() {
     }
   };
 
-  // Loading Screen
-  if (!splashDone || isInitializing) {
+  // Loading Screen — show splash once, then a plain loader while session restores
+  if (!splashDone) {
     return (
       <SplashScreenView onDone={() => setSplashDone(true)} />
+    );
+  }
+
+  if (isInitializing) {
+    // Session is being restored from storage — show a minimal screen, not the splash again
+    return (
+      <View style={{ flex: 1, backgroundColor: 'rgb(250,245,234)', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#d97706" />
+      </View>
     );
   }
 
@@ -3621,69 +3600,82 @@ export default function App() {
 
   // Logout function
   const handleLogout = async () => {
-    console.log('🚪 Logging out — cleaning up all services...');
+    // Confirmation dialog to prevent accidental logout
+    Alert.alert(
+      '🚪 Logout',
+      'Sign out of your account?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Logout', style: 'destructive',
+          onPress: async () => {
+            console.log('🚪 Logging out — cleaning up all services...');
 
-    // 1. Stop timer service completely
-    try {
-      await OfflineTimerService.stopTimer('logout');
-      OfflineTimerService.cleanup();
-      console.log('✅ OfflineTimerService stopped and cleaned up');
-    } catch (e) { console.warn('OfflineTimerService cleanup error:', e.message); }
+            // 1. Stop timer service completely
+            try {
+              await OfflineTimerService.stopTimer('logout');
+              OfflineTimerService.cleanup();
+              console.log('✅ OfflineTimerService stopped and cleaned up');
+            } catch (e) { console.warn('OfflineTimerService cleanup error:', e.message); }
 
-    // 2. Disconnect socket
-    try {
-      if (socketRef.current) {
-        socketRef.current.removeAllListeners();
-        socketRef.current.disconnect();
-        socketRef.current = null;
-        console.log('✅ Socket disconnected');
-      }
-    } catch (e) { console.warn('Socket cleanup error:', e.message); }
+            // 2. Disconnect socket
+            try {
+              if (socketRef.current) {
+                socketRef.current.removeAllListeners();
+                socketRef.current.disconnect();
+                socketRef.current = null;
+                console.log('✅ Socket disconnected');
+              }
+            } catch (e) { console.warn('Socket cleanup error:', e.message); }
 
-    // 3. Deactivate keep awake
-    try { deactivateKeepAwake('attendance-tracking'); } catch (_) {}
+            // 3. Deactivate keep awake
+            try { deactivateKeepAwake('attendance-tracking'); } catch (_) { }
 
-    // 4. Clear ALL AsyncStorage keys including semester/branch
-    try {
-      await AsyncStorage.multiRemove([
-        ROLE_KEY, STUDENT_NAME_KEY, STUDENT_ID_KEY,
-        USER_DATA_KEY, LOGIN_ID_KEY, DAILY_VERIFICATION_KEY,
-        SEMESTER_KEY, BRANCH_KEY, CACHE_KEY
-      ]);
-      await SecureStorage.clearFaceData();
-      await BSSIDStorage.clearSchedule();
-      console.log('✅ All storage cleared');
-    } catch (e) { console.warn('Storage clear error:', e.message); }
+            // 4. Clear ALL AsyncStorage keys including semester/branch
+            try {
+              await AsyncStorage.multiRemove([
+                ROLE_KEY, STUDENT_NAME_KEY, STUDENT_ID_KEY,
+                USER_DATA_KEY, LOGIN_ID_KEY, DAILY_VERIFICATION_KEY,
+                SEMESTER_KEY, BRANCH_KEY, CACHE_KEY
+              ]);
+              await SecureStorage.clearFaceData();
+              await BSSIDStorage.clearSchedule();
+              console.log('✅ All storage cleared');
+            } catch (e) { console.warn('Storage clear error:', e.message); }
 
-    // 5. Clear all intervals
-    clearInterval(intervalRef.current);
+            // 5. Clear all intervals
+            clearInterval(intervalRef.current);
 
-    // 6. Reset ALL state to initial values
-    setUserData(null);
-    setLoginId('');
-    setLoginPassword('');
-    setLoggedInUserId('');
-    setStudentName('');
-    setStudentId(null);
-    setSemester(null);
-    setBranch(null);
-    setSelectedRole(null);
-    setTimetable(null);
-    setStudents([]);
-    setTodayAttendance({
-      date: new Date(_appGetBootMs()).toDateString(),
-      lectures: [], totalAttended: 0, totalClassTime: 0, dayPresent: false
-    });
-    setOfflineTimerState({
-      isRunning: false, isPaused: false, timerSeconds: 0,
-      currentLecture: null, isOnline: true, hasInternetConnection: true,
-      isConnectedToAuthorizedWiFi: false, lastSyncTime: null,
-      queuedSyncs: 0, pendingSyncCount: 0
-    });
-    setOfflineTimerInitialized(false);
-    setActiveTab('home');
-    setShowLogin(true);
-    console.log('✅ Logout complete');
+            // 6. Reset ALL state to initial values
+            setUserData(null);
+            setLoginId('');
+            setLoginPassword('');
+            setLoggedInUserId('');
+            setStudentName('');
+            setStudentId(null);
+            setSemester(null);
+            setBranch(null);
+            setSelectedRole(null);
+            setTimetable(null);
+            setStudents([]);
+            setTodayAttendance({
+              date: new Date(_appGetBootMs()).toDateString(),
+              lectures: [], totalAttended: 0, totalClassTime: 0, dayPresent: false
+            });
+            setOfflineTimerState({
+              isRunning: false, isPaused: false, timerSeconds: 0,
+              currentLecture: null, isOnline: true, hasInternetConnection: true,
+              isConnectedToAuthorizedWiFi: false, lastSyncTime: null,
+              queuedSyncs: 0, pendingSyncCount: 0
+            });
+            setOfflineTimerInitialized(false);
+            setActiveTab('home');
+            setShowLogin(true);
+            console.log('✅ Logout complete');
+          }
+        }
+      ]
+    );
   };
 
   // Teacher action handler for random ring accept/reject
@@ -5461,9 +5453,11 @@ export default function App() {
                 {/* Status row */}
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                   <Text style={{ fontSize: 12, color: theme.textSecondary }}>Status:</Text>
-                  <Text style={{ fontSize: 12, fontWeight: 'bold',
+                  <Text style={{
+                    fontSize: 12, fontWeight: 'bold',
                     color: offlineTimerState.isRunning
-                      ? (offlineTimerState.isPaused ? '#f59e0b' : '#22c55e') : '#ef4444' }}>
+                      ? (offlineTimerState.isPaused ? '#f59e0b' : '#22c55e') : '#ef4444'
+                  }}>
                     {offlineTimerState.isRunning
                       ? (offlineTimerState.isPaused ? '⏸️ Paused' : '▶️ Running') : '⏹️ Stopped'}
                   </Text>
@@ -5473,9 +5467,11 @@ export default function App() {
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 5 }}>
                   <Text style={{ fontSize: 12, color: theme.textSecondary }}>Connection:</Text>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{ fontSize: 12, fontWeight: 'bold',
+                    <Text style={{
+                      fontSize: 12, fontWeight: 'bold',
                       color: offlineTimerState.hasInternetConnection && offlineTimerState.isConnectedToAuthorizedWiFi
-                        ? '#22c55e' : offlineTimerState.isConnectedToAuthorizedWiFi ? '#f59e0b' : '#ef4444' }}>
+                        ? '#22c55e' : offlineTimerState.isConnectedToAuthorizedWiFi ? '#f59e0b' : '#ef4444'
+                    }}>
                       {offlineTimerState.hasInternetConnection && offlineTimerState.isConnectedToAuthorizedWiFi
                         ? '🌐 Online' : offlineTimerState.isConnectedToAuthorizedWiFi ? '📱 Offline' : '❌ No WiFi'}
                     </Text>
@@ -5564,7 +5560,7 @@ export default function App() {
                 }}>
                   {offlineTimerState.isRunning ? '⏹️ STOP TIMER' : '🔐 START TIMER'}
                 </Text>
-                {(!currentClassInfo || currentClassInfo.currentLecture === 'Break') && (
+                {(!currentClassInfo || currentClassInfo.currentLecture === 'Break') && !offlineTimerState.isRunning && (
                   <Text style={{
                     color: '#ffffff',
                     fontSize: 12,
@@ -5946,23 +5942,26 @@ export default function App() {
 
         {/* Party Popper — shown when attendance threshold is reached */}
         {showPartyPopper && <PartyPopper />}
+
+        {/* Toast notifications */}
+        <ToastContainer />
       </View>
     );
   }
 }
 
 // ── Party Popper component ────────────────────────────────────────────────────
-const EMOJIS = ['🎉','🎊','✨','🌟','💥','🎈','🥳','⭐','🎆','🎇'];
+const EMOJIS = ['🎉', '🎊', '✨', '🌟', '💥', '🎈', '🥳', '⭐', '🎆', '🎇'];
 const PARTICLE_COUNT = 18;
 
 function PartyPopper() {
   const particles = useRef(
     Array.from({ length: PARTICLE_COUNT }, (_, i) => ({
-      anim:  new Animated.Value(0),
+      anim: new Animated.Value(0),
       angle: (i / PARTICLE_COUNT) * 2 * Math.PI,
       emoji: EMOJIS[i % EMOJIS.length],
-      dist:  120 + Math.random() * 80,
-      size:  18 + Math.floor(Math.random() * 14),
+      dist: 120 + Math.random() * 80,
+      size: 18 + Math.floor(Math.random() * 14),
     }))
   ).current;
 
@@ -5995,7 +5994,7 @@ function PartyPopper() {
             transform: [
               { translateX: p.anim.interpolate({ inputRange: [0, 1], outputRange: [0, Math.cos(p.angle) * p.dist] }) },
               { translateY: p.anim.interpolate({ inputRange: [0, 1], outputRange: [0, Math.sin(p.angle) * p.dist - 40] }) },
-              { scale:      p.anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 1.2, 0.8] }) },
+              { scale: p.anim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0, 1.2, 0.8] }) },
             ],
           }}
         >
