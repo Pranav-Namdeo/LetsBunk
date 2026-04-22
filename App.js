@@ -2262,6 +2262,8 @@ export default function App() {
       if (timetable.timetable[dayKey]) {
         schedule[dayName] = timetable.timetable[dayKey].map(period => ({
           subject: period.subject,
+          teacher: period.teacher || period.teacherName || '',
+          teacherName: period.teacherName || period.teacher || '',
           room: period.room,
           time: timetable.periods && timetable.periods[period.period - 1]
             ? `${timetable.periods[period.period - 1].startTime}-${timetable.periods[period.period - 1].endTime}`

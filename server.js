@@ -3455,9 +3455,12 @@ app.get('/api/attendance/period-report', async (req, res) => {
         const query = {};
         if (enrollmentNo) query.enrollmentNo = enrollmentNo;
         if (date) {
-            const queryDate = new Date(date);
-            queryDate.setHours(0, 0, 0, 0);
-            query.date = queryDate;
+            // Use IST day range so records stored at IST midnight are included
+            const dayStart = new Date(date);
+            dayStart.setHours(0, 0, 0, 0);   // IST midnight (TZ=Asia/Kolkata)
+            const dayEnd = new Date(dayStart);
+            dayEnd.setHours(23, 59, 59, 999); // IST end of day
+            query.date = { $gte: dayStart, $lte: dayEnd };
         }
         if (period) query.period = period;
 
