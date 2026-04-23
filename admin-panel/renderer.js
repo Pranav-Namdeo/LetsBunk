@@ -12183,7 +12183,26 @@ function _subscribeAttendanceLiveUpdates() {
         _attendanceSocket.on('timer_broadcast', (data) => {
             _updateAttendanceRowLive(data);
         });
+        // Real-time calendar refresh — fires on every student timer sync
+        _attendanceSocket.on('student_timer_sync', (data) => {
+            _handleTimerSyncForCalendar(data);
+        });
     } catch (_) {}
+}
+
+// Track which student's calendar is currently open
+let _openCalendarEnrollmentNo = null;
+let _openCalendarStudentName  = null;
+
+function _handleTimerSyncForCalendar(data) {
+    // If the calendar modal is open for this student, refresh it silently
+    if (_openCalendarEnrollmentNo && _openCalendarEnrollmentNo === data.enrollmentNo) {
+        const modal = document.getElementById('calendarModal');
+        if (modal && modal.style.display !== 'none') {
+            // Re-fetch and rebuild the calendar without closing the modal
+            showStudentCalendar(_openCalendarEnrollmentNo, _openCalendarStudentName);
+        }
+    }
 }
 
 function _updateAttendanceRowLive(data) {
@@ -12409,6 +12428,8 @@ async function initAttendanceShowcase() {
     setupShowcaseViewSwitcher();
     restoreShowcaseSelections();
     attachSubjectViewListeners();
+    // Subscribe to live socket updates so calendar refreshes on every timer sync
+    _subscribeAttendanceLiveUpdates();
     console.log('Attendance Showcase initialized');
 }
 
@@ -12625,6 +12646,8 @@ function renderStudentList(studentItems) {
 }
 
 async function showStudentCalendar(enrollmentNo, studentName) {
+    _openCalendarEnrollmentNo = enrollmentNo;
+    _openCalendarStudentName  = studentName;
     try {
         const response = await fetch(`${SERVER_URL}/api/attendance/student/${enrollmentNo}/dates`);
         const data = await response.json();
@@ -13048,50 +13071,39 @@ async function showSubjectDateAttendance(date, subject, branch, semester) {
                 }
             }
         });
-
-        // Build rows Ã¢â‚¬â€ every student in the class
-        _subjectDateAllRows = allStudents.map(s => {
-            const tot = totByStudent[s.enrollmentNo] || 0;
-            const pre = preByStudent[s.enrollmentNo] || 0;
-            const pct = tot > 0 ? Math.round((pre / tot) * 100) : 0;
-            const status = presentOnDay.has(s.enrollmentNo) ? 'present'
-                         : appearedOnDay.has(s.enrollmentNo) ? 'absent'
-                         : 'absent';
-            return { name: s.name, enrollmentNo: s.enrollmentNo, status, subjectPct: pct, subjectPre: pre, subjectTot: tot };
-        });
-
-        const presentCount = _subjectDateAllRows.filter(r => r.status === 'present').length;
-        const total        = _subjectDateAllRows.length;
-        const pct          = total > 0 ? Math.round((presentCount / total) * 100) : 0;
-        const [y, m, d]    = date.split('-');
-        const formattedDate = new Date(+y, +m - 1, +d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
-
-        _subjectDateContext = { date, subject, branch, semester, formattedDate };
-        document.getElementById('subjectDateTitle').textContent = `${subject} \u2014 ${formattedDate}`;
-
-        // Populate the subject switcher dropdown in the modal
-        const switcher = document.getElementById('modalSubjectSwitcher');
-        if (switcher) {
-            const subjectSelect = document.getElementById('subjectViewSelect');
-            switcher.innerHTML = '';
-            if (subjectSelect) {
-                Array.from(subjectSelect.options).forEach(opt => {
-                    if (!opt.value) return;
-                    const o = document.createElement('option');
-                    o.value = opt.value;
-                    o.textContent = opt.textContent;
-                    if (opt.value === subject) o.selected = true;
-                    switcher.appendChild(o);
-                });
-            }
-        }
-
-        _subjectDatePage = 1;
-        renderSubjectDatePage(presentCount, total, pct, branch, semester);
-
     } catch (error) {
-        console.error('Error loading subject date attendance:', error);
+        console.error('Error loading subject date data:', error);
         document.getElementById('subjectDateContent').innerHTML = '<p style="padding:20px;color:red;">Error loading data.</p>';
+    }
+}
+
+// Refresh current section data
+function refreshCurrentSection() {
+    const activeSection = document.querySelector('.section.active')?.id?.replace('-section', '');
+    if (!activeSection) return;
+
+    const refreshMap = {
+        'dashboard': loadDashboardData,
+        'students': loadStudents,
+        'teachers': loadTeachers,
+        'timetable': loadTimetable,
+        'subjects': loadSubjects,
+        'classrooms': loadClassrooms,
+        'calendar': loadCalendar,
+        'attendance-showcase': () => { /* Already has refresh in UI */ },
+        'attendance': loadAttendanceHistory,
+        'period-reports': loadPeriodReport,
+        'manual-marking': loadStudentsForManualMarking,
+        'audit-trail': loadAuditTrail,
+        'periods': loadPeriods,
+        'settings': loadSettings
+    };
+
+    if (refreshMap[activeSection]) {
+        refreshMap[activeSection]();
+        showToast('Data refreshed successfully');
+    } else {
+        showToast('Refresh not available for this section');
     }
 }
 
@@ -13304,6 +13316,8 @@ async function showTeacherClassDetails(teacherId, semester, branch) {
 function closeCalendarModal() {
     const modal = document.getElementById('calendarModal');
     if (modal) modal.style.display = 'none';
+    _openCalendarEnrollmentNo = null;
+    _openCalendarStudentName  = null;
 }
 
 function closePeriodModal() {
@@ -13355,12 +13369,12 @@ async function loadSubjectsForShowcase() {
     }
 
     console.log(`Loading subjects for branch="${branch}" semester="${semester}"`);
-    
+
     try {
         const response = await fetch(`${SERVER_URL}/api/attendance/subjects?branch=${encodeURIComponent(branch)}&semester=${encodeURIComponent(semester)}`);
         const data = await response.json();
         console.log('Subjects response:', data);
-        
+
         const select = document.getElementById('subjectViewSelect');
         select.innerHTML = '<option value="">Select Subject</option>';
 
@@ -13377,6 +13391,36 @@ async function loadSubjectsForShowcase() {
     } catch (error) {
         console.error('Error loading subjects:', error);
         document.getElementById('subjectViewSelect').innerHTML = '<option value="">Error loading subjects</option>';
+    }
+}
+
+// Refresh current section data
+function refreshCurrentSection() {
+    const activeSection = document.querySelector('.section.active')?.id?.replace('-section', '');
+    if (!activeSection) return;
+
+    const refreshMap = {
+        'dashboard': loadDashboardData,
+        'students': loadStudents,
+        'teachers': loadTeachers,
+        'timetable': loadTimetable,
+        'subjects': loadSubjects,
+        'classrooms': loadClassrooms,
+        'calendar': loadCalendar,
+        'attendance-showcase': () => { /* Already has refresh in UI */ },
+        'attendance': loadAttendanceHistory,
+        'period-reports': loadPeriodReport,
+        'manual-marking': loadStudentsForManualMarking,
+        'audit-trail': loadAuditTrail,
+        'periods': loadPeriods,
+        'settings': loadSettings
+    };
+
+    if (refreshMap[activeSection]) {
+        refreshMap[activeSection]();
+        showToast('Data refreshed successfully');
+    } else {
+        showToast('Refresh not available for this section');
     }
 }
 

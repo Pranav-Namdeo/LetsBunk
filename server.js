@@ -3025,6 +3025,15 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         const duration = Date.now() - startTime;
         console.log(`✅ [OFFLINE-SYNC] Sync successful - Student: ${studentId}, Timer: ${timerSeconds}s, Duration: ${duration}ms`);
 
+        // Emit real-time update to admin panel so calendar refreshes without page reload
+        io.emit('student_timer_sync', {
+            enrollmentNo: studentId,
+            timerSeconds: Math.floor(timerSeconds),
+            isRunning: Boolean(isRunning),
+            status: computedStatus,
+            date: new Date().toISOString().split('T')[0]
+        });
+
         res.json({
             success: true,
             message: 'Timer data synced successfully',
@@ -3061,6 +3070,83 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             error: 'Failed to sync timer data',
             details: error.message,
             duration: duration
+        });
+    }
+});
+
+// POST /api/attendance/period-sync - Save period-specific timer data without check-in requirement
+app.post('/api/attendance/period-sync', async (req, res) => {
+    const startTime = Date.now();
+    const { studentId, timerSeconds, period, subject, teacher, room, semester, branch, timestamp } = req.body;
+
+    console.log(`📊 [PERIOD-SYNC] Saving period timer data - Student: ${studentId}, Period: ${period}, Timer: ${timerSeconds}s`);
+
+    try {
+        // Validate required fields
+        if (!studentId || timerSeconds === undefined || !period) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: studentId, timerSeconds, period'
+            });
+        }
+
+        // Get today's date
+        const syncDate = new Date(timestamp || Date.now());
+        const todayStart = new Date(syncDate);
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(todayStart);
+        todayEnd.setDate(todayEnd.getDate() + 1);
+
+        // Find student to get semester and branch
+        const student = await StudentManagement.findOne({ enrollmentNo: studentId });
+        if (!student) {
+            return res.status(404).json({
+                success: false,
+                error: 'Student not found'
+            });
+        }
+
+        // Update or create PeriodAttendance record
+        await PeriodAttendance.updateOne(
+            {
+                enrollmentNo: studentId,
+                date: { $gte: todayStart, $lt: todayEnd },
+                period: period
+            },
+            {
+                $set: {
+                    studentName: student.name,
+                    semester: semester || student.semester,
+                    branch: branch || student.branch,
+                    subject: subject,
+                    teacher: teacher,
+                    room: room,
+                    timerSeconds: Math.floor(timerSeconds),
+                    status: 'present',
+                    updatedAt: new Date()
+                }
+            },
+            { upsert: true }
+        );
+
+        const duration = Date.now() - startTime;
+        console.log(`✅ [PERIOD-SYNC] Period data saved successfully - Duration: ${duration}ms`);
+
+        res.json({
+            success: true,
+            period: period,
+            timerSeconds: timerSeconds,
+            duration: duration
+        });
+
+    } catch (error) {
+        const duration = Date.now() - startTime;
+        console.error(`❌ [PERIOD-SYNC] Failed to save period data - Duration: ${duration}ms, Error: ${error.message}`);
+
+        res.status(500).json({
+            success: false,
+            error: 'Failed to save period attendance',
+            details: error.message
         });
     }
 });

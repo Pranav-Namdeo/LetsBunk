@@ -1113,54 +1113,9 @@ class OfflineTimerService {
             attendedMinutes: Math.floor(this.timerSeconds / 60)
           });
 
-          // Auto-continue: if already verified today, start next period automatically
-          if (this.verifiedToday && this.verifiedTodayDate === new Date().toISOString().split('T')[0]) {
-            console.log('🔄 Auto-continuing to next period (already verified today)...');
-            
-            // Retry logic for period transition
-            let retryCount = 0;
-            const maxRetries = 5;
-            
-            const attemptAutoStart = async () => {
-              try {
-                const { getLectureInfo } = require('./ServerTime');
-                const nextLecture = await getLectureInfo();
-                
-                if (nextLecture && nextLecture.subject) {
-                  console.log('📚 Next period found:', nextLecture.subject, '— auto-starting timer');
-                  const result = await this.startTimer(nextLecture);
-                  if (result.success) {
-                    this.notifyListeners({
-                      type: 'period_auto_continued',
-                      lecture: nextLecture,
-                      timerSeconds: 0
-                    });
-                    return true;
-                  } else {
-                    console.warn('⚠️ Failed to auto-start next period:', result.error);
-                  }
-                } else {
-                  console.log(`⏰ No next period active yet (retry ${retryCount + 1}/${maxRetries})...`);
-                }
-                
-                if (retryCount < maxRetries) {
-                  retryCount++;
-                  setTimeout(attemptAutoStart, 5000); // Retry every 5s
-                } else {
-                  console.log('⏰ Reached max retries for auto-continue — staying idle');
-                }
-              } catch (e) {
-                console.log('⚠️ Auto-continue check failed:', e.message);
-                if (retryCount < maxRetries) {
-                  retryCount++;
-                  setTimeout(attemptAutoStart, 5000);
-                }
-              }
-              return false;
-            };
-
-            setTimeout(attemptAutoStart, 3000); // Initial 3s gap
-          }
+          // Auto-continue: disabled - using App.js period change detection instead
+          // This logic caused errors with undefined getLectureInfo function
+          // App.js now handles period transitions via fetchOfflinePeriod
         }
       } else {
         console.log('⏰ Skipping lecture end check (timer not active or no lecture)');
@@ -1740,7 +1695,9 @@ class OfflineTimerService {
   }
 
   /**
-   * Load timer state from storage with disconnection tracking
+   * Load timer state from storage with disconnection tracking.
+   * On restore, fetches latest timerSeconds from server so the value
+   * is accurate even if the app was killed while the native timer was running.
    */
   async loadState() {
     try {
@@ -1750,7 +1707,6 @@ class OfflineTimerService {
         const state = JSON.parse(savedState);
         
         // Check if state is recent (within 1 hour)
-        // Use boot-elapsed diff if available (spoof-proof), else wall-clock diff
         let stateAge;
         if (state.bootMs && state.bootMs > 0) {
           stateAge = _getBootMs() - state.bootMs;
@@ -1780,9 +1736,21 @@ class OfflineTimerService {
             pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
             lecture: this.currentLecture?.subject
           });
-          
-          // Resume counting if was running and not paused due to WiFi loss
+
+          // If was running, try to get the latest timerSeconds from the native module
+          // (it may have kept counting while the app was killed)
           if (this.isRunning && !this.isPaused && !this.pausedDueToWiFiLoss) {
+            if (TimerModule) {
+              try {
+                const { seconds } = await TimerModule.getElapsedSeconds();
+                if (seconds > this.timerSeconds) {
+                  console.log(`⏱️ Native timer ahead: ${seconds}s vs stored ${this.timerSeconds}s — using native`);
+                  this.timerSeconds = Math.floor(seconds);
+                }
+              } catch (_) {
+                // Native module unavailable — use stored value
+              }
+            }
             this.startCounting();
           }
         } else {

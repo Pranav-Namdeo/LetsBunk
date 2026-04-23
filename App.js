@@ -272,7 +272,7 @@ export default function App() {
 
   // Theme state
   const systemColorScheme = useColorScheme();
-  const [themeMode, setThemeMode] = useState('warm');
+  const [themeMode, setThemeMode] = useState('warm'); // Default to warm (light) theme
   const [showThemePicker, setShowThemePicker] = useState(false);
   const isDarkTheme = themeMode === 'night';
   const theme = THEMES[themeMode] || THEMES.warm;
@@ -366,6 +366,7 @@ export default function App() {
   const semesterRef = useRef(null);    // always current semester for socket handlers
   const branchRef = useRef(null);      // always current branch for socket handlers
   const shownMissedRingIds = useRef(new Set()); // prevent duplicate "missed ring" alerts
+  const periodicSyncRef = useRef(null); // periodic server sync interval
 
   // Keep refs in sync with state so socket handlers always read current values
   useEffect(() => { studentIdRef.current = studentId; }, [studentId]);
@@ -707,7 +708,7 @@ export default function App() {
     };
 
     updateClassProgress();
-    const progressInterval = setInterval(updateClassProgress, 30000); // Check every 30s — period boxes removed, no per-second display needed
+    const progressInterval = setInterval(updateClassProgress, 15000); // Check every 15s for faster updates
 
     return () => clearInterval(progressInterval);
   }, [timetable, currentDay, selectedRole]);
@@ -754,10 +755,41 @@ export default function App() {
       // so the Offline Timer box always shows the correct current period subject
       if (period) {
         setOfflineTimerState(prev => {
-          if (!prev.isRunning) return prev;
-          // Only update if subject actually changed (period boundary crossed)
-          if (prev.currentLecture?.subject === period.subject &&
-            prev.currentLecture?.startTime === period.startTime) return prev;
+          // Only update if period identifier actually changed (P1 to P2, etc.)
+          const periodChanged = prev.currentLecture?.period !== period.period;
+
+          if (!periodChanged) {
+            console.log('✅ Same period, continuing timer (no reset)');
+            // Still update lecture info but don't reset timer
+            const updatedLecture = {
+              ...prev.currentLecture,
+              subject: period.subject || prev.currentLecture?.subject,
+              teacher: period.teacher || period.teacherName || prev.currentLecture?.teacher,
+              room: period.room || prev.currentLecture?.room,
+              startTime: period.startTime || prev.currentLecture?.startTime,
+              endTime: period.endTime || prev.currentLecture?.endTime,
+              period: period.period || prev.currentLecture?.period,
+            };
+            if (OfflineTimerService.isRunning) {
+              OfflineTimerService.currentLecture = updatedLecture;
+            }
+            return { ...prev, currentLecture: updatedLecture };
+          }
+
+          console.log('🔄 Period change detected:', {
+            from: prev.currentLecture?.period,
+            to: period.period,
+            fromSubject: prev.currentLecture?.subject,
+            toSubject: period.subject,
+            timerWasRunning: prev.isRunning
+          });
+
+          // Period changed - save attendance to server for admin panel
+          // Save even if timer not running, as long as there's attendance data
+          if (prev.elapsedSeconds > 0 || todayAttendance.lectures.length > 0) {
+            saveAttendanceToServer(prev.elapsedSeconds, 'attending');
+          }
+
           const updatedLecture = {
             ...prev.currentLecture,
             subject: period.subject || prev.currentLecture?.subject,
@@ -767,6 +799,49 @@ export default function App() {
             endTime: period.endTime || prev.currentLecture?.endTime,
             period: period.period || prev.currentLecture?.period,
           };
+
+          // Auto-start timer for new period if timer was running
+          if (prev.isRunning) {
+            console.log('⏱️ Auto-starting timer for new period from 00:00:00');
+            // Use an async IIFE so we can await properly without race conditions
+            (async () => {
+              try {
+                // 1. Stop the current period timer and sync its data
+                await OfflineTimerService.stopTimer('period_change');
+                console.log('   Timer stopped for period transition');
+
+                // 2. Hard-reset timer to 0 for the new period
+                OfflineTimerService.timerSeconds = 0;
+                OfflineTimerService._countingBaseSeconds = 0;
+                OfflineTimerService._countingStartedAt = null;
+                OfflineTimerService.attendanceStatus = 'absent';
+                OfflineTimerService.thresholdSeconds = null;
+                console.log('   Timer state reset to 0 for new period');
+
+                // 3. Small gap so the stop sync completes before we start again
+                await new Promise(resolve => setTimeout(resolve, 500));
+
+                // 4. Start fresh for the new period
+                const lectureInfo = {
+                  subject: period.subject || prev.currentLecture?.subject,
+                  teacher: period.teacher || period.teacherName || prev.currentLecture?.teacher,
+                  room: period.room || prev.currentLecture?.room,
+                  startTime: period.startTime || prev.currentLecture?.startTime,
+                  endTime: period.endTime || prev.currentLecture?.endTime,
+                  period: period.period || prev.currentLecture?.period,
+                };
+                if (lectureInfo.subject && lectureInfo.period) {
+                  await OfflineTimerService.startTimer(lectureInfo);
+                  console.log('✅ Timer auto-started for new period from 00:00:00');
+                } else {
+                  console.log('⚠️ Cannot auto-start — missing subject or period');
+                }
+              } catch (err) {
+                console.error('❌ Period transition error:', err);
+              }
+            })();
+          }
+
           // Also update OfflineTimerService's internal currentLecture
           if (OfflineTimerService.isRunning) {
             OfflineTimerService.currentLecture = updatedLecture;
@@ -776,7 +851,7 @@ export default function App() {
       }
     };
     fetchOfflinePeriod();
-    const interval = setInterval(fetchOfflinePeriod, 60000);
+    const interval = setInterval(fetchOfflinePeriod, 30000); // 30 seconds for faster updates
     return () => clearInterval(interval);
   }, [selectedRole]);
 
@@ -1175,6 +1250,10 @@ export default function App() {
         console.log('⏹️ Stopping timer manually');
         const result = await OfflineTimerService.stopTimer('manual');
 
+        if (result.success) {
+          stopPeriodicSync(); // Stop periodic server sync
+        }
+
         if (!result.success) {
           showToast(`❌ Failed to stop timer: ${result.error}`, 'error');
         }
@@ -1208,6 +1287,10 @@ export default function App() {
       };
 
       const result = await OfflineTimerService.startTimer(lectureInfo);
+
+      if (result.success) {
+        startPeriodicSync(); // Start periodic server sync for admin panel visibility
+      }
 
       if (!result.success) {
         let title = '❌ Cannot Start Timer';
@@ -1822,6 +1905,17 @@ export default function App() {
         }
       }
     });
+
+    // Listen for timetable updates from server
+    socketRef.current.on('timetable-update', async (data) => {
+      console.log('📡 Timetable update received:', data);
+
+      if (selectedRoleRef.current === 'student' && semesterRef.current && branchRef.current) {
+        // Force refresh timetable with latest data
+        await fetchTimetable(semesterRef.current, branchRef.current);
+        showToast('📅 Timetable updated', 'success');
+      }
+    });
   };
 
   // Save lecture attendance when class ends
@@ -1846,11 +1940,27 @@ export default function App() {
     };
   };
 
-  // Save attendance to server
-  const saveAttendanceToServer = async () => {
-    if (!studentId || todayAttendance.lectures.length === 0) return;
+  // Save attendance to server (period-specific for period changes)
+  const saveAttendanceToServer = async (timerValue, status) => {
+    if (!studentId) return;
+
+    // If no parameters provided, get defaults
+    if (timerValue === undefined) {
+      if (todayAttendance.lectures.length === 0) return;
+      timerValue = todayAttendance.totalAttended || 0;
+    }
+    if (status === undefined) {
+      status = 'attending';
+    }
 
     try {
+      // Get current period info
+      const currentPeriod = offlinePeriod || offlineTimerState.currentLecture;
+      if (!currentPeriod || !currentPeriod.period) {
+        console.log('⚠️ No period info available for saving attendance');
+        return;
+      }
+
       // Get server date for validation
       let clientDate;
       try {
@@ -1869,45 +1979,36 @@ export default function App() {
         console.log('Could not get timer state:', error);
       }
 
-      // Calculate total attended time (combine period-based and timer-based)
-      const periodBasedMinutes = todayAttendance.totalAttended || 0;
-      const timerBasedMinutes = Math.floor(currentTimerSeconds / 60);
-      const totalAttendedMinutes = Math.max(periodBasedMinutes, timerBasedMinutes);
+      console.log('📊 Saving period-specific attendance to server:');
+      console.log('   Period:', currentPeriod.period);
+      console.log('   Subject:', currentPeriod.subject);
+      console.log('   Timer seconds:', currentTimerSeconds);
 
-      console.log('📊 Saving attendance with duration data:');
-      console.log('   Period-based minutes:', periodBasedMinutes);
-      console.log('   Timer-based minutes:', timerBasedMinutes);
-      console.log('   Total attended minutes:', totalAttendedMinutes);
-
-      const response = await fetch(`${SOCKET_URL}/api/attendance/record`, {
+      // Use period-sync endpoint to save period-specific timer data (no check-in required)
+      const response = await fetch(`${SOCKET_URL}/api/attendance/period-sync`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          studentId: userData?.enrollmentNo || studentId,   // always use enrollmentNo as the key
-          enrollmentNo: userData?.enrollmentNo || studentId,
-          studentName,
-          status: todayAttendance.dayPresent ? 'present' : 'absent',
-          timerValue: currentTimerSeconds,
+          studentId: userData?.enrollmentNo || studentId,
+          timerSeconds: currentTimerSeconds,
+          period: currentPeriod.period,
+          subject: currentPeriod.subject,
+          teacher: currentPeriod.teacher || currentPeriod.teacherName,
+          room: currentPeriod.room,
           semester,
           branch,
-          lectures: todayAttendance.lectures,
-          totalAttended: totalAttendedMinutes,
-          totalClassTime: todayAttendance.totalClassTime,
-          dayPercentage: todayAttendance.totalClassTime > 0
-            ? Math.round((totalAttendedMinutes / todayAttendance.totalClassTime) * 100)
-            : todayAttendance.dayPercentage,
-          clientDate: clientDate
+          timestamp: clientDate
         })
       });
 
       const data = await response.json();
       if (data.success) {
-        console.log('✅ Attendance saved to server with duration:', data.record);
+        console.log('✅ Period attendance saved to server:', data);
       } else {
-        console.log('⚠️ Failed to save attendance:', data.error);
+        console.log('⚠️ Failed to save period attendance:', data.error);
       }
     } catch (error) {
-      console.log('❌ Error saving attendance to server:', error);
+      console.log('❌ Error saving period attendance to server:', error);
     }
   };
 
@@ -1922,10 +2023,9 @@ export default function App() {
         AsyncStorage.getItem(DAILY_VERIFICATION_KEY)
       ]);
 
-      // Load theme preference
-      if (savedTheme !== null) {
-        setThemeMode(THEMES[savedTheme] ? savedTheme : 'warm');
-      }
+      // Force theme to 'warm' (light) - ignore saved preference
+      setThemeMode('warm');
+      await AsyncStorage.setItem(THEME_KEY, 'warm');
 
       // Check for saved login data
       if (cachedUserData && cachedLoginId) {
@@ -2359,7 +2459,7 @@ export default function App() {
     if (selectedRole === 'student' && semester && branch && !showLogin) {
       const refreshInterval = setInterval(() => {
         fetchTimetable(semester, branch);
-      }, 5 * 60 * 1000); // Refresh every 5 minutes — timetable rarely changes
+      }, 30 * 1000); // Refresh every 30 seconds for faster updates
 
       return () => clearInterval(refreshInterval);
     }
@@ -2747,9 +2847,36 @@ export default function App() {
     }
   };
 
+  // Periodic sync to server during active classes for admin panel visibility
+  const startPeriodicSync = () => {
+    if (periodicSyncRef.current) {
+      clearInterval(periodicSyncRef.current);
+    }
+
+    periodicSyncRef.current = setInterval(async () => {
+      if (offlineTimerState.isRunning && userData) {
+        saveAttendanceToServer(offlineTimerState.elapsedSeconds, 'attending');
+        console.log('🔄 Periodic attendance sync to server');
+      }
+    }, 2 * 60 * 1000); // Sync every 2 minutes during active class
+  };
+
+  const stopPeriodicSync = () => {
+    if (periodicSyncRef.current) {
+      clearInterval(periodicSyncRef.current);
+      periodicSyncRef.current = null;
+    }
+  };
+
   // Handle face verification trigger from CircularTimer
   const handleFaceVerification = async () => {
     console.log('🔒 Face verification triggered from CircularTimer');
+
+    // Only allow face verification during active class
+    if (!currentClassInfo || currentClassInfo.currentLecture === 'Break') {
+      alert('⚠️ Face verification is only available during active lectures.\n\nPlease wait for your class to start.');
+      return;
+    }
 
     try {
       // Get stored face embedding from SecureStorage
@@ -3140,9 +3267,22 @@ export default function App() {
           // Fire all post-login fetches in parallel — no sequential waiting
           Promise.all([
             fetchTimetable(normalizedUser.semester, normalizedUser.branch),
-            fetchDailyBSSIDSchedule(normalizedUser.enrollmentNo),
+            fetchDailyBSSIDSchedule(normalizedUser.enrollmentNo, true), // Force refresh like "Refresh from Server" button
             loadTodayAttendance(studentIdValue),
+            refreshUserProfile(), // Fetch latest profile data from server (like refresh button)
           ]).catch(() => { });
+
+          // Force sync timer data after login (like refresh button does)
+          setTimeout(async () => {
+            try {
+              const syncResult = await OfflineTimerService.forceSyncTimerData();
+              if (syncResult.success) {
+                console.log('✅ Timer synced after login');
+              }
+            } catch (e) {
+              console.warn('⚠️ Timer sync after login failed:', e.message);
+            }
+          }, 1000);
 
           storageData.push(
             [STUDENT_NAME_KEY, normalizedUser.name],
@@ -3161,6 +3301,7 @@ export default function App() {
         } else if (data.user.role === 'teacher') {
           // Don't set default semester/branch for teachers - let current class detection handle it
           fetchStudents();
+          refreshUserProfile(); // Fetch latest profile data from server (like refresh button)
         }
 
         // Save session to AsyncStorage so it persists across app restarts
@@ -3638,7 +3779,7 @@ export default function App() {
               await AsyncStorage.multiRemove([
                 ROLE_KEY, STUDENT_NAME_KEY, STUDENT_ID_KEY,
                 USER_DATA_KEY, LOGIN_ID_KEY, DAILY_VERIFICATION_KEY,
-                SEMESTER_KEY, BRANCH_KEY, CACHE_KEY
+                SEMESTER_KEY, BRANCH_KEY, CACHE_KEY, THEME_KEY
               ]);
               await SecureStorage.clearFaceData();
               await BSSIDStorage.clearSchedule();
@@ -3673,6 +3814,7 @@ export default function App() {
             setOfflineTimerInitialized(false);
             setActiveTab('home');
             setShowLogin(true);
+            setThemeMode('warm'); // Reset theme to default
             console.log('✅ Logout complete');
           }
         }
@@ -4791,6 +4933,7 @@ export default function App() {
           semester={semester}
           branch={branch}
           socketUrl={SOCKET_URL}
+          todayAttendance={todayAttendance}
         />
         <BottomNavigation
           theme={theme}
@@ -5268,7 +5411,7 @@ export default function App() {
             }}>
               <Text style={{ fontSize: 40, marginBottom: 12 }}>🎉</Text>
               <Text style={{ fontSize: 18, fontWeight: 'bold', color: theme.text, textAlign: 'center', marginBottom: 8 }}>
-                Enjoy! No class right now.
+                yayyy!! NO class currently
               </Text>
               <Text style={{ fontSize: 13, color: theme.textSecondary, textAlign: 'center' }}>
                 Your next class will appear here automatically when it starts.
@@ -5539,51 +5682,42 @@ export default function App() {
                 )}
               </View>
 
-              {/* Timer Control Button */}
-              <TouchableOpacity
-                style={{
-                  backgroundColor: offlineTimerState.isRunning ? '#ef4444' : '#22c55e',
-                  borderRadius: 12,
-                  padding: 15,
-                  alignItems: 'center',
-                  shadowColor: '#000',
-                  shadowOffset: { width: 0, height: 2 },
-                  shadowOpacity: 0.25,
-                  shadowRadius: 3.84,
-                  elevation: 5,
-                }}
-                onPress={handleTimerStartStop}
-                disabled={!currentClassInfo || currentClassInfo.currentLecture === 'Break'}
-              >
-                <Text style={{
-                  color: '#ffffff',
-                  fontSize: 16,
-                  fontWeight: 'bold',
-                }}>
-                  {offlineTimerState.isRunning ? '⏹️ STOP TIMER' : '🔐 START TIMER'}
-                </Text>
-                {(!currentClassInfo || currentClassInfo.currentLecture === 'Break') && !offlineTimerState.isRunning && (
+              {/* Timer Control Button - only show during active lectures */}
+              {currentClassInfo && currentClassInfo.currentLecture !== 'Break' && (
+                <TouchableOpacity
+                  style={{
+                    backgroundColor: offlineTimerState.isRunning ? '#ef4444' : '#22c55e',
+                    borderRadius: 12,
+                    padding: 15,
+                    alignItems: 'center',
+                    shadowColor: '#000',
+                    shadowOffset: { width: 0, height: 2 },
+                    shadowOpacity: 0.25,
+                    shadowRadius: 3.84,
+                    elevation: 5,
+                  }}
+                  onPress={handleTimerStartStop}
+                >
                   <Text style={{
                     color: '#ffffff',
-                    fontSize: 12,
-                    marginTop: 5,
-                    opacity: 0.8,
+                    fontSize: 16,
+                    fontWeight: 'bold',
                   }}>
-                    Available during active lectures only
+                    {offlineTimerState.isRunning ? '⏹️ STOP TIMER' : '🔐 START TIMER'}
                   </Text>
-                )}
-                {(currentClassInfo && currentClassInfo.currentLecture !== 'Break' && !offlineTimerState.isRunning) && (
-                  <Text style={{
-                    color: '#ffffff',
-                    fontSize: 11,
-                    marginTop: 5,
-                    opacity: 0.9,
-                    textAlign: 'center',
-                  }}>
-                    Requires WiFi + Face verification
-                  </Text>
-                )}
-              </TouchableOpacity>
+                  {!offlineTimerState.isRunning && (
+                    <Text style={{
+                      color: '#ffffff',
+                      fontSize: 11,
+                      marginTop: 5,
+                      opacity: 0.9,
+                      textAlign: 'center',
+                    }}>
+                      Requires WiFi + Face verification
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
