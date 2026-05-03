@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
@@ -17,6 +19,7 @@ import android.os.PowerManager
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 
 class TimerService : Service() {
 
@@ -54,8 +57,7 @@ class TimerService : Service() {
     // Accumulated seconds from previous runs (resume support)
     private var baseSeconds: Long = 0L
 
-    private val BSSID_CHECK_INTERVAL_MS = 60_000L
-    private var bssidCheckCounter = 0L
+    // BSSID is checked on every tick (every 1 second)
 
     inner class LocalBinder : Binder() {
         fun getService(): TimerService = this@TimerService
@@ -92,7 +94,7 @@ class TimerService : Service() {
         elapsedSeconds        = resumeFrom
         authorizedBSSID       = bssid
         stoppedDueToWifiInvalid = false
-        bssidCheckCounter     = 0L
+
 
         updateNotification()
         handler.post(tickRunnable)
@@ -125,12 +127,8 @@ class TimerService : Service() {
 
             updateNotification()
 
-            // Periodic BSSID check every 60 s
-            bssidCheckCounter += 1000L
-            if (bssidCheckCounter >= BSSID_CHECK_INTERVAL_MS) {
-                bssidCheckCounter = 0L
-                checkBSSIDInBackground()
-            }
+            // BSSID check every tick (every 1 second)
+            checkBSSIDInBackground()
 
             handler.postDelayed(this, 1000L)
         }
@@ -140,6 +138,42 @@ class TimerService : Service() {
         try {
             if (authorizedBSSID.isBlank()) return
 
+            // ── 1. Check location permission ──────────────────────────────────
+            val hasFineLocation = ContextCompat.checkSelfPermission(
+                applicationContext,
+                android.Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+            val hasCoarseLocation = ContextCompat.checkSelfPermission(
+                applicationContext,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (!hasFineLocation && !hasCoarseLocation) {
+                Log.w(TAG, "BSSID check: location permission revoked — stopping timer")
+                stoppedDueToWifiInvalid = true
+                stopTimer()
+                return
+            }
+
+            // ── 2. Check location services (GPS toggle) ───────────────────────
+            val locationManager = applicationContext
+                .getSystemService(Context.LOCATION_SERVICE) as LocationManager
+            val isLocationEnabled = try {
+                locationManager.isLocationEnabled
+            } catch (e: Exception) {
+                Log.w(TAG, "BSSID check: could not read location state — ${e.message}")
+                true // give benefit of the doubt on error
+            }
+
+            if (!isLocationEnabled) {
+                Log.w(TAG, "BSSID check: location services disabled — stopping timer")
+                stoppedDueToWifiInvalid = true
+                stopTimer()
+                return
+            }
+
+            // ── 3. Check WiFi enabled ─────────────────────────────────────────
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
             if (!wm.isWifiEnabled) {
                 Log.w(TAG, "BSSID check: WiFi disabled — stopping timer")
@@ -148,6 +182,7 @@ class TimerService : Service() {
                 return
             }
 
+            // ── 4. Read current BSSID ─────────────────────────────────────────
             @Suppress("DEPRECATION")
             val currentBSSID = wm.connectionInfo?.bssid
 
@@ -159,6 +194,7 @@ class TimerService : Service() {
                 return
             }
 
+            // ── 5. Compare against authorized list ────────────────────────────
             val normalizedCurrent = currentBSSID.lowercase().trim()
             val authorizedList = authorizedBSSID.lowercase()
                 .split(",").map { it.trim() }.filter { it.isNotBlank() }
