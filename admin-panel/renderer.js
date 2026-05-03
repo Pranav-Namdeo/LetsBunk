@@ -537,7 +537,7 @@ function setupEventListeners() {
             const modal = e.target.closest('.modal');
             if (modal) {
                 modal.classList.remove('active');
-                modal.style.display = 'none';
+                modal.style.display = '';   // reset inline style so re-open works
             }
         });
     });
@@ -547,7 +547,7 @@ function setupEventListeners() {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
                 modal.classList.remove('active');
-                modal.style.display = 'none';
+                modal.style.display = '';   // reset inline style so re-open works
             }
         });
     });
@@ -3246,11 +3246,15 @@ function exportTimetable() {
 
 // Utility Functions
 function openModal() {
-    document.getElementById('modal').classList.add('active');
+    const modal = document.getElementById('modal');
+    modal.style.display = '';   // clear any inline display:none set by close handlers
+    modal.classList.add('active');
 }
 
 function closeModal() {
-    document.getElementById('modal').classList.remove('active');
+    const modal = document.getElementById('modal');
+    modal.classList.remove('active');
+    modal.style.display = '';   // reset inline style so next openModal() works
 }
 
 function showNotification(message, type = 'info') {
