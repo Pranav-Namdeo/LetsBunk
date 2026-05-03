@@ -84,6 +84,7 @@ class OfflineTimerService {
     
     // Manual stop/start tracking
     this.wasManuallyStoppedInSameLecture = false;
+    this.wasRunningBeforeLectureEnd = false;  // true if timer was running when lecture ended
     this.lastVerifiedLecture = null;
     this.lastFaceVerificationTime = null;
     this.verifiedToday = false;          // true after first face-verify of the day
@@ -747,29 +748,20 @@ class OfflineTimerService {
         console.log('   Current timer seconds:', this.timerSeconds);
         console.log('   Current lecture:', this.currentLecture?.subject);
         
-        // Clear disconnection tracking
-        this.wasRunningBeforeDisconnect = false;
-        this.disconnectionTime = null;
-        this.pausedDueToWiFiLoss = false;
         this.previousLectureData = null;
+        this.wasManuallyStoppedInSameLecture = false;
+        this.thresholdSeconds = null;  // reset threshold on any stop
+        this.attendanceStatus = 'absent';
       } else if (reason === 'lecture_ended') {
-        // Lecture ended - clear all tracking and context including threshold
-        console.log('⏰ Lecture period ended - clearing all tracking');
+        // Lecture ended - track that timer was running for auto-start next period
+        console.log('⏰ Lecture period ended - preparing for next period auto-start');
+        this.wasRunningBeforeLectureEnd = true;  // Track for auto-start in next period
         this.wasManuallyStoppedInSameLecture = false;
         this.wasRunningBeforeDisconnect = false;
         this.disconnectionTime = null;
         this.pausedDueToWiFiLoss = false;
         this.previousLectureData = null;
         this.thresholdSeconds = null;  // reset so next period gets fresh threshold
-        this.attendanceStatus = 'absent';
-      } else {
-        // Other reasons - clear all tracking
-        this.wasRunningBeforeDisconnect = false;
-        this.disconnectionTime = null;
-        this.pausedDueToWiFiLoss = false;
-        this.previousLectureData = null;
-        this.wasManuallyStoppedInSameLecture = false;
-        this.thresholdSeconds = null;  // reset threshold on any stop
         this.attendanceStatus = 'absent';
       }
       

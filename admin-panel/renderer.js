@@ -594,6 +594,7 @@ function switchSection(sectionName) {
 
     // Load section data
     switch (sectionName) {
+        case 'dashboard': loadDashboardData(); break;
         case 'students': loadStudents(); break;
         case 'teachers': loadTeachers(); break;
         case 'subjects': loadSubjects(); break;
@@ -5792,6 +5793,36 @@ async function loadCalendar() {
     await loadCalendarFilterDropdowns();
     renderCalendar();
     renderHolidaysList();
+    // Subscribe to live updates so calendar refreshes after each period completion
+    _subscribeCalendarLiveUpdates();
+}
+
+// Track calendar socket subscription
+let _calendarSocket = null;
+let _calendarRefreshTimer = null;
+
+function _subscribeCalendarLiveUpdates() {
+    if (typeof io === 'undefined') return;
+    if (_calendarSocket) return; // already subscribed
+    try {
+        _calendarSocket = io(SERVER_URL, { transports: ['websocket'], reconnection: true });
+        _calendarSocket.on('student_timer_sync', (data) => {
+            // Debounce refresh to avoid hammering server on every sync
+            // Only refresh if calendar section is active
+            const calendarSection = document.getElementById('calendar-section');
+            if (calendarSection && calendarSection.classList.contains('active')) {
+                clearTimeout(_calendarRefreshTimer);
+                _calendarRefreshTimer = setTimeout(() => {
+                    // Re-fetch data and re-render calendar
+                    if (calFilterMode === 'subject') {
+                        fetchCalendarSubjectDates().then(() => renderCalendar());
+                    } else {
+                        fetchCalendarDayData().then(() => renderCalendar());
+                    }
+                }, 2000); // 2 second debounce
+            }
+        });
+    } catch (_) {}
 }
 
 // Populate semester/branch dropdowns from existing dynamicData
@@ -12203,6 +12234,30 @@ function _handleTimerSyncForCalendar(data) {
             showStudentCalendar(_openCalendarEnrollmentNo, _openCalendarStudentName);
         }
     }
+    
+    // Also update the percentage on the student card in the showcase view
+    const showcaseSection = document.getElementById('attendance-showcase-section');
+    if (showcaseSection && showcaseSection.classList.contains('active')) {
+        const pctElement = document.querySelector(`[data-pct-enrollment="${data.enrollmentNo}"]`);
+        if (pctElement) {
+            // Debounce the percentage refresh to avoid hammering the server
+            clearTimeout(pctElement._refreshTimer);
+            pctElement._refreshTimer = setTimeout(async () => {
+                try {
+                    const response = await fetch(`${SERVER_URL}/api/attendance/summary/${data.enrollmentNo}`);
+                    const result = await response.json();
+                    if (result.success && result.summary) {
+                        const newPct = result.summary.overallPercentage || 0;
+                        const color = newPct >= 75 ? '#28a745' : newPct >= 50 ? '#ffc107' : '#dc3545';
+                        pctElement.textContent = `${newPct}%`;
+                        pctElement.style.color = color;
+                    }
+                } catch (err) {
+                    console.error('Failed to refresh student percentage:', err);
+                }
+            }, 2000); // 2 second debounce
+        }
+    }
 }
 
 function _updateAttendanceRowLive(data) {
@@ -12623,13 +12678,13 @@ function renderStudentList(studentItems) {
         const { student, percentage } = item;
         const percentageColor = percentage >= 75 ? '#28a745' : percentage >= 50 ? '#ffc107' : '#dc3545';
         html += `
-            <div class="showcase-student-card">
+            <div class="showcase-student-card" data-enrollment="${student.enrollmentNo}">
                 <div class="student-card-header">
                     <div class="student-info">
                         <h4>${student.name}</h4>
                         <p>${student.enrollmentNo}</p>
                     </div>
-                    <div class="student-percentage" style="color: ${percentageColor}; font-size: 28px; font-weight: bold;">
+                    <div class="student-percentage" data-pct-enrollment="${student.enrollmentNo}" style="color: ${percentageColor}; font-size: 28px; font-weight: bold;">
                         ${percentage}%
                     </div>
                 </div>

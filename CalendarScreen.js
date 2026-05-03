@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Modal
 } from 'react-native';
-import { CalendarIcon, ArrowLeftIcon, ArrowRightIcon, CheckIcon, XIcon } from './Icons';
+import { CalendarIcon, ArrowLeftIcon, ArrowRightIcon, CheckIcon, XIcon, RefreshIcon } from './Icons';
 import { getServerTime } from './ServerTime';
 
 const DAYS   = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -18,7 +18,7 @@ const ChevronRight = ({ color = '#fff', size = 20 }) => (
 );
 
 export default function CalendarScreen({
-    theme, studentId, semester, branch, socketUrl, isTeacher = false, userData
+    theme, studentId, semester, branch, socketUrl, isTeacher = false, userData, todayAttendance
 }) {
     const getInitialDate = () => {
         try { return getServerTime().nowDate(); } catch { return new Date(); }
@@ -208,6 +208,20 @@ export default function CalendarScreen({
                     aMap[key] = r.status;
                     rMap[key] = r;
                 });
+                // Merge today's live attendance from local state
+                if (todayAttendance && todayAttendance.lectures && todayAttendance.lectures.length > 0) {
+                    const todayKey = todayAttendance.date;
+                    if (todayAttendance.dayPresent) {
+                        aMap[todayKey] = 'present';
+                        rMap[todayKey] = {
+                            date: todayKey,
+                            status: 'present',
+                            totalAttended: todayAttendance.totalAttended,
+                            totalClassTime: todayAttendance.totalClassTime,
+                            lectures: todayAttendance.lectures
+                        };
+                    }
+                }
                 setAttendanceData(aMap);
                 setAttendanceRecords(rMap);
                 // Month stats computed in render from currentDate — see attendancePct below
@@ -363,6 +377,22 @@ export default function CalendarScreen({
                 <View style={styles.titleRow}>
                     <CalendarIcon size={28} color={theme.primary} />
                     <Text style={[styles.title, { color: theme.primary }]}>Attendance Calendar</Text>
+                    <TouchableOpacity
+                        onPress={() => {
+                            if (isTeacher) {
+                                if (filterMode === 'subject' && selectedSubject) {
+                                    fetchSubjectDates();
+                                } else {
+                                    fetchTeacherMonthData();
+                                }
+                            } else {
+                                fetchMonthAttendance();
+                            }
+                        }}
+                        style={styles.refreshButton}
+                    >
+                        <RefreshIcon size={20} color={theme.primary} />
+                    </TouchableOpacity>
                 </View>
                 <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
                     {isTeacher ? 'Class attendance overview' : 'Your attendance history'}
@@ -967,7 +997,8 @@ export default function CalendarScreen({
 const styles = StyleSheet.create({
     container:       { flex: 1 },
     header:          { padding: 20, paddingTop: 60 },
-    titleRow:        { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 8 },
+    titleRow:        { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 8 },
+    refreshButton:   { padding: 8 },
     title:           { fontSize: 28, fontWeight: 'bold' },
     subtitle:        { fontSize: 14 },
 

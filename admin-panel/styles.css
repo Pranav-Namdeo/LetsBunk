@@ -275,6 +275,24 @@ body {
     transition: all 0.2s;
 }
 
+.refresh-btn {
+    padding: 8px 16px;
+    background: var(--primary);
+    color: var(--bg-dark);
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-right: 10px;
+}
+
+.refresh-btn:hover {
+    background: var(--primary-dark);
+    transform: translateY(-1px);
+}
+
 .btn-primary {
     background: var(--primary);
     color: var(--bg-dark);
@@ -4398,10 +4416,10 @@ ture Details Styles */
 .form-group textarea {
     width: 100%;
     padding: 10px 12px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
     border-radius: 8px;
-    color: #fff;
+    color: var(--text-primary);
     font-size: 14px;
     transition: all 0.2s;
     pointer-events: auto;
@@ -4412,7 +4430,7 @@ ture Details Styles */
 .form-group textarea:focus {
     outline: none;
     border-color: #00d9ff;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--bg-hover);
 }
 
 .form-group textarea {

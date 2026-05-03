@@ -20,22 +20,22 @@ import Svg, { Path } from 'react-native-svg';
 
 const { width, height } = Dimensions.get('window');
 
-// ── Design tokens (from theme.css + App.tsx) ─────────────────────────────────
+// ── Design tokens (modern dark theme) ──────────────────────────────────────
 const C = {
-  bg:           '#E8DCC4',
-  watermark:    '#D4C4A8',
-  ink:          '#030213',
-  inkMuted:     'rgba(3,2,19,0.6)',
-  inkFaint:     'rgba(3,2,19,0.1)',
-  inputBg:      '#DDD0B3',
-  inputBorder:  'rgba(0,0,0,0.2)',
-  inputFocus:   '#030213',
+  bg:           '#0F0F11',
+  watermark:    'rgba(255,255,255,0.03)',
+  ink:          '#FFFFFF',
+  inkMuted:     'rgba(255,255,255,0.6)',
+  inkFaint:     'rgba(255,255,255,0.08)',
+  inputBg:      '#1C1C1E',
+  inputBorder:  'rgba(255,255,255,0.1)',
+  inputFocus:   '#3B82F6',
   student:      '#3B82F6',
-  studentShadow:'rgba(59,130,246,0.4)',
+  studentShadow:'rgba(59,130,246,0.3)',
   teacher:      '#EF4444',
-  teacherShadow:'rgba(239,68,68,0.4)',
+  teacherShadow:'rgba(239,68,68,0.3)',
   success:      '#22C55E',
-  submit:       '#000000',
+  submit:       '#3B82F6',
   white:        '#ffffff',
 };
 
@@ -124,7 +124,7 @@ export default function LoginScreen({
 
   return (
     <View style={s.root}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
 
       {/* LB watermark — centered, faint */}
       <View style={s.watermarkWrap} pointerEvents="none">

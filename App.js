@@ -4,6 +4,7 @@ import {
   Animated, TextInput, ScrollView, FlatList, AppState, useColorScheme, Image, Modal, RefreshControl, PermissionsAndroid, Platform, Alert, NativeModules
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import io from 'socket.io-client';
 import OfflineTimerService from './OfflineTimerService';
@@ -48,8 +49,9 @@ import { showToast, ToastContainer } from './Toast';
 // Configuration - Import from centralized config
 import { SERVER_BASE_URL, API_URL as CONFIG_API_URL, SOCKET_URL as CONFIG_SOCKET_URL } from './config';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || CONFIG_API_URL;
-const SOCKET_URL = process.env.EXPO_PUBLIC_SOCKET_URL || CONFIG_SOCKET_URL;
+// Use Constants.expoConfig.extra for environment variables in Expo SDK 51
+const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL || CONFIG_API_URL;
+const SOCKET_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_SOCKET_URL || CONFIG_SOCKET_URL;
 
 // Constants
 const CACHE_KEY = '@timer_config';
@@ -800,15 +802,21 @@ export default function App() {
             period: period.period || prev.currentLecture?.period,
           };
 
-          // Auto-start timer for new period if timer was running
-          if (prev.isRunning) {
-            console.log('⏱️ Auto-starting timer for new period from 00:00:00');
+          // Auto-start timer for period transitions (P1->P2, P2->P3, etc.)
+          // First time of day requires manual start, regardless of which period
+          const hasStartedTimerToday = prev.elapsedSeconds > 0 || prev.isRunning;
+          const wasRunningBeforeLectureEnd = OfflineTimerService.wasRunningBeforeLectureEnd;
+
+          if (hasStartedTimerToday && wasRunningBeforeLectureEnd) {
+            console.log('⏱️ Period transition detected - auto-starting timer from 00:00:00');
             // Use an async IIFE so we can await properly without race conditions
             (async () => {
               try {
-                // 1. Stop the current period timer and sync its data
-                await OfflineTimerService.stopTimer('period_change');
-                console.log('   Timer stopped for period transition');
+                // 1. Stop the current period timer and sync its data (if running)
+                if (prev.isRunning) {
+                  await OfflineTimerService.stopTimer('period_change');
+                  console.log('   Timer stopped for period transition');
+                }
 
                 // 2. Hard-reset timer to 0 for the new period
                 OfflineTimerService.timerSeconds = 0;
@@ -816,6 +824,7 @@ export default function App() {
                 OfflineTimerService._countingStartedAt = null;
                 OfflineTimerService.attendanceStatus = 'absent';
                 OfflineTimerService.thresholdSeconds = null;
+                OfflineTimerService.wasRunningBeforeLectureEnd = false;  // Clear the flag
                 console.log('   Timer state reset to 0 for new period');
 
                 // 3. Small gap so the stop sync completes before we start again
@@ -840,6 +849,10 @@ export default function App() {
                 console.error('❌ Period transition error:', err);
               }
             })();
+          } else if (!hasStartedTimerToday) {
+            console.log('🌅 First time of day - requires manual START TIMER button');
+          } else {
+            console.log('⏸️ Timer was not running in previous period - requires manual start');
           }
 
           // Also update OfflineTimerService's internal currentLecture
