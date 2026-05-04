@@ -1719,9 +1719,9 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
         const totalClassMin     = Math.floor(totalClassSec    / 60);
 
         await AttendanceRecord.findOneAndUpdate(
-            { $or: [{ enrollmentNo }, { studentId: enrollmentNo }], date: midnight },
+            { enrollmentNo, date: midnight },   // simple filter — enrollmentNo is canonical key
             { $set: {
-                studentId:     enrollmentNo,
+                studentId:     enrollmentNo,    // keep legacy field in sync
                 enrollmentNo,
                 studentName:   studentName || enrollmentNo,
                 semester:      semester?.toString() || '',
@@ -3473,7 +3473,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             const dayStatus = dayPercentage >= 75 ? 'present' : 'absent';
 
             await AttendanceRecord.findOneAndUpdate(
-                { $or: [{ enrollmentNo }, { studentId: enrollmentNo }], date: markingDate },
+                { enrollmentNo, date: markingDate },   // simple filter — no $or with upsert
                 {
                     $set: {
                         studentId: enrollmentNo,
