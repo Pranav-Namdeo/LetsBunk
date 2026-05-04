@@ -3608,15 +3608,13 @@ app.get('/api/attendance/period-report', async (req, res) => {
 app.get('/api/attendance/daily-report', async (req, res) => {
     try {
         const { enrollmentNo, startDate, endDate, semester, branch, page = 1, limit = 50 } = req.query;
-        
-        console.log(`?? [DAILY-REPORT] Request - Filters:`, { enrollmentNo, startDate, endDate, semester, branch, page, limit });
 
         // Build query
         const query = {};
         if (enrollmentNo) query.enrollmentNo = enrollmentNo;
         if (semester) query.semester = semester;
         if (branch) query.branch = branch;
-        
+
         // Date range filter
         if (startDate || endDate) {
             query.date = {};
@@ -3632,37 +3630,67 @@ app.get('/api/attendance/daily-report', async (req, res) => {
             }
         }
 
-        // Calculate pagination
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Get total count
-        const total = await DailyAttendance.countDocuments(query);
-
-        // Get records
-        const records = await DailyAttendance.find(query)
+        // Primary: DailyAttendance (end-of-day cron snapshot)
+        let total = await DailyAttendance.countDocuments(query);
+        let records = await DailyAttendance.find(query)
             .sort({ date: -1 })
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
 
-        // Calculate summary statistics
+        // Fallback: AttendanceRecord (real-time, written by offline-sync during the day)
+        // Used when DailyAttendance is empty — e.g. today before 23:59 cron runs
+        if (records.length === 0) {
+            const arQuery = { ...query };
+            // AttendanceRecord uses same field names — query is compatible
+            total = await AttendanceRecord.countDocuments(arQuery);
+            const arRecords = await AttendanceRecord.find(arQuery)
+                .sort({ date: -1 })
+                .skip(skip)
+                .limit(parseInt(limit))
+                .lean();
+
+            // Normalize AttendanceRecord shape to match DailyAttendance shape
+            records = arRecords.map(r => ({
+                _id:                  r._id,
+                enrollmentNo:         r.enrollmentNo,
+                studentName:          r.studentName,
+                date:                 r.date,
+                semester:             r.semester,
+                branch:               r.branch,
+                totalPeriods:         r.lectures?.length || 0,
+                presentPeriods:       r.lectures?.filter(l => l.present).length || 0,
+                absentPeriods:        (r.lectures?.length || 0) - (r.lectures?.filter(l => l.present).length || 0),
+                attendancePercentage: r.dayPercentage || 0,
+                dailyStatus:          r.status || 'absent',
+                threshold:            75,
+                calculatedAt:         r.updatedAt || r.createdAt,
+                // Extra fields from AttendanceRecord
+                totalAttended:        r.totalAttended || 0,
+                totalClassTime:       r.totalClassTime || 0,
+                timerValue:           r.timerValue || 0,
+                lectures:             r.lectures || [],
+                _source:              'AttendanceRecord'  // flag so client knows it's intra-day
+            }));
+        }
+
         const summary = {
-            totalDays: records.length,
-            presentDays: records.filter(r => r.dailyStatus === 'present').length,
-            absentDays: records.filter(r => r.dailyStatus === 'absent').length,
-            averagePercentage: records.length > 0 
-                ? records.reduce((sum, r) => sum + r.attendancePercentage, 0) / records.length 
+            totalDays:         records.length,
+            presentDays:       records.filter(r => (r.dailyStatus || r.status) === 'present').length,
+            absentDays:        records.filter(r => (r.dailyStatus || r.status) === 'absent').length,
+            averagePercentage: records.length > 0
+                ? records.reduce((sum, r) => sum + (r.attendancePercentage || r.dayPercentage || 0), 0) / records.length
                 : 0
         };
-
-        console.log(`? [DAILY-REPORT] Found ${records.length} records (total: ${total})`);
 
         res.json({
             success: true,
             records,
             summary,
             pagination: {
-                page: parseInt(page),
+                page:  parseInt(page),
                 limit: parseInt(limit),
                 total,
                 pages: Math.ceil(total / parseInt(limit))
@@ -3670,11 +3698,8 @@ app.get('/api/attendance/daily-report', async (req, res) => {
         });
 
     } catch (error) {
-        console.error('? [DAILY-REPORT] Error:', error);
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+        console.error('❌ [DAILY-REPORT] Error:', error);
+        res.status(500).json({ success: false, error: error.message });
     }
 });
 
