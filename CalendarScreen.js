@@ -18,7 +18,7 @@ const ChevronRight = ({ color = '#fff', size = 20 }) => (
 );
 
 export default function CalendarScreen({
-    theme, studentId, semester, branch, socketUrl, isTeacher = false, userData, todayAttendance
+    theme, studentId, semester, branch, socketUrl, isTeacher = false, userData, todayAttendance, isTimerRunning = false
 }) {
     const getInitialDate = () => {
         try { return getServerTime().nowDate(); } catch { return new Date(); }
@@ -81,7 +81,7 @@ export default function CalendarScreen({
             fetchMonthAttendance();
         }
         fetchHolidays();
-    }, [currentDate, studentId, semester, branch, filterMode, selectedSubject]);
+    }, [currentDate, studentId, semester, branch, filterMode, selectedSubject, isTimerRunning]);
 
     // Load subject list when teacher switches to subject mode
     useEffect(() => {
@@ -211,11 +211,13 @@ export default function CalendarScreen({
                 // Merge today's live attendance from local state
                 if (todayAttendance && todayAttendance.lectures && todayAttendance.lectures.length > 0) {
                     const todayKey = todayAttendance.date;
-                    if (todayAttendance.dayPresent) {
-                        aMap[todayKey] = 'present';
+                    // Show today as active/present if timer is running OR day is marked present
+                    if (todayAttendance.dayPresent || isTimerRunning) {
+                        const liveStatus = todayAttendance.dayPresent ? 'present' : 'active';
+                        aMap[todayKey] = liveStatus;
                         rMap[todayKey] = {
                             date: todayKey,
-                            status: 'present',
+                            status: liveStatus,
                             totalAttended: todayAttendance.totalAttended,
                             totalClassTime: todayAttendance.totalClassTime,
                             lectures: todayAttendance.lectures
@@ -348,7 +350,6 @@ export default function CalendarScreen({
     const days = getDaysInMonth(currentDate);
 
     // Compute month stats for the currently viewed month from attendanceData
-    // This ensures navigating months shows correct stats for that month
     const currentMonthStats = React.useMemo(() => {
         const yr = currentDate.getFullYear();
         const mo = currentDate.getMonth();
@@ -357,7 +358,8 @@ export default function CalendarScreen({
             const d = new Date(key);
             if (d.getFullYear() === yr && d.getMonth() === mo) {
                 const status = typeof val === 'string' ? val : val?.status;
-                if (status === 'present') present++;
+                // 'active' = timer running right now — count as present for stats
+                if (status === 'present' || status === 'active') present++;
                 else absent++;
             }
         });
@@ -531,7 +533,12 @@ export default function CalendarScreen({
                 ) : (
                     <View style={styles.daysGrid}>
                         {days.map((date, idx) => {
-                            const active  = isActiveDate(date);
+                            const rawStatus = date ? (typeof attendanceData[date.toDateString()] === 'string'
+                                ? attendanceData[date.toDateString()]
+                                : attendanceData[date.toDateString()]?.status) : null;
+                            // 'active' = timer running — treat as present for display
+                            const isPresent = rawStatus === 'present' || rawStatus === 'active';
+                            const active  = isTeacher ? isActiveDate(date) : (date ? isPresent : false);
                             const holiday = getHoliday(date);
                             const today   = isToday(date);
                             const stats   = isTeacher && filterMode === 'day'
@@ -585,10 +592,10 @@ export default function CalendarScreen({
                                                 <View style={[styles.subjectDot, { backgroundColor: theme.primary }]} />
                                             )}
 
-                                            {/* Student: present/absent icon */}
+                                            {/* Student: present/absent/active icon */}
                                             {!isTeacher && active && !holiday && (
                                                 <View style={styles.statusIcon}>
-                                                    {attendanceData[date.toDateString()] === 'present'
+                                                    {(rawStatus === 'present' || rawStatus === 'active')
                                                         ? <CheckIcon size={10} color="#10b981" />
                                                         : <XIcon    size={10} color="#ef4444" />}
                                                 </View>

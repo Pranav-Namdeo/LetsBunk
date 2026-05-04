@@ -294,7 +294,7 @@ const attendanceRecordSchema = new mongoose.Schema({
 
     // ── Date & Status ─────────────────────────────────────────────────────────
     date:   { type: Date, required: true },           // midnight UTC
-    status: { type: String, enum: ['present', 'absent', 'leave'], required: true },
+    status: { type: String, enum: ['present', 'absent', 'active', 'leave'], required: true },
 
     // ── Timer ─────────────────────────────────────────────────────────────────
     timerValue:      { type: Number, default: 0 },    // total seconds in college
@@ -355,7 +355,7 @@ const periodAttendanceSchema = new mongoose.Schema({
     room:        { type: String },
 
     // ── Status ────────────────────────────────────────────────────────────────
-    status:      { type: String, required: true, enum: ['present', 'absent'] },
+    status:      { type: String, required: true, enum: ['present', 'absent', 'active'] },
     checkInTime: { type: Date },
 
     // ── Verification ──────────────────────────────────────────────────────────
@@ -1636,9 +1636,15 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
         }).lean();
 
         const presentCount  = periods.filter(p => p.status === 'present').length;
+        const activeCount   = periods.filter(p => p.status === 'active').length;
         const totalCount    = periods.length;
-        const dayPercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
-        const dayStatus     = dayPercentage >= threshold ? 'present' : 'absent';
+        // For percentage: count both present and active (timer running = attending)
+        const attendingCount = presentCount + activeCount;
+        const dayPercentage = totalCount > 0 ? Math.round((attendingCount / totalCount) * 100) : 0;
+        // Status: 'active' if any period is currently running, else present/absent by threshold
+        const hasActiveTimer = activeCount > 0;
+        const dayStatus = hasActiveTimer ? 'active'
+            : (dayPercentage >= threshold ? 'present' : 'absent');
 
         // Build lectures array with attended/total/percentage/present
         // Pull period start/end times from timetable so Level 3 has real data
@@ -1684,7 +1690,7 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                     attended:    attendedSec,   // seconds
                     total:       durationSec,   // seconds
                     percentage:  pct,
-                    present:     p.status === 'present',
+                    present:     p.status === 'present' || p.status === 'active',
                     verifications: p.checkInTime ? [{
                         time:    p.checkInTime,
                         type:    'face',
@@ -1703,10 +1709,10 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                 room:        p.room || '',
                 startTime:   '',
                 endTime:     '',
-                attended:    p.timerSeconds || (p.status === 'present' ? 3600 : 0),
+                attended:    p.timerSeconds || (p.status === 'present' ? durationSec : 0),
                 total:       3600,
                 percentage:  p.status === 'present' ? 100 : 0,
-                present:     p.status === 'present',
+                present:     p.status === 'present' || p.status === 'active',
                 studentCheckIn: p.checkInTime || null,
                 verifications: []
             }));

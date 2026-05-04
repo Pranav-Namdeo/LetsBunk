@@ -4925,6 +4925,7 @@ export default function App() {
           branch={branch}
           socketUrl={SOCKET_URL}
           todayAttendance={todayAttendance}
+          isTimerRunning={offlineTimerState.isRunning}
         />
         <BottomNavigation
           theme={theme}
