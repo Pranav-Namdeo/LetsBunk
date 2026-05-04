@@ -7988,30 +7988,54 @@ app.get('/api/attendance/summary/:enrollmentNo', async (req, res) => {
         if (hasDateFilter) dailyQuery.date = dateFilter;
         const dailyRecords = await DailyAttendance.find(dailyQuery).lean();
 
+        // ── Always merge today's AttendanceRecord (intra-day, not yet in DailyAttendance) ──
+        const todayMidnight = new Date(); todayMidnight.setHours(0, 0, 0, 0);
+        const todayEnd      = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        // Only merge today if it's within the requested date range (or no date filter)
+        const todayInRange = !hasDateFilter ||
+            ((!startDate || new Date(startDate) <= todayMidnight) &&
+             (!endDate   || new Date(endDate)   >= todayMidnight));
+
         let totalDays = 0, presentDays = 0, totalAttendedMinutes = 0, totalClassMinutes = 0;
 
         if (dailyRecords.length > 0) {
-            totalDays = dailyRecords.length;
-            presentDays = dailyRecords.filter(r => r.dailyStatus === 'present').length;
-            // DailyAttendance stores period counts — derive minutes from AttendanceRecord for accuracy
-            const arQuery = { $or: [{ studentId: enrollmentNo }, { enrollmentNo }] };
+            totalDays    = dailyRecords.length;
+            presentDays  = dailyRecords.filter(r => r.dailyStatus === 'present').length;
+            // Derive minutes from AttendanceRecord for accuracy
+            const arQuery = { enrollmentNo };
             if (hasDateFilter) arQuery.date = dateFilter;
             const arRecords = await AttendanceRecord.find(arQuery).lean();
             totalAttendedMinutes = arRecords.reduce((s, r) => s + (r.totalAttended || 0), 0);
             totalClassMinutes    = arRecords.reduce((s, r) => s + (r.totalClassTime || 0), 0);
-            // If AttendanceRecord has no minutes, estimate from period counts
             if (totalClassMinutes === 0) {
-                const totalPeriods  = dailyRecords.reduce((s, r) => s + (r.totalPeriods   || 0), 0);
+                const totalPeriods   = dailyRecords.reduce((s, r) => s + (r.totalPeriods   || 0), 0);
                 const presentPeriods = dailyRecords.reduce((s, r) => s + (r.presentPeriods || 0), 0);
                 totalClassMinutes    = totalPeriods   * 50;
                 totalAttendedMinutes = presentPeriods * 50;
             }
+
+            // Merge today's intra-day AttendanceRecord if not already in DailyAttendance
+            if (todayInRange) {
+                const todayInDaily = dailyRecords.some(r => {
+                    const d = new Date(r.date); d.setHours(0,0,0,0);
+                    return d.getTime() === todayMidnight.getTime();
+                });
+                if (!todayInDaily) {
+                    const todayAR = await AttendanceRecord.findOne({ enrollmentNo, date: { $gte: todayMidnight, $lte: todayEnd } }).lean();
+                    if (todayAR) {
+                        totalDays++;
+                        if (todayAR.status === 'present') presentDays++;
+                        totalAttendedMinutes += todayAR.totalAttended || 0;
+                        totalClassMinutes    += todayAR.totalClassTime || 0;
+                    }
+                }
+            }
         } else {
-            // ── Fallback: AttendanceRecord ────────────────────────────────────
-            const arQuery = { $or: [{ studentId: enrollmentNo }, { enrollmentNo }] };
+            // ── Fallback: AttendanceRecord only ──────────────────────────────
+            const arQuery = { enrollmentNo };
             if (hasDateFilter) arQuery.date = dateFilter;
             const arRecords = await AttendanceRecord.find(arQuery).lean();
-            const uniqueDates = [...new Set(arRecords.map(r => new Date(r.date).toDateString()))];
+            const uniqueDates    = [...new Set(arRecords.map(r => new Date(r.date).toDateString()))];
             totalDays            = uniqueDates.length;
             presentDays          = arRecords.filter(r => r.status === 'present').length;
             totalAttendedMinutes = arRecords.reduce((s, r) => s + (r.totalAttended || 0), 0);
@@ -8032,7 +8056,8 @@ app.get('/api/attendance/summary/:enrollmentNo', async (req, res) => {
             const subj = pr.subject || 'Unknown';
             if (!subjectMap[subj]) subjectMap[subj] = { subject: subj, present: 0, total: 0 };
             subjectMap[subj].total++;
-            if (pr.status === 'present') subjectMap[subj].present++;
+            // 'active' = timer running (student is currently attending) — count as present
+            if (pr.status === 'present' || pr.status === 'active') subjectMap[subj].present++;
         }
         const subjects = Object.values(subjectMap).map(s => ({
             ...s,
