@@ -24,13 +24,9 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
   const presentCount = students.filter(s => s.status === 'present').length;
 
   const renderStudentItem = ({ item: student }) => {
-    const studentIdStr = student._id ? student._id.toString() : null;
+    // Match random ring by enrollmentNo only — that's the canonical identifier
     const randomRingStudent = activeRandomRing?.selectedStudents?.find(s =>
-      s.studentId === studentIdStr ||
-      s.studentId === student._id ||
-      s.studentId === student.enrollmentNo ||
-      s.enrollmentNo === student.enrollmentNo ||
-      s.enrollmentNo === studentIdStr
+      s.enrollmentNo === student.enrollmentNo
     );
     return (
       <StudentItem

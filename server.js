@@ -598,7 +598,8 @@ app.post('/api/student/register', async (req, res) => {
         if (mongoose.connection.readyState === 1) {
             const student = new Student({ name, status: 'absent' });
             await student.save();
-            res.json({ success: true, studentId: student._id, student });
+            // Return enrollmentNo as studentId so client always uses enrollmentNo for lookups
+            res.json({ success: true, studentId: student.enrollmentNo || student._id.toString(), student });
         } else {
             const student = {
                 _id: Date.now().toString(),
@@ -608,7 +609,8 @@ app.post('/api/student/register', async (req, res) => {
                 isRunning: false
             };
             studentsMemory.push(student);
-            res.json({ success: true, studentId: student._id, student });
+            // In-memory mode has no enrollmentNo — fall back to _id (dev only)
+            res.json({ success: true, studentId: student.enrollmentNo || student._id, student });
         }
 
         // Notify all teachers
@@ -2872,10 +2874,13 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             if (Boolean(isRunning)) computedStatus = 'active';
         }
 
-        // Update status in DB
+        // Update status in DB — both top-level status and attendanceSession.status
         await StudentManagement.updateOne(
             { enrollmentNo: studentId },
-            { $set: { 'attendanceSession.status': computedStatus } }
+            { $set: {
+                status: computedStatus,                          // top-level field (was stale)
+                'attendanceSession.status': computedStatus
+            }}
         );
 
         // 6. Update liveTimerState + broadcast to targeted class room
@@ -2911,73 +2916,105 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             console.error(`❌ [OFFLINE-SYNC] Error broadcasting timer data:`, broadcastError);
         }
 
-        // 7. Update AttendanceRecord with class duration
+        // 7. Upsert timer progress into the current period's PeriodAttendance record FIRST
+        // so syncAttendanceRecord (step 7b) reads fresh data.
+        // Uses upsert:true so the record is CREATED if it doesn't exist yet.
+        try {
+            const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
+            if (currentLectureInfo) {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const periodId = `P${currentLectureInfo.period}`;
+
+                await PeriodAttendance.updateOne(
+                    {
+                        enrollmentNo: student.enrollmentNo,
+                        date: today,
+                        period: periodId
+                    },
+                    {
+                        $set: {
+                            timerSeconds:  Math.floor(timerSeconds),
+                            status:        computedStatus === 'present' ? 'present' : 'active',
+                            updatedAt:     new Date()
+                        },
+                        // Only set these fields on INSERT (don't overwrite existing check-in data)
+                        $setOnInsert: {
+                            studentName:      student.name,
+                            semester:         student.semester?.toString() || '',
+                            branch:           student.branch || '',
+                            subject:          lecture?.subject || currentLectureInfo.subject || '',
+                            teacher:          lecture?.teacher || currentLectureInfo.teacher || '',
+                            teacherName:      lecture?.teacher || currentLectureInfo.teacher || '',
+                            room:             lecture?.room    || currentLectureInfo.room    || '',
+                            verificationType: 'timer_sync',
+                            wifiVerified:     true,
+                            faceVerified:     false,
+                            checkInTime:      new Date(),
+                            createdAt:        new Date()
+                        }
+                    },
+                    { upsert: true }
+                );
+                console.log(`📊 [OFFLINE-SYNC] Upserted PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Timer: ${Math.floor(timerSeconds)}s`);
+            } else {
+                console.log(`⚠️ [OFFLINE-SYNC] No active period on server clock — skipping PeriodAttendance upsert`);
+            }
+        } catch (periodError) {
+            console.error(`❌ [OFFLINE-SYNC] Error upserting PeriodAttendance:`, periodError);
+        }
+
+        // 7b. Sync AttendanceRecord from PeriodAttendance (now up-to-date from step 7)
         try {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
-
-            // Convert timer seconds to minutes for attendance record
             const attendedMinutes = Math.floor(timerSeconds / 60);
-            
-            // Find or create attendance record
+
+            // Ensure a base AttendanceRecord exists before syncAttendanceRecord runs
+            // (syncAttendanceRecord uses upsert so this is just a safety net for totalClassTime)
             let attendanceRecord = await AttendanceRecord.findOne({
-                $or: [{ studentId: student._id }, { enrollmentNo: student.enrollmentNo }],
+                $or: [{ enrollmentNo: student.enrollmentNo }, { studentId: student.enrollmentNo }],
                 date: today
             });
 
             if (!attendanceRecord) {
-                attendanceRecord = new AttendanceRecord({
-                    studentId:    student.enrollmentNo,
-                    enrollmentNo: student.enrollmentNo,
-                    studentName:  student.name,
-                    semester:     student.semester?.toString() || '',
-                    branch:       student.branch || '',
-                    date:         today,
-                    status:       computedStatus,
-                    lectures:     [],
-                    totalAttended:  attendedMinutes,
-                    totalClassTime: 0,
-                    dayPercentage:  0,
-                    timerValue:     Math.floor(timerSeconds),
-                    createdAt: new Date(),
-                    updatedAt: new Date()
-                });
-            } else {
-                attendanceRecord.totalAttended = attendedMinutes;
-                attendanceRecord.timerValue    = Math.floor(timerSeconds);
-                attendanceRecord.status        = computedStatus;
-                attendanceRecord.updatedAt     = new Date();
-
-                if (attendanceRecord.totalClassTime > 0) {
-                    attendanceRecord.dayPercentage = Math.round((attendedMinutes / attendanceRecord.totalClassTime) * 100);
-                }
-            }
-
-            // Populate totalClassTime from timetable if not set
-            if (!attendanceRecord.totalClassTime || attendanceRecord.totalClassTime === 0) {
+                // Pre-create with totalClassTime from timetable so percentage is correct
+                let classMinutes = 0;
                 try {
                     const tt = await Timetable.findOne({ semester: student.semester, branch: student.branch });
                     if (tt) {
                         const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
                         const dayName = days[today.getDay()];
                         const sched   = tt.timetable[dayName] || [];
-                        let classMinutes = 0;
                         for (let i = 0; i < sched.length; i++) {
                             const slot = sched[i];
                             const pInfo = tt.periods[i];
                             if (!slot || slot.isBreak || !slot.subject || !pInfo) continue;
                             classMinutes += timeToMinutes(pInfo.endTime) - timeToMinutes(pInfo.startTime);
                         }
-                        if (classMinutes > 0) {
-                            attendanceRecord.totalClassTime = classMinutes;
-                            attendanceRecord.dayPercentage  = Math.round((attendedMinutes / classMinutes) * 100);
-                        }
                     }
                 } catch (_) {}
+
+                attendanceRecord = new AttendanceRecord({
+                    studentId:      student.enrollmentNo,
+                    enrollmentNo:   student.enrollmentNo,
+                    studentName:    student.name,
+                    semester:       student.semester?.toString() || '',
+                    branch:         student.branch || '',
+                    date:           today,
+                    status:         computedStatus,
+                    lectures:       [],
+                    totalAttended:  attendedMinutes,
+                    totalClassTime: classMinutes,
+                    dayPercentage:  classMinutes > 0 ? Math.round((attendedMinutes / classMinutes) * 100) : 0,
+                    timerValue:     Math.floor(timerSeconds),
+                    createdAt:      new Date(),
+                    updatedAt:      new Date()
+                });
+                await attendanceRecord.save();
             }
 
-            // Use syncAttendanceRecord to fully populate lectures with attended/total/percentage/present
-            // This replaces the partial write above and ensures Level 3 history has all fields
+            // Now fully sync from PeriodAttendance (includes P3 upserted above)
             await syncAttendanceRecord(
                 student.enrollmentNo,
                 today,
@@ -2989,37 +3026,6 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         } catch (recordError) {
             console.error(`❌ [OFFLINE-SYNC] Error updating AttendanceRecord:`, recordError);
-        }
-
-        // 7b. Sync timer progress back into the current period's PeriodAttendance record
-        // so the daily cron sees up-to-date data even before lecture ends
-        try {
-            if (lecture && lecture.startTime && lecture.endTime) {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-
-                // Identify which period this lecture maps to — use server clock (IST)
-                const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
-                if (currentLectureInfo) {
-                    const periodId = `P${currentLectureInfo.period}`;
-                    await PeriodAttendance.updateOne(
-                        {
-                            enrollmentNo: student.enrollmentNo,
-                            date: today,
-                            period: periodId
-                        },
-                        {
-                            $set: {
-                                timerSeconds: Math.floor(timerSeconds),
-                                updatedAt: new Date()
-                            }
-                        }
-                    );
-                    console.log(`📊 [OFFLINE-SYNC] Updated PeriodAttendance timer - Student: ${studentId}, Period: ${periodId}`);
-                }
-            }
-        } catch (periodError) {
-            console.error(`❌ [OFFLINE-SYNC] Error updating PeriodAttendance:`, periodError);
         }
 
         const duration = Date.now() - startTime;
@@ -3864,7 +3870,10 @@ app.get('/api/attendance/audit-trail', async (req, res) => {
 // 1. Face Verification & Timer Start
 app.post('/api/attendance/start-session', async (req, res) => {
     try {
-        const { studentId, studentName, enrollmentNo, semester, branch, faceData } = req.body;  // Changed from enrollmentNumber
+        // Accept both enrollmentNo and studentId — treat them as the same thing
+        const { studentId, studentName, enrollmentNo: enrollmentNoBody, semester, branch, faceData } = req.body;
+        // Canonical identifier: prefer enrollmentNo field, fall back to studentId
+        const canonicalId = enrollmentNoBody || studentId;
 
         // TODO: Verify face data against stored photo
         // For now, assume verification successful
@@ -3874,7 +3883,7 @@ app.post('/api/attendance/start-session', async (req, res) => {
 
         // Check if session already exists for today
         let session = await AttendanceSession.findOne({
-            studentId,
+            studentId: canonicalId,
             date: today
         });
 
@@ -3898,9 +3907,9 @@ app.post('/api/attendance/start-session', async (req, res) => {
 
         // Create new session
         session = new AttendanceSession({
-            studentId,
+            studentId: canonicalId,
             studentName,
-            enrollmentNo,  // Changed from enrollmentNumber
+            enrollmentNo: canonicalId,
             date: today,
             sessionStartTime: new Date(),
             timerValue: 0,
@@ -3914,15 +3923,15 @@ app.post('/api/attendance/start-session', async (req, res) => {
 
         // Also create/update attendance record
         let record = await AttendanceRecord.findOne({
-            studentId,
+            studentId: canonicalId,
             date: today
         });
 
         if (!record) {
             record = new AttendanceRecord({
-                studentId,
+                studentId: canonicalId,
                 studentName,
-                enrollmentNo,  // Changed from enrollmentNumber
+                enrollmentNo: canonicalId,
                 date: today,
                 status: 'present',
                 lectures: [],
@@ -8223,7 +8232,8 @@ app.post('/api/random-ring', async (req, res) => {
         const activeStudents = [];
         liveTimerState.forEach((state, enrollmentNo) => {
             if (state.semester === semester && state.branch === branch && state.status === 'active') {
-                activeStudents.push({ enrollmentNo, name: state.name, studentId: state.studentId || enrollmentNo });
+                // studentId in liveTimerState is always enrollmentNo (set by offline-sync broadcast)
+                activeStudents.push({ enrollmentNo, name: state.name, studentId: enrollmentNo });
             }
         });
 

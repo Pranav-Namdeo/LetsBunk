@@ -1575,48 +1575,32 @@ export default function App() {
 
       // For teachers: Instant updates for all students
       if (selectedRole === 'teacher') {
-        console.log('👨‍🏫 Teacher received update for student:', data.studentId);
+        console.log('👨‍🏫 Teacher received update for student:', data.enrollmentNo);
         console.log('   Update data:', { status: data.status, isRunning: data.isRunning, enrollmentNo: data.enrollmentNo });
 
         setStudents(prev => {
-          // Try multiple matching strategies
-          const existingIndex = prev.findIndex(s => {
-            // Match by _id
-            if (s._id && (s._id === data.studentId || s._id.toString() === data.studentId)) return true;
-            // Match by enrollmentNo
-            if (s.enrollmentNo && (s.enrollmentNo === data.studentId || s.enrollmentNo === data.enrollmentNo)) return true;
-            // Match if data has enrollmentNo and it matches student's _id
-            if (data.enrollmentNo && s._id && s._id.toString() === data.enrollmentNo) return true;
-            // Match if data has enrollmentNo and it matches student's enrollmentNo
-            if (data.enrollmentNo && s.enrollmentNo && s.enrollmentNo === data.enrollmentNo) return true;
-            return false;
-          });
+          // server always sends enrollmentNo — match on that only
+          const existingIndex = prev.findIndex(s =>
+            s.enrollmentNo && s.enrollmentNo === data.enrollmentNo
+          );
 
           if (existingIndex >= 0) {
-            // Student exists in list - UPDATE their status
             const updated = [...prev];
             const oldStudent = updated[existingIndex];
             updated[existingIndex] = { ...oldStudent, ...data };
             console.log('✅ Updated student:', oldStudent.name, '| Status:', data.status, '| Running:', data.isRunning);
             return updated;
           } else {
-            // Student not in list - log for debugging
-            console.log('⚠️ Student not found in list');
-            console.log('   Looking for studentId:', data.studentId);
-            console.log('   Looking for enrollmentNo:', data.enrollmentNo);
+            console.log('⚠️ Student not found in list, enrollmentNo:', data.enrollmentNo);
             console.log('   Current list has', prev.length, 'students');
-            if (prev.length > 0) {
-              console.log('   First student in list:', { _id: prev[0]._id, enrollmentNo: prev[0].enrollmentNo, name: prev[0].name });
-            }
-            // Refresh list to get latest data
             fetchStudents();
             return prev;
           }
         });
       } else {
-        // For non-teachers, just update
+        // For non-teachers, match by enrollmentNo only
         setStudents(prev => prev.map(s =>
-          s._id === data.studentId || s.enrollmentNo === data.studentId ? { ...s, ...data } : s
+          s.enrollmentNo === data.enrollmentNo ? { ...s, ...data } : s
         ));
       }
     });
@@ -1818,10 +1802,8 @@ export default function App() {
       if (selectedRole !== 'teacher') return;
       setStudents(prevStudents => {
         const updated = [...prevStudents];
-        const index = updated.findIndex(s =>
-          s._id?.toString() === data.studentId ||
-          s.enrollmentNo === data.enrollmentNo
-        );
+        // server always sends enrollmentNo — match on that only
+        const index = updated.findIndex(s => s.enrollmentNo === data.enrollmentNo);
         if (index !== -1) {
           updated[index] = {
             ...updated[index],
@@ -1846,10 +1828,8 @@ export default function App() {
       setStudents(prevStudents => {
         const updated = [...prevStudents];
         liveStudents.forEach(live => {
-          const index = updated.findIndex(s =>
-            s._id?.toString() === live.studentId ||
-            s.enrollmentNo === live.enrollmentNo
-          );
+          // server always sends enrollmentNo — match on that only
+          const index = updated.findIndex(s => s.enrollmentNo === live.enrollmentNo);
           if (index !== -1) {
             updated[index] = {
               ...updated[index],
@@ -2002,7 +1982,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          studentId: userData?.enrollmentNo || studentId,
+          studentId: studentId,   // studentId === enrollmentNo always
           timerSeconds: currentTimerSeconds,
           period: currentPeriod.period,
           subject: currentPeriod.subject,
@@ -2051,8 +2031,8 @@ export default function App() {
 
           if (userData.role === 'student') {
             setStudentName(userData.name);
-            // Use enrollmentNo as studentId for attendance tracking
-            setStudentId(userData.enrollmentNo || userData._id);
+            // studentId is always enrollmentNo — never fall back to _id
+            setStudentId(userData.enrollmentNo);
             setSemester(userData.semester);
             setBranch(userData.branch);
             // Join class socket room so student receives random ring notifications
@@ -2094,7 +2074,7 @@ export default function App() {
                 // Face verification removed - auto-start timer if session exists
                 if (verificationData.date === today &&
                   verificationData.verified &&
-                  verificationData.studentId === (userData.enrollmentNo || userData._id)) {
+                  verificationData.studentId === userData.enrollmentNo) {
                   console.log('✅ Restoring session from today');
                   // Face verification removed - no longer needed
 
@@ -2292,7 +2272,6 @@ export default function App() {
           const exists = prev.some(s =>
             s._id === data.student._id ||
             s.enrollmentNo === data.student.enrollmentNo ||
-            s._id === studentId ||
             s.enrollmentNo === studentId
           );
           if (!exists) {
@@ -2536,12 +2515,14 @@ export default function App() {
 
       const data = await response.json();
       if (data.success) {
-        await AsyncStorage.setItem(STUDENT_ID_KEY, data.studentId);
+        // data.studentId is always enrollmentNo (server guarantees this)
+        const enrollmentNo = data.studentId;
+        await AsyncStorage.setItem(STUDENT_ID_KEY, enrollmentNo);
         await AsyncStorage.setItem(STUDENT_NAME_KEY, studentName.trim());
-        setStudentId(data.studentId);
+        setStudentId(enrollmentNo);
         setShowNameInput(false);
       } else {
-        // Fallback: use offline mode with server time if available
+        // Fallback: offline mode — no enrollmentNo available, use timestamp
         let offlineId;
         try {
           const serverTime = getServerTime();
@@ -2556,7 +2537,7 @@ export default function App() {
       }
     } catch (error) {
       console.log('Error registering student, using offline mode:', error);
-      // Fallback: use offline mode with server time if available
+      // Fallback: offline mode — no enrollmentNo available, use timestamp
       let offlineId;
       try {
         const serverTime = getServerTime();
@@ -2620,12 +2601,11 @@ export default function App() {
     console.log('📡 Sending timer update:', { studentId, timer, running, status: finalStatus });
 
     socketRef.current.emit('timer_update', {
-      studentId,
+      studentId,          // === enrollmentNo always
       studentName: studentName,
       timerValue: timer,
       isRunning: running,
       status: finalStatus,
-      enrollmentNo: userData?.enrollmentNo,
       semester,
       branch
     });
@@ -2646,14 +2626,14 @@ export default function App() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            studentId,
+            studentId,          // === enrollmentNo always
             studentName,
-            enrollmentNo: userData?.enrollmentNo || 'N/A',
+            enrollmentNo: studentId,   // explicit alias for server compat
             status: finalStatus,
             timerValue: timer,
             semester,
             branch,
-            clientDate: clientDate // Send for server validation
+            clientDate: clientDate
           })
         });
       } catch (error) {
@@ -3120,8 +3100,7 @@ export default function App() {
 
     if (socketRef.current && socketRef.current.connected) {
       socketRef.current.emit('start_timer', {
-        studentId,
-        enrollmentNo: userData?.enrollmentNo,
+        studentId,          // === enrollmentNo always
         name: studentName,
         semester,
         branch,
@@ -3152,8 +3131,7 @@ export default function App() {
     if (socketRef.current && socketRef.current.connected) {
       console.log('⏹️  Stopping server-side timer...');
       socketRef.current.emit('stop_timer', {
-        studentId: studentId,
-        enrollmentNo: userData?.enrollmentNo
+        studentId: studentId,   // === enrollmentNo always
       });
       console.log('⏹️ Sent stop_timer to server');
     } else {
@@ -3269,8 +3247,8 @@ export default function App() {
 
         if (normalizedUser.role === 'student') {
           setStudentName(normalizedUser.name);
-          // Use enrollmentNo as studentId for attendance tracking
-          const studentIdValue = normalizedUser.enrollmentNo || normalizedUser._id;
+          // studentId is always enrollmentNo — never fall back to _id
+          const studentIdValue = normalizedUser.enrollmentNo;
           setStudentId(studentIdValue);
           setSemester(normalizedUser.semester);
           setBranch(normalizedUser.branch);
