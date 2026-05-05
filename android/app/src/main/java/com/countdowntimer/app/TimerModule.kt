@@ -24,17 +24,34 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
 
     /**
      * Start the foreground timer service with native BSSID validation.
-     * The service counts using SystemClock.elapsedRealtime() (boot-relative,
-     * cannot be spoofed by changing device date/time).
+     * Also receives studentId + serverUrl so the native service can sync
+     * attendance to the server while the app is in the background.
      */
     @ReactMethod
     fun startTimerWithBSSID(subject: String, resumeFromSeconds: Double, authorizedBSSID: String, promise: Promise) {
+        startTimerWithBSSIDAndSync(subject, resumeFromSeconds, authorizedBSSID, "", "", promise)
+    }
+
+    /**
+     * Start the foreground timer service with native BSSID validation AND background sync.
+     */
+    @ReactMethod
+    fun startTimerWithBSSIDAndSync(
+        subject: String,
+        resumeFromSeconds: Double,
+        authorizedBSSID: String,
+        studentId: String,
+        serverUrl: String,
+        promise: Promise
+    ) {
         try {
             val intent = Intent(reactContext, TimerService::class.java).apply {
                 action = TimerService.ACTION_START
                 putExtra("subject", subject)
                 putExtra("resumeFrom", resumeFromSeconds.toLong())
                 putExtra("authorizedBSSID", authorizedBSSID)
+                putExtra("studentId", studentId)
+                putExtra("serverUrl", serverUrl)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 reactContext.startForegroundService(intent)

@@ -20,6 +20,10 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import java.io.OutputStreamWriter
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.Executors
 
 class TimerService : Service() {
 
@@ -41,9 +45,6 @@ class TimerService : Service() {
 
         /**
          * Boot-relative elapsed time in milliseconds.
-         * SystemClock.elapsedRealtime() counts from device boot and CANNOT be
-         * changed by the user adjusting the device clock or date/time settings.
-         * Exposed so JS can use it as a spoof-proof time source.
          */
         @Volatile var bootElapsedMs: Long = 0L
     }
@@ -51,13 +52,18 @@ class TimerService : Service() {
     private val binder = LocalBinder()
     private val handler = Handler(Looper.getMainLooper())
     private var wakeLock: PowerManager.WakeLock? = null
+    private val networkExecutor = Executors.newSingleThreadExecutor()
 
     // Anchor: boot-relative ms when this timer run started
     private var startBootMs: Long = 0L
     // Accumulated seconds from previous runs (resume support)
     private var baseSeconds: Long = 0L
 
-    // BSSID is checked on every tick (every 1 second)
+    // Background sync state
+    private var studentId: String = ""
+    private var serverUrl: String = ""
+    private var syncTickCounter: Int = 0
+    private val SYNC_EVERY_N_TICKS = 30  // sync every 30 seconds
 
     inner class LocalBinder : Binder() {
         fun getService(): TimerService = this@TimerService
@@ -75,35 +81,42 @@ class TimerService : Service() {
         startForeground(NOTIFICATION_ID, buildNotification())
         when (intent?.action) {
             ACTION_START -> {
-                val subject   = intent.getStringExtra("subject") ?: ""
+                val subject    = intent.getStringExtra("subject") ?: ""
                 val resumeFrom = intent.getLongExtra("resumeFrom", 0L)
-                val bssid     = intent.getStringExtra("authorizedBSSID") ?: ""
-                startTimer(subject, resumeFrom, bssid)
+                val bssid      = intent.getStringExtra("authorizedBSSID") ?: ""
+                val sid        = intent.getStringExtra("studentId") ?: ""
+                val surl       = intent.getStringExtra("serverUrl") ?: ""
+                startTimer(subject, resumeFrom, bssid, sid, surl)
             }
             ACTION_STOP -> stopTimer()
         }
         return START_NOT_STICKY
     }
 
-    private fun startTimer(subject: String, resumeFrom: Long, bssid: String) {
-        lectureSubject        = subject
-        baseSeconds           = resumeFrom
-        // ── KEY CHANGE: anchor to boot-relative clock, not wall clock ─────────
-        startBootMs           = SystemClock.elapsedRealtime()
-        isRunning             = true
-        elapsedSeconds        = resumeFrom
-        authorizedBSSID       = bssid
+    private fun startTimer(subject: String, resumeFrom: Long, bssid: String, sid: String, surl: String) {
+        lectureSubject          = subject
+        baseSeconds             = resumeFrom
+        startBootMs             = SystemClock.elapsedRealtime()
+        isRunning               = true
+        elapsedSeconds          = resumeFrom
+        authorizedBSSID         = bssid
+        studentId               = sid
+        serverUrl               = surl
         stoppedDueToWifiInvalid = false
-
+        syncTickCounter         = 0
 
         updateNotification()
         handler.post(tickRunnable)
-        Log.d(TAG, "Timer started (boot-anchored): subject=$subject resumeFrom=${resumeFrom}s")
+        Log.d(TAG, "Timer started: subject=$subject resumeFrom=${resumeFrom}s studentId=$sid")
     }
 
     fun stopTimer() {
         isRunning = false
         handler.removeCallbacks(tickRunnable)
+        // Final sync before stopping
+        if (studentId.isNotBlank() && serverUrl.isNotBlank()) {
+            syncToServer(isFinalSync = true)
+        }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         Log.d(TAG, "Timer stopped at ${elapsedSeconds}s")
@@ -118,19 +131,59 @@ class TimerService : Service() {
         override fun run() {
             if (!isRunning) return
 
-            // ── Boot-relative elapsed — immune to device clock changes ────────
             val bootNow = SystemClock.elapsedRealtime()
             elapsedSeconds = baseSeconds + (bootNow - startBootMs) / 1000L
-
-            // Expose current boot-elapsed for JS to read
-            bootElapsedMs = bootNow
+            bootElapsedMs  = bootNow
 
             updateNotification()
 
-            // BSSID check every tick (every 1 second)
+            // BSSID + location check every tick
             checkBSSIDInBackground()
 
+            // Background sync every SYNC_EVERY_N_TICKS seconds
+            syncTickCounter++
+            if (syncTickCounter >= SYNC_EVERY_N_TICKS) {
+                syncTickCounter = 0
+                if (studentId.isNotBlank() && serverUrl.isNotBlank()) {
+                    syncToServer(isFinalSync = false)
+                }
+            }
+
             handler.postDelayed(this, 1000L)
+        }
+    }
+
+    /**
+     * POST attendance sync to server on a background thread.
+     * Uses a single-thread executor so syncs never pile up.
+     */
+    private fun syncToServer(isFinalSync: Boolean) {
+        val currentSeconds = elapsedSeconds
+        val sid            = studentId
+        val surl           = serverUrl
+        val subject        = lectureSubject
+        val timestamp      = System.currentTimeMillis()
+
+        networkExecutor.execute {
+            try {
+                val url = URL("$surl/api/attendance/offline-sync")
+                val conn = url.openConnection() as HttpURLConnection
+                conn.requestMethod = "POST"
+                conn.setRequestProperty("Content-Type", "application/json")
+                conn.doOutput = true
+                conn.connectTimeout = 10000
+                conn.readTimeout    = 10000
+
+                val body = """{"studentId":"$sid","timerSeconds":$currentSeconds,"timestamp":$timestamp,"isRunning":${!isFinalSync},"isPaused":false,"lecture":{"subject":"$subject"},"attendedMinutes":${currentSeconds / 60}}"""
+
+                OutputStreamWriter(conn.outputStream).use { it.write(body) }
+
+                val code = conn.responseCode
+                Log.d(TAG, "Background sync: HTTP $code, seconds=$currentSeconds, final=$isFinalSync")
+                conn.disconnect()
+            } catch (e: Exception) {
+                Log.w(TAG, "Background sync failed (non-fatal): ${e.message}")
+            }
         }
     }
 
@@ -163,7 +216,7 @@ class TimerService : Service() {
                 locationManager.isLocationEnabled
             } catch (e: Exception) {
                 Log.w(TAG, "BSSID check: could not read location state — ${e.message}")
-                true // give benefit of the doubt on error
+                true
             }
 
             if (!isLocationEnabled) {
@@ -186,7 +239,6 @@ class TimerService : Service() {
             @Suppress("DEPRECATION")
             val currentBSSID = wm.connectionInfo?.bssid
 
-            // Null / OEM fake value when screen off — give benefit of the doubt
             if (currentBSSID == null ||
                 currentBSSID == "02:00:00:00:00:00" ||
                 currentBSSID == "null") {
@@ -256,6 +308,7 @@ class TimerService : Service() {
     override fun onDestroy() {
         isRunning = false
         handler.removeCallbacks(tickRunnable)
+        networkExecutor.shutdown()
         wakeLock?.let { if (it.isHeld) it.release() }
         super.onDestroy()
     }
