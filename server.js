@@ -1641,13 +1641,11 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
         }).lean();
 
         const presentCount  = periods.filter(p => p.status === 'present').length;
-        const activeCount   = periods.filter(p => p.status === 'active').length;
         const totalCount    = periods.length;
-        // For percentage: count both present and active (timer running = attending)
-        const attendingCount = presentCount + activeCount;
-        const dayPercentage = totalCount > 0 ? Math.round((attendingCount / totalCount) * 100) : 0;
-        // Status: 'active' if any period is currently running, else present/absent by threshold
-        const hasActiveTimer = activeCount > 0;
+        // Only count 'present' (threshold crossed) — 'active' means timer running but not yet at threshold
+        const dayPercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
+        // Day status: 'active' if timer is currently running (any period active), else present/absent by threshold
+        const hasActiveTimer = periods.some(p => p.status === 'active');
         const dayStatus = hasActiveTimer ? 'active'
             : (dayPercentage >= threshold ? 'present' : 'absent');
 
@@ -1681,6 +1679,11 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                     ? Math.min(100, Math.round((attendedSec / durationSec) * 100))
                     : (p.status === 'present' ? 100 : 0);
 
+                // present = threshold crossed (attended enough) OR already marked present by check-in
+                // 'active' alone (timer running but below threshold) is NOT present
+                const isPresent = p.status === 'present' ||
+                    (durationSec > 0 && (attendedSec / durationSec) * 100 >= threshold);
+
                 return {
                     period:      p.period,
                     subject:     p.subject,
@@ -1695,7 +1698,7 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                     attended:    attendedSec,   // seconds
                     total:       durationSec,   // seconds
                     percentage:  pct,
-                    present:     p.status === 'present' || p.status === 'active',
+                    present:     isPresent,
                     verifications: p.checkInTime ? [{
                         time:    p.checkInTime,
                         type:    'face',
@@ -1717,7 +1720,7 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                 attended:    p.timerSeconds || (p.status === 'present' ? durationSec : 0),
                 total:       3600,
                 percentage:  p.status === 'present' ? 100 : 0,
-                present:     p.status === 'present' || p.status === 'active',
+                present:     p.status === 'present',
                 studentCheckIn: p.checkInTime || null,
                 verifications: []
             }));
@@ -2946,7 +2949,9 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     {
                         $set: {
                             timerSeconds:  Math.floor(timerSeconds),
-                            status:        computedStatus === 'present' ? 'present' : 'active',
+                            // 'present' only when threshold crossed, 'absent' otherwise
+                            // 'active' is a transient display state — not stored as final status
+                            status:        computedStatus === 'present' ? 'present' : 'absent',
                             updatedAt:     new Date()
                         },
                         // Only set these fields on INSERT (don't overwrite existing check-in data)
@@ -8067,8 +8072,8 @@ app.get('/api/attendance/summary/:enrollmentNo', async (req, res) => {
             const subj = pr.subject || 'Unknown';
             if (!subjectMap[subj]) subjectMap[subj] = { subject: subj, present: 0, total: 0 };
             subjectMap[subj].total++;
-            // 'active' = timer running (student is currently attending) — count as present
-            if (pr.status === 'present' || pr.status === 'active') subjectMap[subj].present++;
+            // Only count 'present' (threshold crossed) — not 'active' (timer running but below threshold)
+            if (pr.status === 'present') subjectMap[subj].present++;
         }
         const subjects = Object.values(subjectMap).map(s => ({
             ...s,

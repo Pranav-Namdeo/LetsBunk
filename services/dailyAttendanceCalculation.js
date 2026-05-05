@@ -78,9 +78,8 @@ async function calculateDailyAttendance(models) {
                     date: today
                 });
 
-                // Count present and absent periods
-                // 'active' = timer running but not yet at threshold — count as present for real-time view
-                const presentPeriods = periodRecords.filter(r => r.status === 'present' || r.status === 'active').length;
+                // Count present periods — only 'present' (threshold crossed), not 'active'
+                const presentPeriods = periodRecords.filter(r => r.status === 'present').length;
                 const absentPeriods = totalPeriods - presentPeriods;
 
                 // Calculate percentage

@@ -358,8 +358,8 @@ export default function CalendarScreen({
             const d = new Date(key);
             if (d.getFullYear() === yr && d.getMonth() === mo) {
                 const status = typeof val === 'string' ? val : val?.status;
-                // 'active' = timer running right now — count as present for stats
-                if (status === 'present' || status === 'active') present++;
+                // Only 'present' (threshold crossed) counts — 'active' is still in progress
+                if (status === 'present') present++;
                 else absent++;
             }
         });
@@ -536,9 +536,10 @@ export default function CalendarScreen({
                             const rawStatus = date ? (typeof attendanceData[date.toDateString()] === 'string'
                                 ? attendanceData[date.toDateString()]
                                 : attendanceData[date.toDateString()]?.status) : null;
-                            // 'active' = timer running — treat as present for display
-                            const isPresent = rawStatus === 'present' || rawStatus === 'active';
-                            const active  = isTeacher ? isActiveDate(date) : (date ? isPresent : false);
+                            // Green only when threshold crossed ('present'), orange when timer running ('active')
+                            const isPresent = rawStatus === 'present';
+                            const isActive  = rawStatus === 'active';
+                            const active  = isTeacher ? isActiveDate(date) : (date ? (isPresent || isActive) : false);
                             const holiday = getHoliday(date);
                             const today   = isToday(date);
                             const stats   = isTeacher && filterMode === 'day'
@@ -552,7 +553,8 @@ export default function CalendarScreen({
                                         styles.dayCell,
                                         !date && styles.emptyCell,
                                         today   && styles.todayCell,
-                                        active  && !holiday && styles.presentCell,
+                                        isPresent && !holiday && styles.presentCell,
+                                        isActive  && !holiday && styles.activeCell,
                                         holiday && styles.holidayCell,
                                     ]}
                                     onPress={() => date && showDateDetails(date)}
@@ -593,11 +595,11 @@ export default function CalendarScreen({
                                             )}
 
                                             {/* Student: present/absent/active icon */}
-                                            {!isTeacher && active && !holiday && (
+                                            {!isTeacher && (isPresent || isActive) && !holiday && (
                                                 <View style={styles.statusIcon}>
-                                                    {(rawStatus === 'present' || rawStatus === 'active')
+                                                    {isPresent
                                                         ? <CheckIcon size={10} color="#10b981" />
-                                                        : <XIcon    size={10} color="#ef4444" />}
+                                                        : <XIcon    size={10} color="#f59e0b" />}
                                                 </View>
                                             )}
                                         </>
@@ -1064,6 +1066,7 @@ const styles = StyleSheet.create({
     emptyCell:      { backgroundColor: 'transparent' },
     todayCell:      { backgroundColor: 'rgba(0,217,255,0.1)' },
     presentCell:    { backgroundColor: 'rgba(16,185,129,0.15)' },
+    activeCell:     { backgroundColor: 'rgba(245,158,11,0.15)' },  // orange — timer running, below threshold
     holidayCell:    { backgroundColor: 'rgba(255,107,107,0.1)', borderColor: '#ff6b6b', borderWidth: 1 },
     dayNumber:      { fontSize: 14, fontWeight: '500' },
     todayText:      { fontWeight: 'bold' },
