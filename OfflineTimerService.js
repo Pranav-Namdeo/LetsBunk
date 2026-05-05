@@ -887,8 +887,18 @@ class OfflineTimerService {
         ? this.authorizedBSSID.join(',')
         : (this.authorizedBSSID || '');
 
-      if (TimerModule.startTimerWithBSSIDAndSync) {
-        // Pass studentId + serverUrl so native service can sync in background
+      if (TimerModule.startTimerWithBSSIDAndSyncAndEnd) {
+        // Full version: BSSID + sync + lecture end time (stops natively when period ends)
+        const endTime = this.currentLecture?.endTime || '';
+        TimerModule.startTimerWithBSSIDAndSyncAndEnd(
+          subject,
+          this.timerSeconds,
+          bssidList,
+          this.studentId || '',
+          this.serverUrl || '',
+          endTime
+        ).catch((e) => console.warn('⚠️ Native timer start failed:', e));
+      } else if (TimerModule.startTimerWithBSSIDAndSync) {
         TimerModule.startTimerWithBSSIDAndSync(
           subject,
           this.timerSeconds,

@@ -67,6 +67,9 @@ class TimerService : Service() {
     private var syncTickCounter: Int = 0
     private val SYNC_EVERY_N_TICKS = 30  // sync every 30 seconds
 
+    // Lecture end time (wall clock minutes since midnight, e.g. 04:54 = 294)
+    private var lectureEndMinutes: Int = -1  // -1 = no end time set
+
     inner class LocalBinder : Binder() {
         fun getService(): TimerService = this@TimerService
     }
@@ -88,7 +91,8 @@ class TimerService : Service() {
                 val bssid      = intent.getStringExtra("authorizedBSSID") ?: ""
                 val sid        = intent.getStringExtra("studentId") ?: ""
                 val surl       = intent.getStringExtra("serverUrl") ?: ""
-                startTimer(subject, resumeFrom, bssid, sid, surl)
+                val endTime    = intent.getStringExtra("lectureEndTime") ?: ""  // "HH:MM"
+                startTimer(subject, resumeFrom, bssid, sid, surl, endTime)
             }
             ACTION_STOP -> stopTimer()
         }
@@ -96,7 +100,7 @@ class TimerService : Service() {
         return START_STICKY
     }
 
-    private fun startTimer(subject: String, resumeFrom: Long, bssid: String, sid: String, surl: String) {
+    private fun startTimer(subject: String, resumeFrom: Long, bssid: String, sid: String, surl: String, endTime: String) {
         lectureSubject          = subject
         baseSeconds             = resumeFrom
         startBootMs             = SystemClock.elapsedRealtime()
@@ -108,9 +112,30 @@ class TimerService : Service() {
         stoppedDueToWifiInvalid = false
         syncTickCounter         = 0
 
+        // Parse lecture end time "HH:MM" → minutes since midnight
+        lectureEndMinutes = parseEndTime(endTime)
+        Log.d(TAG, "Timer started: subject=$subject resumeFrom=${resumeFrom}s studentId=$sid endTime=$endTime (${lectureEndMinutes}min)")
+
         updateNotification()
         handler.post(tickRunnable)
-        Log.d(TAG, "Timer started: subject=$subject resumeFrom=${resumeFrom}s studentId=$sid")
+    }
+
+    /** Parse "HH:MM" → minutes since midnight, returns -1 if invalid */
+    private fun parseEndTime(endTime: String): Int {
+        return try {
+            val parts = endTime.split(":")
+            if (parts.size == 2) {
+                val h = parts[0].trim().toInt()
+                val m = parts[1].trim().toInt()
+                h * 60 + m
+            } else -1
+        } catch (e: Exception) { -1 }
+    }
+
+    /** Current wall-clock minutes since midnight */
+    private fun currentWallMinutes(): Int {
+        val cal = java.util.Calendar.getInstance()
+        return cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
     }
 
     fun stopTimer() {
@@ -139,6 +164,19 @@ class TimerService : Service() {
             bootElapsedMs  = bootNow
 
             updateNotification()
+
+            // ── Lecture end check — stop timer when period ends ───────────────
+            if (lectureEndMinutes > 0) {
+                val nowMin = currentWallMinutes()
+                // Handle midnight wrap: if end time is e.g. 00:30 and now is 00:31
+                val diff = nowMin - lectureEndMinutes
+                // Stop if we're past end time (allow 1 min grace for clock drift)
+                if (diff >= 1) {
+                    Log.d(TAG, "Lecture ended at $lectureEndMinutes min, now=$nowMin — stopping timer")
+                    stopTimer()
+                    return
+                }
+            }
 
             // BSSID + location check every tick
             checkBSSIDInBackground()

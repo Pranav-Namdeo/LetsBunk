@@ -44,6 +44,23 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
         serverUrl: String,
         promise: Promise
     ) {
+        startTimerWithBSSIDAndSyncAndEnd(subject, resumeFromSeconds, authorizedBSSID, studentId, serverUrl, "", promise)
+    }
+
+    /**
+     * Start the foreground timer service with BSSID validation, background sync, AND lecture end time.
+     * lectureEndTime format: "HH:MM" (e.g. "04:54")
+     */
+    @ReactMethod
+    fun startTimerWithBSSIDAndSyncAndEnd(
+        subject: String,
+        resumeFromSeconds: Double,
+        authorizedBSSID: String,
+        studentId: String,
+        serverUrl: String,
+        lectureEndTime: String,
+        promise: Promise
+    ) {
         try {
             val intent = Intent(reactContext, TimerService::class.java).apply {
                 action = TimerService.ACTION_START
@@ -52,6 +69,7 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
                 putExtra("authorizedBSSID", authorizedBSSID)
                 putExtra("studentId", studentId)
                 putExtra("serverUrl", serverUrl)
+                putExtra("lectureEndTime", lectureEndTime)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 reactContext.startForegroundService(intent)
