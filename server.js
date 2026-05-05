@@ -318,6 +318,11 @@ const attendanceRecordSchema = new mongoose.Schema({
         lectureStartedAt: Date,
         lectureEndedAt:   Date,
         studentCheckIn:   Date,
+        // ── Attendance metrics (populated by syncAttendanceRecord) ────────────
+        attended:    { type: Number, default: 0 },   // seconds attended
+        total:       { type: Number, default: 0 },   // total period seconds
+        percentage:  { type: Number, default: 0 },   // 0-100
+        present:     { type: Boolean, default: false },
         verifications: [{
             time:    Date,
             type:    { type: String, enum: ['face', 'random_ring', 'manual'] },

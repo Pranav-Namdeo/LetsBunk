@@ -4292,8 +4292,13 @@ async function showStudentAttendance(studentId, studentName) {
     const modal = document.getElementById('attendanceModal');
     const modalBody = document.getElementById('attendanceModalBody');
 
+    // Track open modal for live refresh
+    _openAttendanceEnrollmentNo = studentId;
+    _openAttendanceStudentName  = studentName;
+
     modalBody.innerHTML = '<div class="loading">Loading attendance data...</div>';
     modal.classList.add('active');
+    modal.style.display = '';
 
     try {
         // Fetch student details
@@ -4456,18 +4461,23 @@ async function showStudentAttendance(studentId, studentName) {
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        ${record.lectures.map((lec, idx) => `
+                                                        ${record.lectures.map((lec, idx) => {
+                                                            const attMin = Math.floor((lec.attended || 0) / 60);
+                                                            const totMin = Math.floor((lec.total || 0) / 60);
+                                                            const pct = lec.percentage || 0;
+                                                            return `
                                                         <tr>
                                                             <td>${idx + 1}</td>
                                                             <td><strong>${lec.subject}</strong></td>
                                                             <td>${lec.startTime}-${lec.endTime}</td>
                                                             <td>${lec.room}</td>
-                                                            <td>${lec.attended} min</td>
-                                                            <td>${lec.total} min</td>
-                                                            <td><strong>${lec.percentage}%</strong></td>
-                                                            <td><span class="status-badge ${lec.present ? 'status-present' : 'status-absent'}">${lec.present ? ' Present' : ' Absent'}</span></td>
+                                                            <td>${attMin} min</td>
+                                                            <td>${totMin} min</td>
+                                                            <td><strong>${pct}%</strong></td>
+                                                            <td><span class="status-badge ${lec.present ? 'status-present' : 'status-absent'}">${lec.present ? '✅ Present' : '❌ Absent'}</span></td>
                                                         </tr>
-                                                        `).join('')}
+                                                        `;
+                                                        }).join('')}
                                                     </tbody>
                                                 </table>
                                             </div>
@@ -4492,6 +4502,11 @@ async function showStudentAttendance(studentId, studentName) {
 
 function closeAttendanceModal() {
     document.getElementById('attendanceModal').classList.remove('active');
+    document.getElementById('attendanceModal').style.display = '';
+    // Clear live refresh tracking
+    _openAttendanceEnrollmentNo = null;
+    _openAttendanceStudentName  = null;
+    clearTimeout(_attendanceModalRefreshTimer);
 }
 
 function showDayDetails(recordId) {
@@ -12185,6 +12200,10 @@ function debounce(fn, delay) {
 }
 
 let _attendanceSocket = null;
+// Track which student's attendance modal is currently open for live refresh
+let _openAttendanceEnrollmentNo = null;
+let _openAttendanceStudentName  = null;
+let _attendanceModalRefreshTimer = null;
 
 function initAttendanceHistory() {
     // Set default date range: last 30 days
@@ -12230,21 +12249,29 @@ let _openCalendarEnrollmentNo = null;
 let _openCalendarStudentName  = null;
 
 function _handleTimerSyncForCalendar(data) {
-    // If the calendar modal is open for this student, refresh it silently
+    // 1. If the calendar modal is open for this student, refresh it silently
     if (_openCalendarEnrollmentNo && _openCalendarEnrollmentNo === data.enrollmentNo) {
         const modal = document.getElementById('calendarModal');
         if (modal && modal.style.display !== 'none') {
-            // Re-fetch and rebuild the calendar without closing the modal
             showStudentCalendar(_openCalendarEnrollmentNo, _openCalendarStudentName);
         }
     }
-    
-    // Also update the percentage on the student card in the showcase view
+
+    // 2. If the attendance history modal is open for this student, refresh it live
+    const attendanceModal = document.getElementById('attendanceModal');
+    if (attendanceModal && attendanceModal.classList.contains('active') &&
+        _openAttendanceEnrollmentNo === data.enrollmentNo) {
+        clearTimeout(_attendanceModalRefreshTimer);
+        _attendanceModalRefreshTimer = setTimeout(() => {
+            showStudentAttendance(_openAttendanceEnrollmentNo, _openAttendanceStudentName);
+        }, 1500); // 1.5s debounce — avoid hammering on every tick
+    }
+
+    // 3. Update the percentage on the student card in the showcase view
     const showcaseSection = document.getElementById('attendance-showcase-section');
     if (showcaseSection && showcaseSection.classList.contains('active')) {
         const pctElement = document.querySelector(`[data-pct-enrollment="${data.enrollmentNo}"]`);
         if (pctElement) {
-            // Debounce the percentage refresh to avoid hammering the server
             clearTimeout(pctElement._refreshTimer);
             pctElement._refreshTimer = setTimeout(async () => {
                 try {
@@ -12259,7 +12286,7 @@ function _handleTimerSyncForCalendar(data) {
                 } catch (err) {
                     console.error('Failed to refresh student percentage:', err);
                 }
-            }, 2000); // 2 second debounce
+            }, 2000);
         }
     }
 }
