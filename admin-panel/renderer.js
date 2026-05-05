@@ -4300,6 +4300,11 @@ async function showStudentAttendance(studentId, studentName) {
     modal.classList.add('active');
     modal.style.display = '';
 
+    // Trigger an immediate server-side sync for this student so data is fresh
+    // (fire-and-forget — don't wait, modal will refresh via student_timer_sync event)
+    fetch(`${SERVER_URL}/api/attendance/records?studentId=${encodeURIComponent(studentId)}`)
+        .catch(() => {});
+
     try {
         // Fetch student details
         const studentRes = await fetch(`${SERVER_URL}/api/student-management?enrollmentNo=${studentId}`);

@@ -1201,7 +1201,7 @@ class OfflineTimerService {
       if (this.isRunning) {
         await this.syncToServer();
       }
-    }, 120000); // 2 minutes
+    }, 30000); // 30 seconds — responsive live updates
   }
 
   /**
