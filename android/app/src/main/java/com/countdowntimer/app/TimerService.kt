@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Binder
 import android.os.Build
@@ -17,6 +18,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -90,7 +92,8 @@ class TimerService : Service() {
             }
             ACTION_STOP -> stopTimer()
         }
-        return START_NOT_STICKY
+        // START_STICKY: if Android kills the service, restart it automatically
+        return START_STICKY
     }
 
     private fun startTimer(subject: String, resumeFrom: Long, bssid: String, sid: String, surl: String) {
@@ -263,10 +266,32 @@ class TimerService : Service() {
 
     private fun acquireWakeLock() {
         val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+
+        // Request battery optimization exemption so Android doesn't kill the service
+        // This is the most important fix for OEM devices (MIUI, OneUI, etc.)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not request battery optimization exemption: ${e.message}")
+                }
+            }
+        }
+
+        // PARTIAL_WAKE_LOCK keeps CPU running even with screen off
         wakeLock = pm.newWakeLock(
             PowerManager.PARTIAL_WAKE_LOCK,
             "LetsBunk::TimerWakeLock"
-        ).also { it.acquire(4 * 60 * 60 * 1000L) }
+        ).also {
+            it.setReferenceCounted(false)
+            it.acquire(6 * 60 * 60 * 1000L) // 6 hours max
+        }
+        Log.d(TAG, "WakeLock acquired")
     }
 
     private fun createNotificationChannel() {

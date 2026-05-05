@@ -118,4 +118,31 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
         TimerService.stoppedDueToWifiInvalid = false
         promise.resolve(true)
     }
+
+    /**
+     * Request battery optimization exemption so Android doesn't kill the timer service.
+     * Should be called once when the student first starts the timer.
+     */
+    @ReactMethod
+    fun requestBatteryOptimizationExemption(promise: Promise) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                val pm = reactContext.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+                if (!pm.isIgnoringBatteryOptimizations(reactContext.packageName)) {
+                    val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = android.net.Uri.parse("package:${reactContext.packageName}")
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    reactContext.startActivity(intent)
+                    promise.resolve("requested")
+                } else {
+                    promise.resolve("already_exempt")
+                }
+            } else {
+                promise.resolve("not_needed")
+            }
+        } catch (e: Exception) {
+            promise.reject("ERROR", e.message)
+        }
+    }
 }

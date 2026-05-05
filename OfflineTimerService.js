@@ -134,6 +134,13 @@ class OfflineTimerService {
       
       // Initialize WiFiManager (already initialized in offline-bssid system)
       console.log('📶 WiFiManager already initialized in offline-bssid system');
+
+      // Request battery optimization exemption so Android doesn't kill the timer service
+      if (TimerModule && TimerModule.requestBatteryOptimizationExemption) {
+        TimerModule.requestBatteryOptimizationExemption()
+          .then(result => console.log('🔋 Battery optimization exemption:', result))
+          .catch(() => {});
+      }
       
       // Load saved state
       await this.loadState();

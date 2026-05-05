@@ -10,6 +10,9 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
   <uses-permission android:name="android.permission.WAKE_LOCK"/>
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+  <!-- Battery optimization exemption — prevents Android from killing the timer service -->
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
   <!-- WiFi-based Attendance System Permissions -->
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
   <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
@@ -69,6 +72,7 @@
     <service android:name="com.countdowntimer.app.TimerService"
         android:foregroundServiceType="dataSync"
         android:exported="false"
-        android:stopWithTask="false"/>
+        android:stopWithTask="false"
+        android:persistent="false"/>
   </application>
 </manifest>
