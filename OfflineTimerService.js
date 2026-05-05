@@ -1335,28 +1335,34 @@ class OfflineTimerService {
     
     for (const queueItem of queueCopy) {
       try {
-        const response = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ...queueItem,
-            studentId: this.studentId,
-            isQueuedSync: true
-          }),
-          timeout: 10000
-        });
+        const queueController = new AbortController();
+        const queueTimeoutId = setTimeout(() => queueController.abort(), 10000);
+        let queueResponse;
+        try {
+          queueResponse = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              ...queueItem,
+              studentId: this.studentId,
+              isQueuedSync: true
+            }),
+            signal: queueController.signal
+          });
+        } finally {
+          clearTimeout(queueTimeoutId);
+        }
 
-        if (response.ok) {
-          const result = await response.json();
+        if (queueResponse.ok) {
+          const result = await queueResponse.json();
           if (result.success) {
             successCount++;
-            // Remove from queue
             this.syncQueue = this.syncQueue.filter(item => item.timestamp !== queueItem.timestamp);
           }
         }
       } catch (error) {
         console.warn('⚠️ Failed to sync queued item:', error);
-        break; // Stop processing if sync fails
+        break;
       }
     }
     
@@ -1425,36 +1431,41 @@ class OfflineTimerService {
   async syncToServer() {
     try {
       this.lastSyncAttempt = _getBootMs() || Date.now();
-      
+
       console.log('🔄 Syncing offline timer to server...');
-      console.log('   Timer seconds:', this.timerSeconds);
-      console.log('   Is Running:', this.isRunning);
-      console.log('   Is Paused:', this.isPaused);
-      console.log('   Lecture:', this.currentLecture?.subject);
-      
+
       // Get current BSSID for validation
       const currentBSSID = await WiFiManager.getCurrentBSSID();
-      
+
       // Use server-synced time for the timestamp sent to server (spoof-proof)
       let syncTimestamp;
       try { syncTimestamp = getServerTime().now(); } catch { syncTimestamp = _getBootMs() || Date.now(); }
 
-      const response = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          studentId: this.studentId,
-          timerSeconds: this.timerSeconds,
-          lecture: this.currentLecture,
-          timestamp: syncTimestamp,
-          isRunning: this.isRunning,
-          isPaused: this.isPaused,
-          currentBSSID: currentBSSID,
-          attendedMinutes: Math.floor(this.timerSeconds / 60),
-          sessionStartTime: this.lectureStartTime
-        }),
-        timeout: 5000
-      });
+      // Enforce a hard 10-second timeout so a slow/sleeping server never blocks the interval
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
+
+      let response;
+      try {
+        response = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            studentId: this.studentId,
+            timerSeconds: this.timerSeconds,
+            lecture: this.currentLecture,
+            timestamp: syncTimestamp,
+            isRunning: this.isRunning,
+            isPaused: this.isPaused,
+            currentBSSID: currentBSSID,
+            attendedMinutes: Math.floor(this.timerSeconds / 60),
+            sessionStartTime: this.lectureStartTime
+          }),
+          signal: controller.signal
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         // 403 = no check-in yet, 404 = student not found — these are server-side errors,

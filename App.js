@@ -1098,6 +1098,7 @@ export default function App() {
                   console.log('✅ Timer sync successful');
                   setOfflineTimerState(prev => ({
                     ...prev,
+                    lastSyncTime: event.lastSyncTime,   // update displayed "Last sync" time
                     attendanceStatus: event.attendanceStatus,
                     thresholdSeconds: event.thresholdSeconds,
                     attendanceThreshold: event.attendanceThreshold
