@@ -84,6 +84,8 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
   const [actionLoading, setActionLoading] = useState(false);
   const intervalRef = useRef(null);
   const baseRef = useRef({ secs: student.timerValue || 0, ts: Date.now() });
+  // Auto-stop timeout: if no new broadcast arrives within 90s, stop ticking
+  const staleCutoffRef = useRef(null);
 
   // When a new broadcast arrives, reset the base and restart ticking
   useEffect(() => {
@@ -94,6 +96,7 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
     setDisplaySecs(effectiveSecs);
 
     if (intervalRef.current) clearInterval(intervalRef.current);
+    if (staleCutoffRef.current) clearTimeout(staleCutoffRef.current);
 
     // Only tick if student is actively attending (not absent, not already present/finalized)
     if (student.isRunning && student.status === 'active') {
@@ -101,9 +104,20 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
         const elapsed = Math.floor((Date.now() - baseRef.current.ts) / 1000);
         setDisplaySecs(baseRef.current.secs + elapsed);
       }, 1000);
+
+      // Auto-stop after 90s with no new broadcast — student likely went offline
+      staleCutoffRef.current = setTimeout(() => {
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      }, 90 * 1000);
     }
 
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (staleCutoffRef.current) clearTimeout(staleCutoffRef.current);
+    };
   }, [student.timerValue, student.isRunning, student.status]);
 
   const getStatusStyle = (status) => {

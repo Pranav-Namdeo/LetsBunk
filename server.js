@@ -1515,7 +1515,8 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
 
         // Enhance students with current attendance session data
         const today = new Date().toISOString().split('T')[0];
-        const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+        const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes — ghost session
+        const SYNC_TIMEOUT_MS    =      90 * 1000; // 90 seconds — missed sync = student offline
         const nowMs = Date.now();
         const studentsWithStatus = await Promise.all(students.map(async (student) => {
             try {
@@ -1527,10 +1528,20 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                 const isStale = live && live.lastSeen && (nowMs - live.lastSeen) > STALE_THRESHOLD_MS;
                 const effectiveLive = (live && !isStale) ? live : null;
 
+                // If student hasn't synced in 90s but is marked running → they went offline
+                const isSyncTimedOut = effectiveLive && effectiveLive.isRunning &&
+                    effectiveLive.lastSeen && (nowMs - effectiveLive.lastSeen) > SYNC_TIMEOUT_MS;
+
                 const session = s.attendanceSession || {};
                 let timerSecs = effectiveLive ? effectiveLive.attendedSeconds : (session.totalAttendedSeconds || 0);
-                const isRunning = effectiveLive ? effectiveLive.isRunning : (session.isRunning || false);
-                const status = effectiveLive ? effectiveLive.status : (session.status || 'absent');
+                let isRunning = effectiveLive ? effectiveLive.isRunning : (session.isRunning || false);
+                let status    = effectiveLive ? effectiveLive.status    : (session.status    || 'absent');
+
+                // Student went offline — stop showing as running on teacher's screen
+                if (isSyncTimedOut) {
+                    isRunning = false;
+                    status    = 'absent';
+                }
 
                 // If the session's last sync was NOT today, the timerValue is from a previous
                 // day's session — reset it to 0 so teacher doesn't see stale timer values.
@@ -1663,6 +1674,7 @@ io.on('connection', (socket) => {
         // Only include entries that were updated within the last 10 minutes to avoid
         // serving stale 'active' status from a previous session hours ago
         const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+        const SYNC_TIMEOUT_MS    =      90 * 1000; // 90 seconds — missed sync = student offline
         const now = Date.now();
         const todayStr = new Date().toISOString().split('T')[0];
         const classStudents = [];
@@ -1674,12 +1686,14 @@ io.on('connection', (socket) => {
                     ? new Date(state.lastSyncTime).toISOString().split('T')[0]
                     : null;
                 const isFromPreviousDay = lastSyncDate && lastSyncDate !== todayStr;
+                // Student hasn't synced in 90s but marked running → offline
+                const isSyncTimedOut = state.isRunning && state.lastSeen && (now - state.lastSeen) > SYNC_TIMEOUT_MS;
 
                 if (isStale || isFromPreviousDay) {
-                    // Stale or previous-day entry — serve as absent with zero timer
                     classStudents.push({ ...state, status: 'absent', isRunning: false, attendedSeconds: 0, timerValue: 0 });
+                } else if (isSyncTimedOut) {
+                    classStudents.push({ ...state, status: 'absent', isRunning: false });
                 } else {
-                    // Zero out timer for absent students even in fresh state
                     const displayTimer = state.status === 'absent' ? 0 : (state.attendedSeconds || 0);
                     classStudents.push({ ...state, attendedSeconds: displayTimer, timerValue: displayTimer });
                 }
