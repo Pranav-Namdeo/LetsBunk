@@ -5,10 +5,10 @@ import FilterButtons from './FilterButtons';
 const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = null, onTeacherAction }) => {
   const [selectedFilter, setSelectedFilter] = useState('all');
 
-  // status values set by server: 'present' | 'active' | 'absent'
+  // status values: 'present' | 'active' | 'absent' | 'offline' (disconnected, timer frozen)
   const filteredStudents = students.filter((student) => {
     if (selectedFilter === 'all') return true;
-    if (selectedFilter === 'active') return student.status === 'active';
+    if (selectedFilter === 'active') return student.status === 'active' || student.status === 'offline';
     if (selectedFilter === 'present') return student.status === 'present';
     if (selectedFilter === 'absent') return student.status === 'absent';
     return true;
@@ -16,7 +16,7 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
 
   const filterCounts = {
     all: students.length,
-    active: students.filter(s => s.status === 'active').length,
+    active: students.filter(s => s.status === 'active' || s.status === 'offline').length,
     present: students.filter(s => s.status === 'present').length,
     absent: students.filter(s => s.status === 'absent').length,
   };
@@ -89,7 +89,7 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
 
   // When a new broadcast arrives, reset the base and restart ticking
   useEffect(() => {
-    // Only show a non-zero timer for active/present students — absent always shows 00:00
+    // Only show a non-zero timer for active/present/offline students — absent always shows 00:00
     const effectiveSecs = student.status === 'absent' ? 0 : (student.timerValue || 0);
 
     baseRef.current = { secs: effectiveSecs, ts: Date.now() };
@@ -122,19 +122,21 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
 
   const getStatusStyle = (status) => {
     switch (status) {
-      case 'active':  return { bg: '#d1fae5', text: '#059669' };
-      case 'present': return { bg: '#dbeafe', text: '#2563eb' };
-      case 'absent':  return { bg: '#fee2e2', text: '#dc2626' };
-      default:        return { bg: '#f3f4f6', text: '#6b7280' };
+      case 'active':   return { bg: '#d1fae5', text: '#059669' };
+      case 'present':  return { bg: '#dbeafe', text: '#2563eb' };
+      case 'absent':   return { bg: '#fee2e2', text: '#dc2626' };
+      case 'offline':  return { bg: '#f3f4f6', text: '#6b7280' }; // grey — frozen, no WiFi
+      default:         return { bg: '#f3f4f6', text: '#6b7280' };
     }
   };
 
   const getStatusLabel = (status) => {
     switch (status) {
-      case 'active':  return 'Attending';
-      case 'present': return 'Present';
-      case 'absent':  return 'Absent';
-      default:        return 'Unknown';
+      case 'active':   return 'Attending';
+      case 'present':  return 'Present';
+      case 'absent':   return 'Absent';
+      case 'offline':  return '⏸ Offline';  // paused, last known value shown
+      default:         return 'Unknown';
     }
   };
 

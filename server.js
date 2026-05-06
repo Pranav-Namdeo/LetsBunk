@@ -1537,10 +1537,11 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                 let isRunning = effectiveLive ? effectiveLive.isRunning : (session.isRunning || false);
                 let status    = effectiveLive ? effectiveLive.status    : (session.status    || 'absent');
 
-                // Student went offline — stop showing as running on teacher's screen
+                // Student went offline — stop showing as running, but KEEP the timer value frozen
+                // Use 'offline' status so the client shows it paused, not zeroed
                 if (isSyncTimedOut) {
                     isRunning = false;
-                    status    = 'absent';
+                    status    = 'offline'; // frozen at last known value
                 }
 
                 // If the session's last sync was NOT today, the timerValue is from a previous
@@ -1555,8 +1556,8 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                     timerSecs = 0;
                 }
 
-                // Also zero out timer for absent students — a non-zero timer with absent
-                // status means the session is from a previous period/day and is misleading.
+                // Zero timer only for genuinely absent students (never attended today),
+                // NOT for offline students (they have a real accumulated value to show).
                 const displayTimer = (status === 'absent') ? 0 : timerSecs;
 
                 return {
@@ -1692,7 +1693,8 @@ io.on('connection', (socket) => {
                 if (isStale || isFromPreviousDay) {
                     classStudents.push({ ...state, status: 'absent', isRunning: false, attendedSeconds: 0, timerValue: 0 });
                 } else if (isSyncTimedOut) {
-                    classStudents.push({ ...state, status: 'absent', isRunning: false });
+                    // Freeze at last known value — student went offline
+                    classStudents.push({ ...state, status: 'offline', isRunning: false });
                 } else {
                     const displayTimer = state.status === 'absent' ? 0 : (state.attendedSeconds || 0);
                     classStudents.push({ ...state, attendedSeconds: displayTimer, timerValue: displayTimer });
