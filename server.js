@@ -670,16 +670,9 @@ app.get('/api/timetable/:semester/*', async (req, res, next) => {
 app.get('/api/timetable/:semester/:branch', async (req, res) => {
     try {
         const { semester } = req.params;
-        // branch may contain '/' (e.g. "AI/ML") encoded as %2F.
-        // Express splits %2F in path params, so reconstruct from raw URL segments.
-        const rawPath = req.path; // e.g. "/3/AI%2FML" or "/3/AI/ML"
-        const parts = rawPath.split('/').filter(Boolean);
-        // parts[0] = semester, rest = branch segments
-        const branch = parts.length > 1
-            ? parts.slice(1).map(p => decodeURIComponent(p)).join('/')
-            : decodeURIComponent(req.params.branch || '');
-        // Also accept branch as query param override
-        const effectiveBranch = req.query.branch || branch;
+        // Express decodes %2F → '/' in params, so req.params.branch already has the correct value
+        // e.g. /api/timetable/3/AI%2FML → branch = "AI/ML"
+        const effectiveBranch = req.query.branch || req.params.branch;
 
         if (mongoose.connection.readyState === 1) {
             let timetable = await Timetable.findOne({ semester, branch: effectiveBranch }).lean();
@@ -784,13 +777,8 @@ app.post('/api/timetable', async (req, res) => {
 app.put('/api/timetable/:semester/:branch', async (req, res) => {
     try {
         const { semester } = req.params;
-        // Reconstruct branch from raw path to handle slashes in branch names (e.g. AI/ML)
-        const rawPath = req.path;
-        const parts = rawPath.split('/').filter(Boolean);
-        const branch = parts.length > 1
-            ? parts.slice(1).map(p => decodeURIComponent(p)).join('/')
-            : decodeURIComponent(req.params.branch || '');
-        const effectiveBranch = req.query.branch || branch;
+        // Express decodes %2F → '/' in params automatically
+        const effectiveBranch = req.query.branch || req.params.branch;
         const { timetable, periods } = req.body;
 
         console.log(`📝 Updating timetable for ${branch} Semester ${semester}`);
