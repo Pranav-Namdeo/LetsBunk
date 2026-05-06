@@ -1303,9 +1303,10 @@ class OfflineTimerService {
         this.hasInternetConnection = false;
       }
       
-      // Update overall online status (WiFi + Internet)
+      // isOnline = has internet (any network). isConnectedToAuthorizedWiFi is separate.
+      // Sync works on any internet — only the timer requires authorized WiFi.
       const wasOverallOnline = this.isOnline;
-      this.isOnline = this.isConnectedToAuthorizedWiFi && this.hasInternetConnection;
+      this.isOnline = this.hasInternetConnection;
       
       // Update pending sync count
       this.pendingSyncCount = this.syncQueue.length;
@@ -1410,10 +1411,10 @@ class OfflineTimerService {
    */
   async forceSyncTimerData() {
     console.log('🔄 Force syncing timer data...');
-    
-    // Check connectivity first
+
+    // Check internet connectivity (any network — WiFi or mobile data)
     await this.checkInternetConnectivity();
-    
+
     if (!this.hasInternetConnection) {
       console.log('⚠️ No internet connection - cannot sync');
       return {
@@ -1423,25 +1424,18 @@ class OfflineTimerService {
         pendingSyncs: this.pendingSyncCount
       };
     }
-    
-    if (!this.isConnectedToAuthorizedWiFi) {
-      console.log('⚠️ Not connected to authorized WiFi');
-      return {
-        success: false,
-        error: 'Not connected to authorized WiFi',
-        isOffline: false,
-        pendingSyncs: this.pendingSyncCount
-      };
-    }
-    
+
+    // NOTE: Sync works on any internet connection (WiFi, mobile data, etc.)
+    // Only the TIMER requires authorized WiFi — sync is just an HTTP POST.
+
     // Sync current timer state
     const syncResult = await this.syncToServer();
-    
+
     // Also sync any pending data
     if (this.syncQueue.length > 0) {
       await this.syncPendingData();
     }
-    
+
     return {
       success: syncResult.success,
       error: syncResult.error,
