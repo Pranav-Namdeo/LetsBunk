@@ -1348,18 +1348,18 @@ class OfflineTimerService {
     if (!this.hasInternetConnection || this.syncQueue.length === 0) {
       return;
     }
-    
+
     console.log(`🔄 Syncing ${this.syncQueue.length} pending items...`);
-    
-    // Try to sync current timer state first
+
+    // Try to sync current timer state first (if running)
     if (this.isRunning) {
       await this.syncToServer();
     }
-    
-    // Process sync queue
+
+    // Process ALL queued items — don't stop on failure, try each one
     const queueCopy = [...this.syncQueue];
     let successCount = 0;
-    
+
     for (const queueItem of queueCopy) {
       try {
         const queueController = new AbortController();
@@ -1388,16 +1388,16 @@ class OfflineTimerService {
           }
         }
       } catch (error) {
-        console.warn('⚠️ Failed to sync queued item:', error);
-        break;
+        console.warn(`⚠️ Failed to sync queued item (timestamp=${queueItem.timestamp}):`, error.message);
+        // Continue processing remaining items — don't break
       }
     }
-    
+
     if (successCount > 0) {
-      console.log(`✅ Successfully synced ${successCount} pending items`);
+      console.log(`✅ Successfully synced ${successCount}/${queueCopy.length} pending items`);
       await this.saveSyncQueue();
       this.pendingSyncCount = this.syncQueue.length;
-      
+
       this.notifyListeners({
         type: 'pending_syncs_completed',
         syncedCount: successCount,
@@ -1573,10 +1573,15 @@ class OfflineTimerService {
       this.hasInternetConnection = false;
       this.isOnline = false;
       
-      // Add to sync queue
+      // Add to sync queue — capture full lecture context including period ID
       this.syncQueue.push({
         timerSeconds: this.timerSeconds,
         lecture: this.currentLecture,
+        // Explicitly store period ID so server can update the right PeriodAttendance record
+        // even after the period has ended and getCurrentLectureInfo() returns null
+        periodId: this.currentLecture?.period
+            ? `P${this.currentLecture.period}`
+            : (this.currentLecture?.periodId || null),
         timestamp: _getBootMs() || Date.now(),
         isRunning: this.isRunning,
         isPaused: this.isPaused,

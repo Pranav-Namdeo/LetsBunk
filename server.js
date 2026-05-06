@@ -2751,7 +2751,7 @@ app.get('/api/students/:studentId/face-data', async (req, res) => {
 // POST /api/attendance/offline-sync - Sync offline timer data
 app.post('/api/attendance/offline-sync', async (req, res) => {
     const startTime = Date.now();
-    const { studentId, timerSeconds, lecture, timestamp, isRunning, isPaused } = req.body;
+    const { studentId, timerSeconds, lecture, timestamp, isRunning, isPaused, periodId: clientPeriodId } = req.body;
     
     console.log(`🔄 [OFFLINE-SYNC] Sync request - Student: ${studentId}, Timer: ${timerSeconds}s, IP: ${req.ip}`);
     
@@ -2804,16 +2804,18 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         }
 
         // 3. Update student's timer data
+        // Use $max for totalAttendedSeconds so queued syncs from old periods
+        // never overwrite a higher value from a more recent sync
+        const isQueuedSync = Boolean(req.body.isQueuedSync);
         const updateData = {
-            'attendanceSession.totalAttendedSeconds': Math.max(0, Math.floor(timerSeconds)),
             'attendanceSession.lastSyncTime': new Date(timestamp),
             'attendanceSession.isRunning': Boolean(isRunning),
             'attendanceSession.isPaused': Boolean(isPaused),
             'attendanceSession.lastActivity': new Date()
         };
 
-        // Add lecture info if provided
-        if (lecture) {
+        // Add lecture info only for live syncs (not queued old-period syncs)
+        if (lecture && !isQueuedSync) {
             updateData['attendanceSession.currentLecture'] = {
                 subject: lecture.subject,
                 teacher: lecture.teacher,
@@ -2824,7 +2826,11 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         await StudentManagement.updateOne(
             { enrollmentNo: studentId },
-            { $set: updateData }
+            {
+                $set: updateData,
+                // Only update totalAttendedSeconds if the new value is higher
+                $max: { 'attendanceSession.totalAttendedSeconds': Math.max(0, Math.floor(timerSeconds)) }
+            }
         );
 
         // 4. Check for missed random rings
@@ -2950,6 +2956,10 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 periodSubject = lecture?.subject || currentLectureInfo.subject || '';
                 periodTeacher = lecture?.teacher || currentLectureInfo.teacher || '';
                 periodRoom    = lecture?.room    || currentLectureInfo.room    || '';
+            } else if (clientPeriodId) {
+                // Client explicitly sent the period ID (queued sync) — use it directly
+                periodId = clientPeriodId;
+                console.log(`📊 [OFFLINE-SYNC] Using client-provided periodId: ${periodId}`);
             } else if (lecture?.subject) {
                 // Period has ended — find the existing PeriodAttendance record for this lecture
                 // by matching subject + today's date (most recent one for this student today)
@@ -2970,6 +2980,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             }
 
             if (periodId) {
+                // Use $max to only update timerSeconds if the new value is higher
+                // This prevents old queued items from overwriting newer data
                 await PeriodAttendance.updateOne(
                     {
                         enrollmentNo: student.enrollmentNo,
@@ -2999,6 +3011,19 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     },
                     { upsert: true }
                 );
+
+                // After upsert, ensure timerSeconds is the maximum seen so far
+                // (handles out-of-order queued syncs)
+                await PeriodAttendance.updateOne(
+                    {
+                        enrollmentNo: student.enrollmentNo,
+                        date: today,
+                        period: periodId,
+                        timerSeconds: { $lt: Math.floor(timerSeconds) }
+                    },
+                    { $set: { timerSeconds: Math.floor(timerSeconds), updatedAt: new Date() } }
+                );
+
                 console.log(`📊 [OFFLINE-SYNC] Upserted PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Timer: ${Math.floor(timerSeconds)}s`);
             }
         } catch (periodError) {
