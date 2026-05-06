@@ -711,9 +711,38 @@ export default function CalendarScreen({
                             <View style={{ flex: 1 }}>
                             <ScrollView style={styles.modalBody}>
                                 {loadingStudents ? (
-                                    <View style={styles.loadingContainer}>
-                                        <ActivityIndicator size="large" color={theme.primary} />
-                                        <Text style={[styles.loadingText, { color: theme.textSecondary }]}>Loading…</Text>
+                                    /* ── Skeleton placeholder while data loads ── */
+                                    <View>
+                                        {/* Summary skeleton */}
+                                        <View style={[styles.summaryCard, { backgroundColor: theme.background }]}>
+                                            <View style={[styles.skeletonLine, { width: 80, height: 14, marginBottom: 12, backgroundColor: theme.border }]} />
+                                            <View style={styles.summaryRow}>
+                                                {[0,1,2].map(i => (
+                                                    <View key={i} style={styles.summaryItem}>
+                                                        <View style={[styles.skeletonLine, { width: 36, height: 28, borderRadius: 6, backgroundColor: theme.border }]} />
+                                                        <View style={[styles.skeletonLine, { width: 48, height: 11, marginTop: 6, backgroundColor: theme.border }]} />
+                                                    </View>
+                                                ))}
+                                            </View>
+                                        </View>
+                                        {/* Student card skeletons */}
+                                        {[0,1,2,3,4].map(i => (
+                                            <View key={i} style={[styles.skeletonCard, {
+                                                backgroundColor: theme.cardBackground,
+                                                borderColor: theme.border,
+                                                opacity: 1 - i * 0.15
+                                            }]}>
+                                                {/* Avatar */}
+                                                <View style={[styles.skeletonAvatar, { backgroundColor: theme.border }]} />
+                                                {/* Name + enrollment */}
+                                                <View style={{ flex: 1, gap: 8 }}>
+                                                    <View style={[styles.skeletonLine, { width: '55%', height: 14, backgroundColor: theme.border }]} />
+                                                    <View style={[styles.skeletonLine, { width: '35%', height: 11, backgroundColor: theme.border }]} />
+                                                </View>
+                                                {/* Status badge */}
+                                                <View style={[styles.skeletonBadge, { backgroundColor: theme.border }]} />
+                                            </View>
+                                        ))}
                                     </View>
                                 ) : studentsOnDate.length === 0 ? (
                                     <View style={styles.noDataContainer}>
@@ -1134,6 +1163,15 @@ const styles = StyleSheet.create({
     loadingText:      { marginTop: 12, fontSize: 14 },
     noDataContainer:  { padding: 40, alignItems: 'center', justifyContent: 'center' },
     noDataText:       { fontSize: 14, textAlign: 'center', marginBottom: 8 },
+
+    // ── skeleton placeholders ─────────────────────────────────────────────────
+    skeletonLine:   { borderRadius: 4, marginBottom: 2 },
+    skeletonCard:   {
+        flexDirection: 'row', alignItems: 'center', gap: 12,
+        padding: 14, marginBottom: 10, borderRadius: 10, borderWidth: 1,
+    },
+    skeletonAvatar: { width: 40, height: 40, borderRadius: 20 },
+    skeletonBadge:  { width: 28, height: 28, borderRadius: 14 },
 
     // ── modal ─────────────────────────────────────────────────────────────────
     modalOverlay:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },

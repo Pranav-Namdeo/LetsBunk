@@ -643,23 +643,57 @@ app.get('/api/timetables', async (req, res) => {
     }
 });
 
-app.get('/api/timetable/:semester/:branch', async (req, res) => {
+// Wildcard route to catch branch names with slashes (e.g. /api/timetable/3/AI/ML)
+// Must be registered BEFORE the :semester/:branch route
+app.get('/api/timetable/:semester/*', async (req, res, next) => {
+    // Only handle if there are extra path segments (branch contains '/')
+    const wildcard = req.params[0]; // everything after :semester/
+    if (!wildcard || !wildcard.includes('/')) return next(); // no slash → let :branch handle it
+    const semester = req.params.semester;
+    const branch = decodeURIComponent(wildcard); // e.g. "AI/ML"
     try {
-        const { semester, branch } = req.params;
-
         if (mongoose.connection.readyState === 1) {
             let timetable = await Timetable.findOne({ semester, branch }).lean();
+            if (!timetable) timetable = createDefaultTimetable(semester, branch);
+            res.set('Cache-Control', 'public, max-age=300');
+            return res.json({ success: true, timetable });
+        } else {
+            const key = `${semester}_${branch}`;
+            let timetable = timetableMemory[key] || createDefaultTimetable(semester, branch);
+            return res.json({ success: true, timetable });
+        }
+    } catch (error) {
+        return res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.get('/api/timetable/:semester/:branch', async (req, res) => {
+    try {
+        const { semester } = req.params;
+        // branch may contain '/' (e.g. "AI/ML") encoded as %2F.
+        // Express splits %2F in path params, so reconstruct from raw URL segments.
+        const rawPath = req.path; // e.g. "/3/AI%2FML" or "/3/AI/ML"
+        const parts = rawPath.split('/').filter(Boolean);
+        // parts[0] = semester, rest = branch segments
+        const branch = parts.length > 1
+            ? parts.slice(1).map(p => decodeURIComponent(p)).join('/')
+            : decodeURIComponent(req.params.branch || '');
+        // Also accept branch as query param override
+        const effectiveBranch = req.query.branch || branch;
+
+        if (mongoose.connection.readyState === 1) {
+            let timetable = await Timetable.findOne({ semester, branch: effectiveBranch }).lean();
             if (!timetable) {
-                timetable = createDefaultTimetable(semester, branch);
+                timetable = createDefaultTimetable(semester, effectiveBranch);
             }
             // Cache for 5 minutes — timetable rarely changes
             res.set('Cache-Control', 'public, max-age=300');
             res.json({ success: true, timetable });
         } else {
-            const key = `${semester}_${branch}`;
+            const key = `${semester}_${effectiveBranch}`;
             let timetable = timetableMemory[key];
             if (!timetable) {
-                timetable = createDefaultTimetable(semester, branch);
+                timetable = createDefaultTimetable(semester, effectiveBranch);
                 timetableMemory[key] = timetable;
             }
             res.json({ success: true, timetable });
@@ -749,13 +783,20 @@ app.post('/api/timetable', async (req, res) => {
 // PUT endpoint for updating timetable (used by mobile app)
 app.put('/api/timetable/:semester/:branch', async (req, res) => {
     try {
-        const { semester, branch } = req.params;
+        const { semester } = req.params;
+        // Reconstruct branch from raw path to handle slashes in branch names (e.g. AI/ML)
+        const rawPath = req.path;
+        const parts = rawPath.split('/').filter(Boolean);
+        const branch = parts.length > 1
+            ? parts.slice(1).map(p => decodeURIComponent(p)).join('/')
+            : decodeURIComponent(req.params.branch || '');
+        const effectiveBranch = req.query.branch || branch;
         const { timetable, periods } = req.body;
 
         console.log(`📝 Updating timetable for ${branch} Semester ${semester}`);
 
         if (mongoose.connection.readyState === 1) {
-            let existingTimetable = await Timetable.findOne({ semester, branch });
+            let existingTimetable = await Timetable.findOne({ semester, branch: effectiveBranch });
             if (existingTimetable) {
                 existingTimetable.timetable = timetable;
                 if (periods) existingTimetable.periods = periods;
@@ -767,7 +808,7 @@ app.put('/api/timetable/:semester/:branch', async (req, res) => {
                 // Create new timetable if doesn't exist
                 const newTimetable = new Timetable({
                     semester,
-                    branch,
+                    branch: effectiveBranch,
                     periods: periods || [],
                     timetable
                 });
@@ -776,16 +817,16 @@ app.put('/api/timetable/:semester/:branch', async (req, res) => {
                 res.json({ success: true, timetable: newTimetable });
             }
         } else {
-            const key = `${semester}_${branch}`;
-            timetableMemory[key] = { semester, branch, periods: periods || [], timetable, lastUpdated: new Date() };
+            const key = `${semester}_${effectiveBranch}`;
+            timetableMemory[key] = { semester, branch: effectiveBranch, periods: periods || [], timetable, lastUpdated: new Date() };
             res.json({ success: true, timetable: timetableMemory[key] });
         }
 
         // Notify all students
-        io.emit('timetable_updated', { semester, branch });
+        io.emit('timetable_updated', { semester, branch: effectiveBranch });
         
         // Broadcast BSSID schedule update to affected students
-        await broadcastBSSIDScheduleUpdate(semester, branch);
+        await broadcastBSSIDScheduleUpdate(semester, effectiveBranch);
     } catch (error) {
         console.error('❌ Error updating timetable:', error);
         res.status(500).json({ success: false, error: error.message });
