@@ -4360,13 +4360,17 @@ export default function App() {
 
   // Teacher Timetable Screen
   if (selectedRole === 'teacher' && activeTab === 'timetable') {
+    // Use semester/branch from state, fall back to manualSelection so timetable
+    // is visible even when no active class is detected
+    const timetableSemester = semester || (manualSelection.semester !== 'auto' ? manualSelection.semester : null);
+    const timetableBranch   = branch  || manualSelection.branch || null;
     return (
       <View style={{ flex: 1, backgroundColor: theme.background }}>
         <StatusBar style={theme.statusBar} />
         <TimetableScreen
           theme={theme}
-          semester={semester}
-          branch={branch}
+          semester={timetableSemester}
+          branch={timetableBranch}
           socketUrl={SOCKET_URL}
           canEdit={userData?.canEditTimetable || false}
           isTeacher={true}

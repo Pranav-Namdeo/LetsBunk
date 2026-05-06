@@ -87,12 +87,16 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
 
   // When a new broadcast arrives, reset the base and restart ticking
   useEffect(() => {
-    baseRef.current = { secs: student.timerValue || 0, ts: Date.now() };
-    setDisplaySecs(student.timerValue || 0);
+    // Only show a non-zero timer for active/present students — absent always shows 00:00
+    const effectiveSecs = student.status === 'absent' ? 0 : (student.timerValue || 0);
+
+    baseRef.current = { secs: effectiveSecs, ts: Date.now() };
+    setDisplaySecs(effectiveSecs);
 
     if (intervalRef.current) clearInterval(intervalRef.current);
 
-    if (student.isRunning && student.status !== 'present') {
+    // Only tick if student is actively attending (not absent, not already present/finalized)
+    if (student.isRunning && student.status === 'active') {
       intervalRef.current = setInterval(() => {
         const elapsed = Math.floor((Date.now() - baseRef.current.ts) / 1000);
         setDisplaySecs(baseRef.current.secs + elapsed);
@@ -155,6 +159,11 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
         </View>
         <View style={styles.timerContainer}>
           <Text style={[styles.timerText, { color: theme.text }]}>{fmt(displaySecs)}</Text>
+          {student.lectureSubject ? (
+            <Text style={[styles.lectureLabel, { color: theme.textSecondary }]} numberOfLines={1}>
+              {student.lectureSubject}
+            </Text>
+          ) : null}
         </View>
       </View>
 
@@ -216,6 +225,7 @@ const styles = StyleSheet.create({
   statusText: { fontSize: 12, fontWeight: '600' },
   timerContainer: { alignItems: 'flex-end' },
   timerText: { fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  lectureLabel: { fontSize: 10, marginTop: 2, maxWidth: 80, textAlign: 'right' },
   emptyContainer: { borderRadius: 8, padding: 32, borderWidth: 1, alignItems: 'center', marginTop: 16 },
   emptyText: { fontSize: 14 },
   actionButtons: { flexDirection: 'row', gap: 8 },

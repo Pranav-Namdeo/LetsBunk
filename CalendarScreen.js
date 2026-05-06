@@ -100,7 +100,11 @@ export default function CalendarScreen({
             const data  = await apiFetch(`${socketUrl}/api/holidays/range?startDate=${start}&endDate=${end}`);
             if (data.success && data.holidays) {
                 const map = {};
-                data.holidays.forEach(h => { map[new Date(h.date).toDateString()] = h; });
+                data.holidays.forEach(h => {
+                    // Convert to IST date string
+                    const d = new Date(new Date(h.date).getTime() + 5.5 * 60 * 60 * 1000);
+                    map[d.toDateString()] = h;
+                });
                 setHolidays(map);
             }
         } catch (_) {
@@ -124,7 +128,8 @@ export default function CalendarScreen({
                 const dateMap = {};
                 let mp = 0, ma = 0;
                 data.records.forEach(r => {
-                    const d   = new Date(r.date);
+                    // Convert to IST date string to match calendar cell keys (device is IST)
+                    const d   = new Date(new Date(r.date).getTime() + 5.5 * 60 * 60 * 1000);
                     const key = d.toDateString();
                     if (!dateMap[key]) dateMap[key] = { present: 0, absent: 0, total: 0 };
                     if (r.status === 'present') { dateMap[key].present++; mp++; }
@@ -200,7 +205,8 @@ export default function CalendarScreen({
             if (data.success && data.records) {
                 const aMap = {}, rMap = {};
                 data.records.forEach(r => {
-                    const d   = new Date(r.date);
+                    // Convert to IST date string to match calendar cell keys (device is IST)
+                    const d   = new Date(new Date(r.date).getTime() + 5.5 * 60 * 60 * 1000);
                     const key = d.toDateString();
                     r.totalAttended  = Number(r.totalAttended)  || 0;
                     r.totalClassTime = Number(r.totalClassTime) || 0;
@@ -265,7 +271,11 @@ export default function CalendarScreen({
         setLoadingStudents(true);
         setStudentsOnDate([]); // optimistic clear
         try {
-            const dateStr = date.toISOString().split('T')[0];
+            // Use local date parts to build YYYY-MM-DD — avoids UTC offset shifting the date
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            const dateStr = `${y}-${m}-${d}`;
             const data = await apiFetch(
                 `${socketUrl}/api/attendance/date/${dateStr}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
             );
@@ -286,7 +296,11 @@ export default function CalendarScreen({
         setLoadingStudents(true);
         setStudentsOnDate([]); // optimistic clear
         try {
-            const dateStr = date.toISOString().split('T')[0];
+            // Use local date parts to build YYYY-MM-DD — avoids UTC offset shifting the date
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            const dateStr = `${y}-${m}-${d}`;
             const data = await apiFetch(
                 `${socketUrl}/api/attendance/date/${dateStr}/subject/${encodeURIComponent(selectedSubject)}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
             );
@@ -336,11 +350,16 @@ export default function CalendarScreen({
         if (!date) return false;
         if (!isTeacher) return !!attendanceData[date.toDateString()];
         if (filterMode === 'day') return !!attendanceData[date.toDateString()];
-        // subject mode: compare YYYY-MM-DD strings to avoid timezone issues
-        const dateStr = `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;
-        // activeDates contains ISO strings like "2026-04-22T00:00:00.000Z" — extract date part
+        // subject mode: dates from server are stored as IST midnight UTC strings e.g. "2026-05-05T18:30:00.000Z"
+        // which equals IST date May 06. Convert both sides to IST YYYY-MM-DD for comparison.
+        const toISTDateStr = (d) => {
+            const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
+            return ist.toISOString().split('T')[0]; // "2026-05-06"
+        };
+        const cellDateStr = toISTDateStr(date);
         for (const iso of activeDates) {
-            if (iso.startsWith(dateStr)) return true;
+            const isoDate = new Date(iso);
+            if (toISTDateStr(isoDate) === cellDateStr) return true;
         }
         return false;
     };
@@ -533,17 +552,21 @@ export default function CalendarScreen({
                 ) : (
                     <View style={styles.daysGrid}>
                         {days.map((date, idx) => {
-                            const rawStatus = date ? (typeof attendanceData[date.toDateString()] === 'string'
-                                ? attendanceData[date.toDateString()]
-                                : attendanceData[date.toDateString()]?.status) : null;
-                            // Green only when threshold crossed ('present'), orange when timer running ('active')
+                            const rawVal = date ? attendanceData[date.toDateString()] : null;
+                            // rawVal is a string for student ('present'/'absent'/'active')
+                            // or an object for teacher ({ present:N, absent:N, total:N })
+                            const rawStatus = typeof rawVal === 'string' ? rawVal : null;
                             const isPresent = rawStatus === 'present';
                             const isActive  = rawStatus === 'active';
-                            const active  = isTeacher ? isActiveDate(date) : (date ? (isPresent || isActive) : false);
+                            const isAbsent  = rawStatus === 'absent';
+                            // Teacher: cell is "active" (has data) if attendanceData has an entry for this date
+                            const active    = isTeacher ? isActiveDate(date) : (date ? (isPresent || isActive || isAbsent) : false);
+                            // Teacher: derive a display status from the aggregated counts
+                            const teacherHasData = isTeacher && rawVal && typeof rawVal === 'object' && rawVal.total > 0;
                             const holiday = getHoliday(date);
                             const today   = isToday(date);
                             const stats   = isTeacher && filterMode === 'day'
-                                ? attendanceData[date?.toDateString()]
+                                ? (typeof rawVal === 'object' ? rawVal : null)
                                 : null;
 
                             return (
@@ -553,8 +576,12 @@ export default function CalendarScreen({
                                         styles.dayCell,
                                         !date && styles.emptyCell,
                                         today   && styles.todayCell,
-                                        isPresent && !holiday && styles.presentCell,
-                                        isActive  && !holiday && styles.activeCell,
+                                        // Student: color by individual status
+                                        !isTeacher && isPresent && !holiday && styles.presentCell,
+                                        !isTeacher && isActive  && !holiday && styles.activeCell,
+                                        !isTeacher && isAbsent  && !holiday && styles.absentCell,
+                                        // Teacher: highlight any day that has attendance data
+                                        isTeacher && teacherHasData && !holiday && styles.teacherDataCell,
                                         holiday && styles.holidayCell,
                                     ]}
                                     onPress={() => date && showDateDetails(date)}
@@ -595,11 +622,13 @@ export default function CalendarScreen({
                                             )}
 
                                             {/* Student: present/absent/active icon */}
-                                            {!isTeacher && (isPresent || isActive) && !holiday && (
+                                            {!isTeacher && (isPresent || isActive || isAbsent) && !holiday && (
                                                 <View style={styles.statusIcon}>
                                                     {isPresent
                                                         ? <CheckIcon size={10} color="#10b981" />
-                                                        : <XIcon    size={10} color="#f59e0b" />}
+                                                        : isActive
+                                                        ? <XIcon    size={10} color="#f59e0b" />
+                                                        : <XIcon    size={10} color="#ef4444" />}
                                                 </View>
                                             )}
                                         </>
@@ -1067,6 +1096,8 @@ const styles = StyleSheet.create({
     todayCell:      { backgroundColor: 'rgba(0,217,255,0.1)' },
     presentCell:    { backgroundColor: 'rgba(16,185,129,0.15)' },
     activeCell:     { backgroundColor: 'rgba(245,158,11,0.15)' },  // orange — timer running, below threshold
+    absentCell:     { backgroundColor: 'rgba(239,68,68,0.10)' },   // red — class day but student was absent
+    teacherDataCell:{ backgroundColor: 'rgba(0,217,255,0.08)', borderColor: 'rgba(0,217,255,0.25)', borderWidth: 1 }, // teacher: day has attendance data
     holidayCell:    { backgroundColor: 'rgba(255,107,107,0.1)', borderColor: '#ff6b6b', borderWidth: 1 },
     dayNumber:      { fontSize: 14, fontWeight: '500' },
     todayText:      { fontWeight: 'bold' },

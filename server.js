@@ -1495,17 +1495,33 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                 const effectiveLive = (live && !isStale) ? live : null;
 
                 const session = s.attendanceSession || {};
-                const timerSecs = effectiveLive ? effectiveLive.attendedSeconds : (session.totalAttendedSeconds || 0);
+                let timerSecs = effectiveLive ? effectiveLive.attendedSeconds : (session.totalAttendedSeconds || 0);
                 const isRunning = effectiveLive ? effectiveLive.isRunning : (session.isRunning || false);
                 const status = effectiveLive ? effectiveLive.status : (session.status || 'absent');
+
+                // If the session's last sync was NOT today, the timerValue is from a previous
+                // day's session — reset it to 0 so teacher doesn't see stale timer values.
+                const lastSync = effectiveLive
+                    ? effectiveLive.lastSyncTime
+                    : (session.lastSyncTime || null);
+                const lastSyncDate = lastSync
+                    ? new Date(lastSync).toISOString().split('T')[0]
+                    : null;
+                if (lastSyncDate && lastSyncDate !== today) {
+                    timerSecs = 0;
+                }
+
+                // Also zero out timer for absent students — a non-zero timer with absent
+                // status means the session is from a previous period/day and is misleading.
+                const displayTimer = (status === 'absent') ? 0 : timerSecs;
 
                 return {
                     ...s,
                     isRunning,
-                    timerValue: timerSecs,
+                    timerValue: displayTimer,
                     status,
-                    lastUpdated: effectiveLive ? effectiveLive.lastSyncTime : (session.lastSyncTime || null),
-                    totalAttendedSeconds: timerSecs
+                    lastUpdated: lastSync,
+                    totalAttendedSeconds: timerSecs  // keep real value for stats, only display is zeroed
                 };
             } catch (error) {
                 console.error(`❌ Error getting status for student ${student.name}:`, error);
@@ -1615,15 +1631,24 @@ io.on('connection', (socket) => {
         // serving stale 'active' status from a previous session hours ago
         const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
         const now = Date.now();
+        const todayStr = new Date().toISOString().split('T')[0];
         const classStudents = [];
         liveTimerState.forEach((state) => {
             if (state.semester === semester && state.branch === branch) {
                 const isStale = state.lastSeen && (now - state.lastSeen) > STALE_THRESHOLD_MS;
-                if (isStale && state.status === 'active') {
-                    // Stale active entry — serve as absent so teacher doesn't see ghost attendees
-                    classStudents.push({ ...state, status: 'absent', isRunning: false });
+                // Also check if the last sync was from a previous day
+                const lastSyncDate = state.lastSyncTime
+                    ? new Date(state.lastSyncTime).toISOString().split('T')[0]
+                    : null;
+                const isFromPreviousDay = lastSyncDate && lastSyncDate !== todayStr;
+
+                if (isStale || isFromPreviousDay) {
+                    // Stale or previous-day entry — serve as absent with zero timer
+                    classStudents.push({ ...state, status: 'absent', isRunning: false, attendedSeconds: 0, timerValue: 0 });
                 } else {
-                    classStudents.push(state);
+                    // Zero out timer for absent students even in fresh state
+                    const displayTimer = state.status === 'absent' ? 0 : (state.attendedSeconds || 0);
+                    classStudents.push({ ...state, attendedSeconds: displayTimer, timerValue: displayTimer });
                 }
             }
         });
@@ -4319,8 +4344,13 @@ app.get('/api/attendance/date/:date', async (req, res) => {
             return res.json({ success: true, students: [], date, semester, branch });
         }
 
-        const startOfDay = new Date(date); startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay   = new Date(date); endOfDay.setHours(23, 59, 59, 999);
+        // IST-aware date window: data stored as IST midnight = UTC prev-day 18:30
+        // e.g. "2026-05-04" IST → stored as 2026-05-03T18:30:00.000Z
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const dayStart = new Date(date); dayStart.setHours(0, 0, 0, 0);
+        const dayEnd   = new Date(date); dayEnd.setHours(23, 59, 59, 999);
+        const startOfDay = new Date(dayStart.getTime() - IST_OFFSET_MS); // prev day 18:30Z
+        const endOfDay   = new Date(dayEnd.getTime()   - IST_OFFSET_MS); // same day 18:29:59Z
         const sem        = semester.toString();
 
         // ── Get class roster from StudentManagement ───────────────────────────
@@ -4776,8 +4806,12 @@ app.get('/api/attendance/date/:date/subject/:subject', async (req, res) => {
             return res.json({ success: true, students: [], totalPeriods: 0 });
         }
 
-        const startOfDay = new Date(date); startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay   = new Date(date); endOfDay.setHours(23, 59, 59, 999);
+        // IST-aware date window: data stored as IST midnight = UTC prev-day 18:30
+        const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+        const dayStart = new Date(date); dayStart.setHours(0, 0, 0, 0);
+        const dayEnd   = new Date(date); dayEnd.setHours(23, 59, 59, 999);
+        const startOfDay = new Date(dayStart.getTime() - IST_OFFSET_MS);
+        const endOfDay   = new Date(dayEnd.getTime()   - IST_OFFSET_MS);
         const sem        = semester.toString();
 
         // ── Class roster ──────────────────────────────────────────────────────
