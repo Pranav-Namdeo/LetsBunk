@@ -2932,14 +2932,44 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 7. Upsert timer progress into the current period's PeriodAttendance record FIRST
         // so syncAttendanceRecord (step 7b) reads fresh data.
-        // Uses upsert:true so the record is CREATED if it doesn't exist yet.
         try {
-            const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
-            if (currentLectureInfo) {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
-                const periodId = `P${currentLectureInfo.period}`;
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
 
+            // Try server clock first (period still active)
+            const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
+
+            let periodId = null;
+            let periodSubject = lecture?.subject || '';
+            let periodTeacher = lecture?.teacher || '';
+            let periodRoom    = lecture?.room    || '';
+
+            if (currentLectureInfo) {
+                // Period is currently active — use server clock
+                periodId      = `P${currentLectureInfo.period}`;
+                periodSubject = lecture?.subject || currentLectureInfo.subject || '';
+                periodTeacher = lecture?.teacher || currentLectureInfo.teacher || '';
+                periodRoom    = lecture?.room    || currentLectureInfo.room    || '';
+            } else if (lecture?.subject) {
+                // Period has ended — find the existing PeriodAttendance record for this lecture
+                // by matching subject + today's date (most recent one for this student today)
+                const existingRecord = await PeriodAttendance.findOne({
+                    enrollmentNo: student.enrollmentNo,
+                    date: { $gte: today, $lt: new Date(today.getTime() + 86400000) },
+                    subject: lecture.subject
+                }).sort({ updatedAt: -1 }).lean();
+
+                if (existingRecord) {
+                    periodId = existingRecord.period;
+                    console.log(`📊 [OFFLINE-SYNC] Period ended — updating existing record ${periodId} for subject ${lecture.subject}`);
+                } else {
+                    console.log(`⚠️ [OFFLINE-SYNC] No active period and no existing record for subject ${lecture.subject} — skipping`);
+                }
+            } else {
+                console.log(`⚠️ [OFFLINE-SYNC] No active period and no lecture info — skipping PeriodAttendance upsert`);
+            }
+
+            if (periodId) {
                 await PeriodAttendance.updateOne(
                     {
                         enrollmentNo: student.enrollmentNo,
@@ -2949,20 +2979,17 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     {
                         $set: {
                             timerSeconds:  Math.floor(timerSeconds),
-                            // 'present' only when threshold crossed, 'absent' otherwise
-                            // 'active' is a transient display state — not stored as final status
                             status:        computedStatus === 'present' ? 'present' : 'absent',
                             updatedAt:     new Date()
                         },
-                        // Only set these fields on INSERT (don't overwrite existing check-in data)
                         $setOnInsert: {
                             studentName:      student.name,
                             semester:         student.semester?.toString() || '',
                             branch:           student.branch || '',
-                            subject:          lecture?.subject || currentLectureInfo.subject || '',
-                            teacher:          lecture?.teacher || currentLectureInfo.teacher || '',
-                            teacherName:      lecture?.teacher || currentLectureInfo.teacher || '',
-                            room:             lecture?.room    || currentLectureInfo.room    || '',
+                            subject:          periodSubject,
+                            teacher:          periodTeacher,
+                            teacherName:      periodTeacher,
+                            room:             periodRoom,
                             verificationType: 'timer_sync',
                             wifiVerified:     true,
                             faceVerified:     false,
@@ -2973,8 +3000,6 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     { upsert: true }
                 );
                 console.log(`📊 [OFFLINE-SYNC] Upserted PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Timer: ${Math.floor(timerSeconds)}s`);
-            } else {
-                console.log(`⚠️ [OFFLINE-SYNC] No active period on server clock — skipping PeriodAttendance upsert`);
             }
         } catch (periodError) {
             console.error(`❌ [OFFLINE-SYNC] Error upserting PeriodAttendance:`, periodError);
