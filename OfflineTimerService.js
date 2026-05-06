@@ -1705,6 +1705,28 @@ class OfflineTimerService {
             console.warn('⚠️ No WiFi connection on foreground - stopping timer');
             await this.stopTimer('wifi_disconnected_background');
           }
+        } else if (!this.isRunning && this.timerSeconds > 0 && this.currentLecture) {
+          // Timer was running before background but native service stopped it
+          // (lecture ended, BSSID mismatch, etc.) — check if lecture ended normally
+          console.log('📱 Foreground resume: timer stopped in background, checking if lecture ended');
+          const lectureEnded = this.isLectureEnded();
+          if (lectureEnded) {
+            console.log('⏰ Lecture ended while in background — setting wasRunningBeforeLectureEnd for auto-start');
+            // Sync the final timer value first
+            await this.syncToServerWithContext(
+              this.currentLecture ? { ...this.currentLecture } : null,
+              this.timerSeconds,
+              this.currentLecture?.period ? `P${this.currentLecture.period}` : null
+            );
+            // Mark that timer was running so next period auto-starts
+            this.wasRunningBeforeLectureEnd = true;
+            this.notifyListeners({
+              type: 'lecture_ended',
+              lecture: this.currentLecture,
+              finalSeconds: this.timerSeconds,
+              attendedMinutes: Math.floor(this.timerSeconds / 60)
+            });
+          }
         }
 
         this.backgroundStartTime = null;
