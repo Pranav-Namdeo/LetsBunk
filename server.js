@@ -1482,22 +1482,29 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
 
         // Enhance students with current attendance session data
         const today = new Date().toISOString().split('T')[0];
+        const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+        const nowMs = Date.now();
         const studentsWithStatus = await Promise.all(students.map(async (student) => {
             try {
                 const s = student.toObject();
                 // Prefer live in-memory state, fall back to DB attendanceSession
                 const live = liveTimerState.get(s.enrollmentNo);
+
+                // Treat live state as stale if not updated in the last 10 minutes
+                const isStale = live && live.lastSeen && (nowMs - live.lastSeen) > STALE_THRESHOLD_MS;
+                const effectiveLive = (live && !isStale) ? live : null;
+
                 const session = s.attendanceSession || {};
-                const timerSecs = live ? live.attendedSeconds : (session.totalAttendedSeconds || 0);
-                const isRunning = live ? live.isRunning : (session.isRunning || false);
-                const status = live ? live.status : (session.status || 'absent');
+                const timerSecs = effectiveLive ? effectiveLive.attendedSeconds : (session.totalAttendedSeconds || 0);
+                const isRunning = effectiveLive ? effectiveLive.isRunning : (session.isRunning || false);
+                const status = effectiveLive ? effectiveLive.status : (session.status || 'absent');
 
                 return {
                     ...s,
                     isRunning,
                     timerValue: timerSecs,
                     status,
-                    lastUpdated: live ? live.lastSyncTime : (session.lastSyncTime || null),
+                    lastUpdated: effectiveLive ? effectiveLive.lastSyncTime : (session.lastSyncTime || null),
                     totalAttendedSeconds: timerSecs
                 };
             } catch (error) {
@@ -1604,10 +1611,20 @@ io.on('connection', (socket) => {
         console.log(`👨‍🏫 Teacher joined room: ${room}`);
 
         // Immediately send current live state for this class
+        // Only include entries that were updated within the last 10 minutes to avoid
+        // serving stale 'active' status from a previous session hours ago
+        const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+        const now = Date.now();
         const classStudents = [];
         liveTimerState.forEach((state) => {
             if (state.semester === semester && state.branch === branch) {
-                classStudents.push(state);
+                const isStale = state.lastSeen && (now - state.lastSeen) > STALE_THRESHOLD_MS;
+                if (isStale && state.status === 'active') {
+                    // Stale active entry — serve as absent so teacher doesn't see ghost attendees
+                    classStudents.push({ ...state, status: 'absent', isRunning: false });
+                } else {
+                    classStudents.push(state);
+                }
             }
         });
         if (classStudents.length > 0) {
@@ -2885,13 +2902,16 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 } else if (Boolean(isRunning)) {
                     computedStatus = 'active';
                 }
-            } else if (Boolean(isRunning)) {
-                // No active period on server — still mark active if timer is running
-                computedStatus = 'active';
+            } else {
+                // No active period on server right now — regardless of isRunning, mark absent.
+                // A student cannot be "attending" a class that doesn't exist on the timetable.
+                console.log(`⚠️ [OFFLINE-SYNC] No active period for ${studentId} — forcing status to absent (isRunning=${isRunning})`);
+                computedStatus = 'absent';
             }
         } catch (statusErr) {
             console.warn('⚠️ Could not compute status:', statusErr.message);
-            if (Boolean(isRunning)) computedStatus = 'active';
+            // On error, default to absent — never show attending without a verified active period
+            computedStatus = 'absent';
         }
 
         // Update status in DB — both top-level status and attendanceSession.status

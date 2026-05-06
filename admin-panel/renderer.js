@@ -1860,7 +1860,7 @@ function showAddClassroomModal() {
                 <label>WiFi BSSIDs</label>
                 <div id="bssidContainer">
                     <div class="bssid-input-group" style="display: flex; gap: 8px; margin-bottom: 8px;">
-                        <input type="text" name="wifiBSSID_0" class="form-input" placeholder="XX:XX:XX:XX:XX:XX" style="flex: 1;">
+                        <input type="text" name="wifiBSSID_0" class="form-input" placeholder="ee:ee:6d:9d:6f:ba" style="flex: 1; font-family: monospace; letter-spacing: 1px;" maxlength="17" spellcheck="false" autocomplete="off">
                     </div>
                 </div>
                 <button type="button" class="btn btn-secondary" onclick="addBSSIDField()" style="margin-top: 8px; width: 100%;"> More BSSID</button>
@@ -1875,6 +1875,10 @@ function showAddClassroomModal() {
     `;
 
     document.getElementById('classroomForm').addEventListener('submit', handleAddClassroom);
+
+    // Attach BSSID formatter to all existing inputs
+    document.querySelectorAll('#bssidContainer input[type="text"]').forEach(attachBSSIDFormatter);
+
     openModal();
 }
 
@@ -3405,20 +3409,67 @@ async function deleteClassroom(id) {
     }
 }
 
+// Auto-format BSSID input as user types: ee:ee:6d:9d:6f:ba
+function formatBSSIDInput(input) {
+    let val = input.value.replace(/[^0-9a-fA-F]/g, ''); // strip non-hex
+    if (val.length > 12) val = val.slice(0, 12);         // max 12 hex chars
+
+    // Insert colons every 2 chars
+    const parts = [];
+    for (let i = 0; i < val.length; i += 2) {
+        parts.push(val.slice(i, i + 2));
+    }
+    input.value = parts.join(':');
+}
+
+function attachBSSIDFormatter(input) {
+    input.setAttribute('maxlength', '17');
+    input.setAttribute('placeholder', 'ee:ee:6d:9d:6f:ba');
+    input.setAttribute('spellcheck', 'false');
+    input.setAttribute('autocomplete', 'off');
+    input.style.fontFamily = 'monospace';
+    input.style.letterSpacing = '1px';
+
+    input.addEventListener('input', function (e) {
+        const cursor = this.selectionStart;
+        const prevLen = this.value.length;
+        formatBSSIDInput(this);
+        // Adjust cursor so colons don't push it back
+        const diff = this.value.length - prevLen;
+        this.setSelectionRange(cursor + diff, cursor + diff);
+    });
+
+    input.addEventListener('blur', function () {
+        // Lowercase + pad incomplete octets on blur
+        let val = this.value.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+        if (val.length > 0 && val.length < 12) {
+            // Pad last octet with 0 if only one hex digit entered
+            if (val.length % 2 !== 0) val += '0';
+        }
+        const parts = [];
+        for (let i = 0; i < val.length; i += 2) parts.push(val.slice(i, i + 2));
+        this.value = parts.join(':').toLowerCase();
+    });
+}
+
 // Helper functions for dynamic BSSID fields
 function addBSSIDField() {
     const container = document.getElementById('bssidContainer');
     const currentCount = container.querySelectorAll('.bssid-input-group').length;
-    
+
     const newField = document.createElement('div');
     newField.className = 'bssid-input-group';
     newField.style.cssText = 'display: flex; gap: 8px; margin-bottom: 8px;';
     newField.innerHTML = `
-        <input type="text" name="wifiBSSID_${currentCount}" class="form-input" placeholder="XX:XX:XX:XX:XX:XX" style="flex: 1;">
+        <input type="text" name="wifiBSSID_${currentCount}" class="form-input" placeholder="ee:ee:6d:9d:6f:ba" style="flex: 1; font-family: monospace; letter-spacing: 1px;" maxlength="17" spellcheck="false" autocomplete="off">
         <button type="button" class="btn btn-secondary" onclick="removeBSSIDField(this)" style="padding: 8px 12px;"></button>
     `;
-    
+
     container.appendChild(newField);
+
+    // Attach formatter to the new input
+    const newInput = newField.querySelector('input');
+    attachBSSIDFormatter(newInput);
 }
 
 function removeBSSIDField(button) {
@@ -3846,7 +3897,7 @@ async function editClassroom(id) {
                 <div id="bssidContainer">
                     ${bssids.map((bssid, index) => `
                         <div class="bssid-input-group" style="display: flex; gap: 8px; margin-bottom: 8px;">
-                            <input type="text" name="wifiBSSID_${index}" class="form-input" value="${bssid || ''}" placeholder="XX:XX:XX:XX:XX:XX" style="flex: 1;">
+                            <input type="text" name="wifiBSSID_${index}" class="form-input" value="${bssid || ''}" placeholder="ee:ee:6d:9d:6f:ba" style="flex: 1; font-family: monospace; letter-spacing: 1px;" maxlength="17" spellcheck="false" autocomplete="off">
                             ${index > 0 ? `<button type="button" class="btn btn-secondary" onclick="removeBSSIDField(this)" style="padding: 8px 12px;"></button>` : ''}
                         </div>
                     `).join('')}
@@ -3903,6 +3954,9 @@ async function editClassroom(id) {
             showNotification('Error: ' + error.message, 'error');
         }
     });
+
+    // Attach BSSID formatter to all existing inputs in edit modal
+    document.querySelectorAll('#bssidContainer input[type="text"]').forEach(attachBSSIDFormatter);
 
     openModal();
 }
@@ -5424,11 +5478,11 @@ function editPeriod(index) {
             </div>
             <div class="form-group">
                 <label>Start Time</label>
-                <input type="time" id="startTime" class="form-input" value="${period.startTime}" required>
+                <input type="time" id="startTime" class="form-input" value="${period.startTime}" maxlength="5" pattern="[0-9]{2}:[0-9]{2}" required>
             </div>
             <div class="form-group">
                 <label>End Time</label>
-                <input type="time" id="endTime" class="form-input" value="${period.endTime}" required>
+                <input type="time" id="endTime" class="form-input" value="${period.endTime}" maxlength="5" pattern="[0-9]{2}:[0-9]{2}" required>
             </div>
             <div class="form-group">
                 <label>
@@ -5503,11 +5557,11 @@ function addNewPeriod() {
             </div>
             <div class="form-group">
                 <label>Start Time</label>
-                <input type="time" id="newStartTime" class="form-input" value="${suggestedStart}" required>
+                <input type="time" id="newStartTime" class="form-input" value="${suggestedStart}" maxlength="5" pattern="[0-9]{2}:[0-9]{2}" required>
             </div>
             <div class="form-group">
                 <label>End Time</label>
-                <input type="time" id="newEndTime" class="form-input" value="${suggestedEnd}" required>
+                <input type="time" id="newEndTime" class="form-input" value="${suggestedEnd}" maxlength="5" pattern="[0-9]{2}:[0-9]{2}" required>
             </div>
             <div class="form-group">
                 <label>
@@ -5669,11 +5723,11 @@ function editPeriodTime(index, currentStart, currentEnd) {
         <form id="editTimeForm">
             <div class="form-group">
                 <label>Start Time</label>
-                <input type="time" id="editStartTime" class="form-input" value="${currentStart}" required>
+                <input type="time" id="editStartTime" class="form-input" value="${currentStart}" maxlength="5" pattern="[0-9]{2}:[0-9]{2}" required>
             </div>
             <div class="form-group">
                 <label>End Time</label>
-                <input type="time" id="editEndTime" class="form-input" value="${currentEnd}" required>
+                <input type="time" id="editEndTime" class="form-input" value="${currentEnd}" maxlength="5" pattern="[0-9]{2}:[0-9]{2}" required>
             </div>
             <div class="form-group">
                 <label>
@@ -5734,11 +5788,11 @@ function addNewPeriodInline() {
         <form id="addPeriodForm">
             <div class="form-group">
                 <label>Start Time</label>
-                <input type="time" id="newStartTime" class="form-input" value="${suggestedStart}" required>
+                <input type="time" id="newStartTime" class="form-input" value="${suggestedStart}" maxlength="5" pattern="[0-9]{2}:[0-9]{2}" required>
             </div>
             <div class="form-group">
                 <label>End Time</label>
-                <input type="time" id="newEndTime" class="form-input" value="${suggestedEnd}" required>
+                <input type="time" id="newEndTime" class="form-input" value="${suggestedEnd}" maxlength="5" pattern="[0-9]{2}:[0-9]{2}" required>
             </div>
             <div class="form-group">
                 <label>
@@ -6994,17 +7048,23 @@ function renderPeriods() {
                 
                 <div class="period-time-group">
                     <label>Start Time</label>
-                    <input type="time" 
+                    <input type="text" 
                            class="period-time-input" 
-                           value="${startTime}" 
+                           value="${startTime}"
+                           placeholder="HH:MM"
+                           maxlength="5"
+                           pattern="[0-9]{2}:[0-9]{2}"
                            onchange="updatePeriodTime(${index}, 'startTime', this.value)">
                 </div>
                 
                 <div class="period-time-group">
                     <label>End Time</label>
-                    <input type="time" 
+                    <input type="text" 
                            class="period-time-input" 
-                           value="${endTime}" 
+                           value="${endTime}"
+                           placeholder="HH:MM"
+                           maxlength="5"
+                           pattern="[0-9]{2}:[0-9]{2}"
                            onchange="updatePeriodTime(${index}, 'endTime', this.value)">
                 </div>
                 
@@ -7021,6 +7081,13 @@ function renderPeriods() {
             </div>
         `;
     }).join('');
+
+    // Setup time input handlers for better UX
+    setTimeout(() => {
+        document.querySelectorAll('.period-time-input').forEach(input => {
+            setupTimeInput(input);
+        });
+    }, 0);
 
     updatePeriodStats();
     // Highlight any overlapping periods after DOM is updated
@@ -7045,6 +7112,65 @@ function calculateDuration(startTime, endTime) {
         console.warn('Error calculating duration:', error);
         return 0;
     }
+}
+
+// Helper function to setup time input with better UX
+function setupTimeInput(input) {
+    if (!input) return;
+    
+    // Handle keyboard input for better time entry
+    input.addEventListener('keydown', function(e) {
+        const value = this.value;
+        
+        // Allow navigation keys
+        if (['Tab', 'ArrowLeft', 'ArrowRight', 'Backspace', 'Delete'].includes(e.key)) {
+            return;
+        }
+        
+        // Only allow numbers and colon
+        if (!/[0-9:]/.test(e.key)) {
+            e.preventDefault();
+            return;
+        }
+    });
+    
+    // Auto-format time input
+    input.addEventListener('input', function(e) {
+        let value = this.value.replace(/[^0-9]/g, '');
+        
+        if (value.length >= 2) {
+            const hours = value.substring(0, 2);
+            const minutes = value.substring(2, 4);
+            
+            // Validate hours (00-23)
+            if (parseInt(hours) > 23) {
+                value = '23' + minutes;
+            }
+            
+            // Validate minutes (00-59)
+            if (minutes && parseInt(minutes) > 59) {
+                value = hours + '59';
+            }
+            
+            // Format as HH:MM
+            if (value.length > 2) {
+                this.value = value.substring(0, 2) + ':' + value.substring(2, 4);
+            } else {
+                this.value = value;
+            }
+        }
+    });
+    
+    // Handle blur to ensure proper format
+    input.addEventListener('blur', function() {
+        if (this.value && this.value.length < 5) {
+            // Pad with zeros if incomplete
+            const parts = this.value.split(':');
+            const hours = (parts[0] || '00').padStart(2, '0');
+            const minutes = (parts[1] || '00').padStart(2, '0');
+            this.value = hours + ':' + minutes;
+        }
+    });
 }
 
 function updatePeriodTime(index, field, value) {

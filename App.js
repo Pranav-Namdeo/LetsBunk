@@ -585,7 +585,8 @@ export default function App() {
 
   // Periodic refresh for teacher to see real-time student updates
   useEffect(() => {
-    if (selectedRole === 'teacher' && activeTab === 'home' && semester && branch) {
+    // Teacher auto-refresh: works with or without semester/branch (uses loginId-based API)
+    if (selectedRole === 'teacher' && activeTab === 'home') {
       // Initial fetch
       fetchStudents();
 
@@ -596,7 +597,7 @@ export default function App() {
 
       return () => clearInterval(refreshInterval);
     }
-  }, [selectedRole, activeTab, semester, branch]);
+  }, [selectedRole, activeTab]); // Removed semester/branch deps - teacher uses loginId
 
   // Calculate current class progress every second
   useEffect(() => {
@@ -876,6 +877,21 @@ export default function App() {
             thresholdSeconds: prev.isRunning ? prev.thresholdSeconds : null,
           };
         });
+      } else {
+        // No active period - clear currentLecture completely
+        setOfflineTimerState(prev => {
+          if (prev.currentLecture) {
+            console.log('🔚 No active period - clearing stale lecture info');
+            return {
+              ...prev,
+              currentLecture: null,
+              timerSeconds: 0,
+              attendanceStatus: 'absent',
+              thresholdSeconds: null,
+            };
+          }
+          return prev;
+        });
       }
     };
     fetchOfflinePeriod();
@@ -981,8 +997,8 @@ export default function App() {
 
   // Dedicated socket initialization/reconnection effect
   useEffect(() => {
-    console.log('🔌 Socket effect triggered - Identity:', studentId || loggedInUserId || 'anonymous');
-    setupSocket(studentId || loggedInUserId, selectedRole);
+    console.log('🔌 Socket effect triggered - Identity:', studentId || loggedInUserId || 'anonymous', '| Role:', selectedRole);
+    setupSocket();
   }, [studentId, loggedInUserId, selectedRole]);
 
   // Initialize OfflineTimerService when student logs in
@@ -1290,7 +1306,8 @@ export default function App() {
       // Start timer with BSSID and face verification
       console.log('▶️ Starting timer for current class');
 
-      if (!currentClassInfo.currentLecture || currentClassInfo.currentLecture === 'Break') {
+      // Check if there's an active period (not a break)
+      if (!offlinePeriod || offlinePeriod.isBreak) {
         showToast('⚠️ Timer only available during active lectures, not breaks', 'warning');
         return;
       }
@@ -1560,6 +1577,10 @@ export default function App() {
         }
 
         console.log('✅ Data refresh complete');
+      } else if (selectedRoleRef.current === 'teacher') {
+        // Teacher reconnect: refresh student list and rejoin class room if active
+        console.log('👨\u200d🏫 Teacher reconnecting - refreshing student list...');
+        await fetchStudents();
       }
     });
 
@@ -2110,9 +2131,17 @@ export default function App() {
               }
             }
           } else if (userData.role === 'teacher') {
-            // Don't set default semester/branch for teachers - let current class detection handle it
-            // setSemester(userData.semester || '1');
-            // setBranch(userData.department);
+            // For teachers: fetch students and set up timetable from stored preferences
+            // Check if teacher has stored semester/branch preferences
+            const storedSemester = await AsyncStorage.getItem(SEMESTER_KEY);
+            const storedBranch = await AsyncStorage.getItem(BRANCH_KEY);
+            
+            if (storedSemester && storedBranch) {
+              console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch);
+              setSemester(storedSemester);
+              setBranch(storedBranch);
+            }
+            
             fetchStudents();
           }
         } catch (parseError) {
@@ -2273,6 +2302,10 @@ export default function App() {
       }
     } catch (error) {
       console.log('Error fetching students:', error);
+      // Show user-friendly feedback for network errors
+      if (selectedRole === 'teacher') {
+        showToast('⚠️ Could not load students. Check your connection.', 'error');
+      }
     }
   };
 
@@ -3306,8 +3339,19 @@ export default function App() {
               .catch(() => { });
           }
         } else if (data.user.role === 'teacher') {
-          // Don't set default semester/branch for teachers - let current class detection handle it
-          fetchStudents();
+          // For teachers: fetch students and optionally set semester/branch for timetable
+          // Teachers can manually select semester/branch via the selector, but we try to restore preferences
+          const storedSemester = await AsyncStorage.getItem(SEMESTER_KEY);
+          const storedBranch = await AsyncStorage.getItem(BRANCH_KEY);
+          
+          if (storedSemester && storedBranch) {
+            console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch);
+            setSemester(storedSemester);
+            setBranch(storedBranch);
+          }
+          
+          // Fetch students after a short delay to ensure socket is connecting
+          setTimeout(() => fetchStudents(), 100);
           refreshUserProfile(); // Fetch latest profile data from server (like refresh button)
         }
 
@@ -4879,7 +4923,10 @@ export default function App() {
                   <View style={{ padding: 20 }}>
                     <TouchableOpacity
                       style={[styles.logoutButton, { backgroundColor: '#ff4444' }]}
-                      onPress={handleLogout}
+                      onPress={() => {
+                        setShowProfile(false);
+                        setTimeout(() => handleLogout(), 300);
+                      }}
                     >
                       <Text style={styles.logoutButtonText}>🚪 Logout</Text>
                     </TouchableOpacity>
@@ -5426,7 +5473,7 @@ export default function App() {
               </Text>
             </View>
           )}
-          {currentClassInfo && offlineTimerInitialized && (
+          {currentClassInfo && offlineTimerInitialized && offlinePeriod && (
             <View style={{
               width: '100%',
               maxWidth: 400,
@@ -5690,8 +5737,9 @@ export default function App() {
                 )}
               </View>
 
-              {/* Timer Control Button - only show during active lectures */}
-              {currentClassInfo && currentClassInfo.currentLecture !== 'Break' && (
+              {/* Timer Control Button - show when there's an active period */}
+              {((currentClassInfo && currentClassInfo.currentLecture !== 'Break') || 
+                (offlinePeriod && offlinePeriod.subject && !offlinePeriod.isBreak)) && (
                 <TouchableOpacity
                   style={{
                     backgroundColor: offlineTimerState.isRunning ? '#ef4444' : '#22c55e',
@@ -5957,7 +6005,10 @@ export default function App() {
                   <View style={{ padding: 20 }}>
                     <TouchableOpacity
                       style={[styles.logoutButton, { backgroundColor: '#ff4444' }]}
-                      onPress={handleLogout}
+                      onPress={() => {
+                        setShowProfile(false);
+                        setTimeout(() => handleLogout(), 300);
+                      }}
                     >
                       <Text style={styles.logoutButtonText}>🚪 Logout</Text>
                     </TouchableOpacity>
