@@ -772,6 +772,13 @@ class OfflineTimerService {
         this.attendanceStatus = 'absent';
       }
       
+      // Save lecture context BEFORE clearing — needed for final sync
+      const finalLecture    = this.currentLecture ? { ...this.currentLecture } : null;
+      const finalSeconds    = this.timerSeconds;
+      const finalPeriodId   = finalLecture?.period
+          ? `P${finalLecture.period}`
+          : (finalLecture?.periodId || null);
+
       // Stop counting
       this.stopCounting();
       
@@ -793,8 +800,9 @@ class OfflineTimerService {
       // Save state
       await this.saveState();
       
-      // Final sync with stopped state
-      await this.syncToServer();
+      // Final sync — use saved lecture/periodId so server can identify the right period
+      // even if currentLecture was cleared above
+      await this.syncToServerWithContext(finalLecture, finalSeconds, finalPeriodId);
       
       // Notify listeners
       this.notifyListeners({
@@ -1446,6 +1454,26 @@ class OfflineTimerService {
   }
 
   /**
+   * Sync with explicit lecture context — used for final sync after timer stops
+   * so the server can identify the correct period even after currentLecture is cleared.
+   */
+  async syncToServerWithContext(lecture, timerSeconds, periodId) {
+    // Temporarily override instance values for this sync call
+    const savedLecture   = this.currentLecture;
+    const savedSeconds   = this.timerSeconds;
+    this.currentLecture  = lecture;
+    this.timerSeconds    = timerSeconds;
+    this._finalSyncPeriodId = periodId;  // picked up by syncToServer
+    try {
+      await this.syncToServer();
+    } finally {
+      this.currentLecture = savedLecture;
+      this.timerSeconds   = savedSeconds;
+      this._finalSyncPeriodId = null;
+    }
+  }
+
+  /**
    * Sync timer data to server
    */
   async syncToServer() {
@@ -1474,6 +1502,11 @@ class OfflineTimerService {
             studentId: this.studentId,
             timerSeconds: this.timerSeconds,
             lecture: this.currentLecture,
+            // Include periodId so server can update the right PeriodAttendance record
+            // even after the period has ended (set by syncToServerWithContext for final syncs)
+            periodId: this._finalSyncPeriodId || (this.currentLecture?.period
+                ? `P${this.currentLecture.period}`
+                : (this.currentLecture?.periodId || null)),
             timestamp: syncTimestamp,
             isRunning: this.isRunning,
             isPaused: this.isPaused,
@@ -1579,9 +1612,9 @@ class OfflineTimerService {
         lecture: this.currentLecture,
         // Explicitly store period ID so server can update the right PeriodAttendance record
         // even after the period has ended and getCurrentLectureInfo() returns null
-        periodId: this.currentLecture?.period
+        periodId: this._finalSyncPeriodId || (this.currentLecture?.period
             ? `P${this.currentLecture.period}`
-            : (this.currentLecture?.periodId || null),
+            : (this.currentLecture?.periodId || null)),
         timestamp: _getBootMs() || Date.now(),
         isRunning: this.isRunning,
         isPaused: this.isPaused,
