@@ -8448,9 +8448,11 @@ app.post('/api/random-ring', async (req, res) => {
         }
 
         // Use liveTimerState to find students who are currently ACTIVE (timer running, not yet present)
+        // Also include 'offline' students — they were attending and just lost WiFi temporarily
         const activeStudents = [];
         liveTimerState.forEach((state, enrollmentNo) => {
-            if (state.semester === semester && state.branch === branch && state.status === 'active') {
+            if (state.semester === semester && state.branch === branch &&
+                (state.status === 'active' || state.status === 'offline')) {
                 // studentId in liveTimerState is always enrollmentNo (set by offline-sync broadcast)
                 activeStudents.push({ enrollmentNo, name: state.name, studentId: enrollmentNo });
             }
