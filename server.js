@@ -781,7 +781,7 @@ app.put('/api/timetable/:semester/:branch', async (req, res) => {
         const effectiveBranch = req.query.branch || req.params.branch;
         const { timetable, periods } = req.body;
 
-        console.log(`📝 Updating timetable for ${branch} Semester ${semester}`);
+        console.log(`📝 Updating timetable for ${effectiveBranch} Semester ${semester}`);
 
         if (mongoose.connection.readyState === 1) {
             let existingTimetable = await Timetable.findOne({ semester, branch: effectiveBranch });
@@ -810,14 +810,18 @@ app.put('/api/timetable/:semester/:branch', async (req, res) => {
             res.json({ success: true, timetable: timetableMemory[key] });
         }
 
-        // Notify all students
-        io.emit('timetable_updated', { semester, branch: effectiveBranch });
-        
-        // Broadcast BSSID schedule update to affected students
-        await broadcastBSSIDScheduleUpdate(semester, effectiveBranch);
+        // Notify all students (fire-and-forget after response sent)
+        try {
+            io.emit('timetable_updated', { semester, branch: effectiveBranch });
+            await broadcastBSSIDScheduleUpdate(semester, effectiveBranch);
+        } catch (notifyErr) {
+            console.warn('⚠️ Timetable notify error (non-fatal):', notifyErr.message);
+        }
     } catch (error) {
         console.error('❌ Error updating timetable:', error);
-        res.status(500).json({ success: false, error: error.message });
+        if (!res.headersSent) {
+            res.status(500).json({ success: false, error: error.message });
+        }
     }
 });
 
