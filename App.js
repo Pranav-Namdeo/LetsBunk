@@ -851,20 +851,35 @@ export default function App() {
             })();
           } else if (!hasStartedTimerToday) {
             console.log('🌅 First time of day - requires manual START TIMER button');
+            // Reset stale timer from previous session
+            OfflineTimerService.timerSeconds = 0;
+            OfflineTimerService.attendanceStatus = 'absent';
+            OfflineTimerService.thresholdSeconds = null;
           } else {
             console.log('⏸️ Timer was not running in previous period - requires manual start');
+            // Reset stale timer from previous period so new period starts clean
+            OfflineTimerService.timerSeconds = 0;
+            OfflineTimerService.attendanceStatus = 'absent';
+            OfflineTimerService.thresholdSeconds = null;
           }
 
           // Also update OfflineTimerService's internal currentLecture
           if (OfflineTimerService.isRunning) {
             OfflineTimerService.currentLecture = updatedLecture;
           }
-          return { ...prev, currentLecture: updatedLecture };
+          // Reset timerSeconds in React state too so UI shows 00:00:00 for new period
+          return {
+            ...prev,
+            currentLecture: updatedLecture,
+            timerSeconds: prev.isRunning ? prev.timerSeconds : 0,
+            attendanceStatus: prev.isRunning ? prev.attendanceStatus : 'absent',
+            thresholdSeconds: prev.isRunning ? prev.thresholdSeconds : null,
+          };
         });
       }
     };
     fetchOfflinePeriod();
-    const interval = setInterval(fetchOfflinePeriod, 30000); // 30 seconds for faster updates
+    const interval = setInterval(fetchOfflinePeriod, 15000); // 15 seconds for faster period detection
     return () => clearInterval(interval);
   }, [selectedRole]);
 
