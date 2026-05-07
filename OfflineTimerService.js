@@ -457,7 +457,7 @@ class OfflineTimerService {
     try {
       const SecureStorage = require('./SecureStorage').default;
 
-      // ── 1. Check in-memory cache first (fastest path) ──────────────────────
+      // ── 1. Check in-memory cache first (fastest path, zero I/O) ───────────
       if (this._cachedFaceEmbedding) {
         console.log('📦 Using in-memory face embedding cache');
         return {
@@ -467,17 +467,24 @@ class OfflineTimerService {
         };
       }
 
-      // ── 2. Try to load from persistent AsyncStorage cache ──────────────────
+      // ── 2. Load persistent AsyncStorage cache ─────────────────────────────
+      //    This is the offline fallback. It is populated every time a server
+      //    fetch succeeds (see step 3 below), so it is always up-to-date after
+      //    the first online session.
       const persistedCache = await SecureStorage.getCachedServerEmbedding();
 
-      // ── 3. Fetch from server to get the current enrolledAt ─────────────────
-      //    We always attempt a server call so we can detect enrollment changes.
-      //    If the network is unavailable we fall back to the persisted cache.
+      // ── 3. Attempt a server fetch (short 3 s timeout) ─────────────────────
+      //    Purpose: detect re-enrollment (enrolledAt changed) and keep the
+      //    AsyncStorage cache fresh.
+      //    If the network is unavailable the catch block runs immediately and
+      //    we fall back to the persisted cache — student is never blocked.
       let serverData = null;
       try {
         console.log('📡 Fetching face embedding from server (checking for updates)...');
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        // 3 second timeout — short enough that offline students aren't kept
+        // waiting before the camera opens.
+        const timeoutId = setTimeout(() => controller.abort(), 3000);
         const response = await fetch(
           `${this.serverUrl}/api/students/${this.studentId}/face-data`,
           {
@@ -496,19 +503,34 @@ class OfflineTimerService {
               enrolledAt: data.enrolledAt || null,
             };
           } else {
-            // Server responded but student has no face enrolled
+            // Server says face not enrolled — but if we have a local cache,
+            // trust it (server may be returning stale data).
+            if (persistedCache) {
+              console.warn('⚠️ Server says no face enrolled but local cache exists — using cache');
+              this._cachedFaceEmbedding = persistedCache.embedding;
+              this._cachedFaceEmbeddingEnrolledAt = persistedCache.enrolledAt;
+              return { success: true, embedding: persistedCache.embedding, enrolledAt: persistedCache.enrolledAt, fromOfflineCache: true };
+            }
             return { success: false, error: data.error || 'No face embedding found. Please enroll your face first.' };
           }
         } else if (response.status === 404) {
+          // Definitively not enrolled — but trust local cache if present
+          if (persistedCache) {
+            console.warn('⚠️ Server 404 but local cache exists — using cache');
+            this._cachedFaceEmbedding = persistedCache.embedding;
+            this._cachedFaceEmbeddingEnrolledAt = persistedCache.enrolledAt;
+            return { success: true, embedding: persistedCache.embedding, enrolledAt: persistedCache.enrolledAt, fromOfflineCache: true };
+          }
           return { success: false, error: 'Face not enrolled. Please enroll your face first using the enrollment app.' };
         } else {
           throw new Error(`Server error: ${response.status}`);
         }
       } catch (networkError) {
-        // Network unavailable — fall back to persisted cache if available
+        // ── Offline fallback ─────────────────────────────────────────────────
+        // Network unavailable (no internet, timeout, etc.)
+        // Use the persisted AsyncStorage cache so the student is never blocked.
         if (persistedCache) {
           console.warn('⚠️ Network unavailable — using persisted face embedding cache (offline fallback)');
-          // Warm the in-memory cache from the persisted one
           this._cachedFaceEmbedding = persistedCache.embedding;
           this._cachedFaceEmbeddingEnrolledAt = persistedCache.enrolledAt;
           return {
@@ -518,40 +540,34 @@ class OfflineTimerService {
             fromOfflineCache: true,
           };
         }
+        // No cache at all — student must connect to internet at least once
+        // so the embedding can be downloaded and saved.
         console.error('❌ Network unavailable and no cached embedding:', networkError.message);
-        return { success: false, error: `Failed to fetch face data: ${networkError.message}` };
-      }
-
-      // ── 4. Compare server enrolledAt with cached enrolledAt ────────────────
-      //    If they match the face hasn't changed — use the cache we already have.
-      //    If they differ (or cache is empty) — save the fresh server data.
-      const serverEnrolledAt = serverData.enrolledAt;
-      const cachedEnrolledAt = persistedCache?.enrolledAt;
-
-      const enrolledAtChanged =
-        !persistedCache ||                          // no cache at all
-        !cachedEnrolledAt ||                        // cache has no timestamp
-        serverEnrolledAt !== cachedEnrolledAt;      // enrollment app updated the face
-
-      if (!enrolledAtChanged) {
-        // Cache is still valid — use it and warm in-memory cache
-        console.log('✅ Face embedding cache is up-to-date (enrolledAt unchanged)');
-        this._cachedFaceEmbedding = persistedCache.embedding;
-        this._cachedFaceEmbeddingEnrolledAt = persistedCache.enrolledAt;
         return {
-          success: true,
-          embedding: persistedCache.embedding,
-          enrolledAt: persistedCache.enrolledAt,
+          success: false,
+          error: 'Face data not available offline. Please connect to the internet once to download your face data, then it will work offline.',
         };
       }
 
-      // Cache is stale or missing — persist the fresh server data
-      if (enrolledAtChanged && persistedCache) {
-        console.log(`🔄 Face embedding updated by enrollment app (was: ${cachedEnrolledAt}, now: ${serverEnrolledAt}) — refreshing cache`);
+      // ── 4. Server fetch succeeded — always persist to AsyncStorage ─────────
+      //    We save on EVERY successful fetch, not just when enrolledAt changed.
+      //    This ensures the cache is populated after the very first online
+      //    session so subsequent offline sessions always have a fallback.
+      const serverEnrolledAt = serverData.enrolledAt;
+      const cachedEnrolledAt = persistedCache?.enrolledAt;
+      const enrolledAtChanged = !persistedCache || !cachedEnrolledAt || serverEnrolledAt !== cachedEnrolledAt;
+
+      if (enrolledAtChanged) {
+        if (persistedCache) {
+          console.log(`🔄 Face embedding updated by enrollment app (was: ${cachedEnrolledAt}, now: ${serverEnrolledAt}) — refreshing cache`);
+        } else {
+          console.log('✅ Face embedding fetched from server — saving to persistent cache for offline use');
+        }
       } else {
-        console.log('✅ Face embedding fetched from server and cached persistently');
+        console.log('✅ Face embedding cache is up-to-date — re-saving to keep AsyncStorage fresh');
       }
 
+      // Always write to AsyncStorage so offline fallback is always available
       await SecureStorage.saveCachedServerEmbedding(serverData.embedding, serverEnrolledAt);
 
       // Warm in-memory cache

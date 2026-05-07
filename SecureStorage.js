@@ -128,6 +128,8 @@ class SecureStorage {
 
   /**
    * Save the server-fetched face embedding to persistent storage.
+   * Also writes to FACE_EMBEDDING so registerCheckIn can send it to the
+   * server even when the enrollment app hasn't run on this device.
    * @param {Array<number>} embedding - 192-float embedding from server
    * @param {string} serverEnrolledAt - ISO timestamp returned by the server (faceEnrolledAt)
    * @returns {Promise<boolean>}
@@ -138,11 +140,15 @@ class SecureStorage {
         console.warn('⚠️ Invalid embedding for cache');
         return false;
       }
-      await AsyncStorage.setItem(KEYS.CACHED_SERVER_EMBEDDING, embedding.join(','));
+      const embeddingStr = embedding.join(',');
+      await AsyncStorage.setItem(KEYS.CACHED_SERVER_EMBEDDING, embeddingStr);
       await AsyncStorage.setItem(
         KEYS.CACHED_SERVER_EMBEDDING_ENROLLED_AT,
         serverEnrolledAt || new Date().toISOString()
       );
+      // Also keep FACE_EMBEDDING in sync so registerCheckIn (which reads
+      // FACE_EMBEDDING) always has a valid embedding to send to the server.
+      await AsyncStorage.setItem(KEYS.FACE_EMBEDDING, embeddingStr);
       console.log(`✅ Server embedding cached persistently (enrolledAt: ${serverEnrolledAt})`);
       return true;
     } catch (error) {
