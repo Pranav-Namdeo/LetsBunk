@@ -2507,6 +2507,29 @@ export default function App() {
       if (data.success && data.schedule) {
         await BSSIDStorage.saveDailySchedule(data.schedule);
         console.log(`✅ Cached ${data.schedule.length} periods for ${data.dayName}`);
+
+        // Also refresh face embedding cache whenever the offline schedule is updated.
+        // This keeps the face data in sync with the BSSID schedule so both are
+        // always fresh after any online sync, and offline face verification always
+        // has the latest embedding available.
+        (async () => {
+          try {
+            const faceResponse = await fetch(
+              `${SOCKET_URL}/api/students/${enrollmentNo}/face-data`,
+              { method: 'GET', headers: { 'Content-Type': 'application/json' } }
+            );
+            if (faceResponse.ok) {
+              const faceData = await faceResponse.json();
+              if (faceData.success && Array.isArray(faceData.faceEmbedding) && faceData.faceEmbedding.length > 0) {
+                const enrolledAt = faceData.enrolledAt || new Date().toISOString();
+                await SecureStorage.saveCachedServerEmbedding(faceData.faceEmbedding, enrolledAt);
+                console.log('✅ Face embedding refreshed alongside BSSID schedule update');
+              }
+            }
+          } catch (_) {
+            // Silently ignore — BSSID schedule save already succeeded
+          }
+        })();
       } else {
         console.log('⚠️ No BSSID schedule available:', data.message);
       }
@@ -3352,10 +3375,17 @@ export default function App() {
           if (normalizedUser.semester) storageData.push([SEMESTER_KEY, normalizedUser.semester]);
           if (normalizedUser.branch) storageData.push([BRANCH_KEY, normalizedUser.branch]);
 
-          // Save face embedding in parallel (non-blocking, after UI is shown)
-          if (data.user.faceEmbedding && Array.isArray(data.user.faceEmbedding)) {
-            SecureStorage.saveFaceEmbedding(data.user.faceEmbedding)
-              .then(success => { if (success) SecureStorage.saveEnrollmentNumber(normalizedUser.enrollmentNo); })
+          // Save face embedding at login — this is the primary offline cache.
+          // We use saveCachedServerEmbedding so it writes to ALL storage keys:
+          //   @letsbunk_cached_server_embedding  ← read by getStudentFaceData offline fallback
+          //   @letsbunk_cached_server_embedding_enrolled_at ← used to detect re-enrollment
+          //   @letsbunk_face_embedding            ← read by registerCheckIn
+          // This guarantees face verification works offline immediately after login,
+          // even if the student never had internet during a timer start before.
+          if (data.user.faceEmbedding && Array.isArray(data.user.faceEmbedding) && data.user.faceEmbedding.length > 0) {
+            const enrolledAt = data.user.faceEnrolledAt || data.user.enrolledAt || new Date().toISOString();
+            SecureStorage.saveCachedServerEmbedding(data.user.faceEmbedding, enrolledAt)
+              .then(() => SecureStorage.saveEnrollmentNumber(normalizedUser.enrollmentNo))
               .catch(() => { });
           }
         } else if (data.user.role === 'teacher') {
