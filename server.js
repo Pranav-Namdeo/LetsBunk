@@ -5222,15 +5222,32 @@ app.get('/api/time', (req, res) => {
 app.get('/api/config/branches', async (req, res) => {
     try {
         if (mongoose.connection.readyState === 1) {
-            const branches = await getBranchesFromConfig();
+            // Primary: branches from Config collection (admin-managed)
+            const configBranches = await getBranchesFromConfig();
+            const configValues = new Set(configBranches.map(b => b.value));
 
-            res.json({
-                success: true,
-                branches: branches,
-                count: branches.length
-            });
+            // Secondary: distinct branches from StudentManagement (auto-discovered)
+            const studentBranches = await StudentManagement.distinct('branch');
+            // Also from Timetables
+            const timetableBranches = await Timetable.distinct('branch');
+
+            // Merge all sources, deduplicated
+            const allBranchValues = new Set([
+                ...configValues,
+                ...studentBranches.filter(b => b),
+                ...timetableBranches.filter(b => b),
+            ]);
+
+            // Build final list: Config entries first (have displayName), then auto-discovered
+            const merged = [...configBranches];
+            for (const val of allBranchValues) {
+                if (!configValues.has(val)) {
+                    merged.push({ id: val.toLowerCase().replace(/\s+/g, '-'), name: val, displayName: val, value: val });
+                }
+            }
+
+            res.json({ success: true, branches: merged, count: merged.length });
         } else {
-            // Fallback to default branches
             res.json({
                 success: true,
                 branches: [
@@ -8455,26 +8472,50 @@ app.post('/api/random-ring', async (req, res) => {
 
         // Use liveTimerState to find students who are currently ACTIVE (timer running, not yet present)
         // Also include 'offline' students — they were attending and just lost WiFi temporarily
+        // Feature: also include students who had their timer running at any point today (wasActiveToday)
+        const today = new Date().toISOString().split('T')[0];
         const activeStudents = [];
+        const wasActiveTodayStudents = [];
+
         liveTimerState.forEach((state, enrollmentNo) => {
-            if (state.semester === semester && state.branch === branch &&
-                (state.status === 'active' || state.status === 'offline')) {
-                // studentId in liveTimerState is always enrollmentNo (set by offline-sync broadcast)
-                activeStudents.push({ enrollmentNo, name: state.name, studentId: enrollmentNo });
+            if (state.semester !== semester || state.branch !== branch) return;
+
+            const isCurrentlyActive = state.status === 'active' || state.status === 'offline';
+            const lastSyncDate = state.lastSyncTime
+                ? new Date(state.lastSyncTime).toISOString().split('T')[0]
+                : null;
+            const hadTimerToday = lastSyncDate === today && (state.attendedSeconds || 0) > 0;
+
+            if (isCurrentlyActive) {
+                activeStudents.push({
+                    enrollmentNo, name: state.name, studentId: enrollmentNo,
+                    ringEligibility: 'active' // currently attending
+                });
+            } else if (hadTimerToday) {
+                wasActiveTodayStudents.push({
+                    enrollmentNo, name: state.name, studentId: enrollmentNo,
+                    ringEligibility: 'wasActive' // attended earlier today
+                });
             }
         });
 
-        if (activeStudents.length === 0) {
-            return res.json({ success: true, message: 'No active students right now.', selectedStudents: [] });
+        // Combine: active students first, then was-active-today students
+        const eligibleStudents = [...activeStudents, ...wasActiveTodayStudents];
+
+        if (eligibleStudents.length === 0) {
+            return res.json({ success: true, message: 'No eligible students right now.', selectedStudents: [] });
         }
 
-        // Select students based on type
+        // Select students based on type — prefer active over wasActive when selecting by count
         let selectedStudents = [];
         if (type === 'all') {
-            selectedStudents = activeStudents;
+            selectedStudents = eligibleStudents;
         } else if (type === 'select' && count) {
-            const shuffled = [...activeStudents].sort(() => 0.5 - Math.random());
-            selectedStudents = shuffled.slice(0, Math.min(count, activeStudents.length));
+            // Shuffle active students first, then wasActive — so active get priority
+            const shuffledActive = [...activeStudents].sort(() => 0.5 - Math.random());
+            const shuffledWasActive = [...wasActiveTodayStudents].sort(() => 0.5 - Math.random());
+            const pool = [...shuffledActive, ...shuffledWasActive];
+            selectedStudents = pool.slice(0, Math.min(count, pool.length));
         }
 
         console.log(`✅ Selected ${selectedStudents.length} active students for random ring`);
@@ -8509,7 +8550,8 @@ app.post('/api/random-ring', async (req, res) => {
                 verified: false,
                 teacherAction: 'pending',
                 faceVerifiedAfterRejection: false,
-                autoAbsent: false
+                autoAbsent: false,
+                ringEligibility: s.ringEligibility || 'active' // 'active' | 'wasActive'
             })),
             triggeredAt: now,
             expiresAt,

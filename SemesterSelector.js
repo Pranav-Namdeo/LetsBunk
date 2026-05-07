@@ -4,7 +4,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SOCKET_URL } from './config';
 
 const CACHE_KEY = '@semester_branch_data';
-const CACHE_DURATION = 24 * 60 * 60 * 1000; // 24 hours
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes — short cache so new branches appear quickly
 
 const SemesterSelector = ({ 
   visible, 

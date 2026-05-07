@@ -692,9 +692,16 @@ export default function App() {
       }
 
       // Update class info only when it actually changes (avoid re-render every second)
+      // Don't clear to null immediately — only clear if offlinePeriod is also null
+      // (offlinePeriod acts as a secondary source; clearing both at once prevents flicker)
       setCurrentClassInfo(prev => {
         if (!foundClass && !prev) return prev;
-        if (!foundClass) return null;
+        if (!foundClass) {
+          // Only clear timetable-provided info if offlinePeriod is also gone
+          // (offlinePeriod synthesis effect will handle its own clearing)
+          if (prev && prev.isFromOfflineSchedule) return prev; // let offlinePeriod effect handle it
+          return null;
+        }
         if (!prev) return foundClass;
         // Only update if meaningful fields changed (not every second for elapsed/remaining)
         if (
@@ -750,9 +757,22 @@ export default function App() {
   // Refresh offline period data from BSSIDStorage every minute
   useEffect(() => {
     if (selectedRole !== 'student') return;
+    // Debounce null results — only clear offlinePeriod after 2 consecutive nulls
+    // This prevents a single missed poll from causing a flicker to "No Lectures"
+    let nullCount = 0;
     const fetchOfflinePeriod = async () => {
       const period = await BSSIDStorage.getCurrentPeriodBSSID();
-      setOfflinePeriod(period);
+      if (period) {
+        nullCount = 0;
+        setOfflinePeriod(period);
+      } else {
+        nullCount++;
+        // Only clear after 2 consecutive nulls (30s grace window at 15s interval)
+        if (nullCount >= 2) {
+          setOfflinePeriod(null);
+        }
+        // else: keep the last known period for one more cycle to avoid flicker
+      }
 
       // If timer is running, update currentLecture in offlineTimerState
       // so the Offline Timer box always shows the correct current period subject
@@ -5477,7 +5497,7 @@ export default function App() {
               </Text>
             </View>
           )}
-          {currentClassInfo && offlineTimerInitialized && offlinePeriod && (
+          {currentClassInfo && offlineTimerInitialized && (
             <View style={{
               width: '100%',
               maxWidth: 400,
