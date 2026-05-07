@@ -90,9 +90,12 @@ class OfflineTimerService {
     this.verifiedToday = false;          // true after first face-verify of the day
     this.verifiedTodayDate = null;       // date string "YYYY-MM-DD" of verification
 
-    // Face embedding cache — fetched once per day, re-fetched after 7 days or on change
+    // Face embedding cache
+    // In-memory: valid for the current app session (cleared when app is killed).
+    // Persistent: stored in AsyncStorage via SecureStorage — survives restarts,
+    //   cleared on logout or when the enrollment app updates the face (enrolledAt changes).
     this._cachedFaceEmbedding = null;
-    this._cachedFaceEmbeddingDate = null; // "YYYY-MM-DD" when embedding was cached
+    this._cachedFaceEmbeddingEnrolledAt = null; // ISO string from server (faceEnrolledAt)
     this._midnightResetTimer = null;
     
     // Sync queue for offline updates
@@ -428,61 +431,141 @@ class OfflineTimerService {
   }
 
   /**
-   * Get student's face embedding from server.
-   * Cached locally — only re-fetches after 7 days or if cache is empty.
+   * Get student's face embedding.
+   *
+   * Cache strategy (in priority order):
+   *
+   * 1. In-memory cache (_cachedFaceEmbedding) — valid for the current app session
+   *    as long as the server-reported enrolledAt hasn't changed.
+   *    Populated from AsyncStorage on first call, then kept in memory.
+   *
+   * 2. Persistent AsyncStorage cache (SecureStorage.getCachedServerEmbedding) —
+   *    survives app restarts. Invalidated when:
+   *      a) Student logs out  → clearFaceData() wipes it
+   *      b) App data is cleared by OS → AsyncStorage is empty
+   *      c) Enrollment app updates the face → server returns a newer enrolledAt
+   *
+   * 3. Fresh fetch from server — only when cache is missing or enrolledAt changed.
+   *    After a successful fetch the new embedding is written to both AsyncStorage
+   *    and the in-memory cache.
+   *
+   * Offline fallback: if the network is unavailable but a cache exists (even if
+   * enrolledAt can't be verified), the cached embedding is used so the student
+   * is never blocked from attending class due to a connectivity issue.
    */
   async getStudentFaceData() {
     try {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const SecureStorage = require('./SecureStorage').default;
 
-      // Return cached embedding if it's less than 7 days old
-      if (this._cachedFaceEmbedding && this._cachedFaceEmbeddingDate) {
-        const cachedDate = new Date(this._cachedFaceEmbeddingDate);
-        const daysDiff = (Date.now() - cachedDate.getTime()) / (1000 * 60 * 60 * 24);
-        if (daysDiff < 7) {
-          console.log('📦 Using cached face embedding (cached on', this._cachedFaceEmbeddingDate, ')');
-          return { success: true, embedding: this._cachedFaceEmbedding, enrolledAt: this._cachedFaceEmbeddingDate };
+      // ── 1. Check in-memory cache first (fastest path) ──────────────────────
+      if (this._cachedFaceEmbedding) {
+        console.log('📦 Using in-memory face embedding cache');
+        return {
+          success: true,
+          embedding: this._cachedFaceEmbedding,
+          enrolledAt: this._cachedFaceEmbeddingEnrolledAt,
+        };
+      }
+
+      // ── 2. Try to load from persistent AsyncStorage cache ──────────────────
+      const persistedCache = await SecureStorage.getCachedServerEmbedding();
+
+      // ── 3. Fetch from server to get the current enrolledAt ─────────────────
+      //    We always attempt a server call so we can detect enrollment changes.
+      //    If the network is unavailable we fall back to the persisted cache.
+      let serverData = null;
+      try {
+        console.log('📡 Fetching face embedding from server (checking for updates)...');
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        const response = await fetch(
+          `${this.serverUrl}/api/students/${this.studentId}/face-data`,
+          {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timeoutId);
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && Array.isArray(data.faceEmbedding) && data.faceEmbedding.length > 0) {
+            serverData = {
+              embedding: data.faceEmbedding,
+              enrolledAt: data.enrolledAt || null,
+            };
+          } else {
+            // Server responded but student has no face enrolled
+            return { success: false, error: data.error || 'No face embedding found. Please enroll your face first.' };
+          }
+        } else if (response.status === 404) {
+          return { success: false, error: 'Face not enrolled. Please enroll your face first using the enrollment app.' };
+        } else {
+          throw new Error(`Server error: ${response.status}`);
         }
+      } catch (networkError) {
+        // Network unavailable — fall back to persisted cache if available
+        if (persistedCache) {
+          console.warn('⚠️ Network unavailable — using persisted face embedding cache (offline fallback)');
+          // Warm the in-memory cache from the persisted one
+          this._cachedFaceEmbedding = persistedCache.embedding;
+          this._cachedFaceEmbeddingEnrolledAt = persistedCache.enrolledAt;
+          return {
+            success: true,
+            embedding: persistedCache.embedding,
+            enrolledAt: persistedCache.enrolledAt,
+            fromOfflineCache: true,
+          };
+        }
+        console.error('❌ Network unavailable and no cached embedding:', networkError.message);
+        return { success: false, error: `Failed to fetch face data: ${networkError.message}` };
       }
 
-      console.log('📡 Fetching fresh face embedding from server...');
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const response = await fetch(`${this.serverUrl}/api/students/${this.studentId}/face-data`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      // ── 4. Compare server enrolledAt with cached enrolledAt ────────────────
+      //    If they match the face hasn't changed — use the cache we already have.
+      //    If they differ (or cache is empty) — save the fresh server data.
+      const serverEnrolledAt = serverData.enrolledAt;
+      const cachedEnrolledAt = persistedCache?.enrolledAt;
 
-      if (!response.ok) {
-        throw new Error(`Server error: ${response.status}`);
+      const enrolledAtChanged =
+        !persistedCache ||                          // no cache at all
+        !cachedEnrolledAt ||                        // cache has no timestamp
+        serverEnrolledAt !== cachedEnrolledAt;      // enrollment app updated the face
+
+      if (!enrolledAtChanged) {
+        // Cache is still valid — use it and warm in-memory cache
+        console.log('✅ Face embedding cache is up-to-date (enrolledAt unchanged)');
+        this._cachedFaceEmbedding = persistedCache.embedding;
+        this._cachedFaceEmbeddingEnrolledAt = persistedCache.enrolledAt;
+        return {
+          success: true,
+          embedding: persistedCache.embedding,
+          enrolledAt: persistedCache.enrolledAt,
+        };
       }
 
-      const data = await response.json();
-
-      if (!data.success) {
-        return { success: false, error: data.error || 'Failed to get face data' };
+      // Cache is stale or missing — persist the fresh server data
+      if (enrolledAtChanged && persistedCache) {
+        console.log(`🔄 Face embedding updated by enrollment app (was: ${cachedEnrolledAt}, now: ${serverEnrolledAt}) — refreshing cache`);
+      } else {
+        console.log('✅ Face embedding fetched from server and cached persistently');
       }
 
-      if (!data.faceEmbedding || !Array.isArray(data.faceEmbedding)) {
-        return { success: false, error: 'No face embedding found. Please enroll your face first.' };
-      }
+      await SecureStorage.saveCachedServerEmbedding(serverData.embedding, serverEnrolledAt);
 
-      // Cache the embedding
-      this._cachedFaceEmbedding = data.faceEmbedding;
-      this._cachedFaceEmbeddingDate = todayStr;
-      console.log('✅ Face embedding fetched and cached');
+      // Warm in-memory cache
+      this._cachedFaceEmbedding = serverData.embedding;
+      this._cachedFaceEmbeddingEnrolledAt = serverEnrolledAt;
 
-      return { success: true, embedding: data.faceEmbedding, enrolledAt: data.enrolledAt };
+      return {
+        success: true,
+        embedding: serverData.embedding,
+        enrolledAt: serverEnrolledAt,
+      };
 
     } catch (error) {
-      console.error('❌ Error fetching face data:', error);
-      // If we have a stale cache, use it rather than failing completely
-      if (this._cachedFaceEmbedding) {
-        console.warn('⚠️ Using stale cached face embedding due to fetch error');
-        return { success: true, embedding: this._cachedFaceEmbedding, enrolledAt: this._cachedFaceEmbeddingDate };
-      }
+      console.error('❌ Unexpected error in getStudentFaceData:', error);
       return { success: false, error: `Failed to fetch face data: ${error.message}` };
     }
   }
@@ -1265,11 +1348,11 @@ class OfflineTimerService {
     midnight.setHours(24, 0, 0, 0); // next midnight
     const msUntilMidnight = midnight.getTime() - now.getTime();
     this._midnightResetTimer = setTimeout(() => {
-      console.log('🌙 Midnight — resetting verifiedToday and face embedding cache');
+      console.log('🌙 Midnight — resetting verifiedToday flag (face embedding cache is persistent, not time-based)');
       this.verifiedToday = false;
       this.verifiedTodayDate = null;
-      this._cachedFaceEmbedding = null;
-      this._cachedFaceEmbeddingDate = null;
+      // Do NOT clear the face embedding cache here — it is now persistent and
+      // invalidated only on logout, app data clear, or enrollment update.
       // Re-schedule for the next midnight
       this._scheduleMidnightReset();
     }, msUntilMidnight);
@@ -1962,6 +2045,12 @@ class OfflineTimerService {
       this.appStateSubscription.remove();
       this.appStateSubscription = null;
     }
+
+    // Clear in-memory face embedding cache on cleanup/logout.
+    // The persistent AsyncStorage cache is cleared separately by
+    // SecureStorage.clearFaceData() which is called in App.js handleLogout.
+    this._cachedFaceEmbedding = null;
+    this._cachedFaceEmbeddingEnrolledAt = null;
     
     this.listeners = [];
   }

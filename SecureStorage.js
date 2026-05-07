@@ -5,6 +5,10 @@ const KEYS = {
   FACE_EMBEDDING: '@letsbunk_face_embedding',
   ENROLLMENT_NO: '@letsbunk_enrollment_no',
   FACE_ENROLLED_AT: '@letsbunk_face_enrolled_at',
+  // Persistent server-fetched embedding cache (survives app restarts).
+  // Invalidated on logout, app data clear, or when the server reports a newer enrolledAt.
+  CACHED_SERVER_EMBEDDING:        '@letsbunk_cached_server_embedding',
+  CACHED_SERVER_EMBEDDING_ENROLLED_AT: '@letsbunk_cached_server_embedding_enrolled_at',
 };
 
 class SecureStorage {
@@ -115,6 +119,78 @@ class SecureStorage {
     }
   }
 
+  // ── Persistent server-fetched embedding cache ──────────────────────────────
+  // This cache lives in AsyncStorage so it survives app restarts.
+  // It is invalidated when:
+  //   1. The student logs out (clearFaceData is called)
+  //   2. The app data is cleared by the OS
+  //   3. The enrollment app updates the face (server returns a newer enrolledAt)
+
+  /**
+   * Save the server-fetched face embedding to persistent storage.
+   * @param {Array<number>} embedding - 192-float embedding from server
+   * @param {string} serverEnrolledAt - ISO timestamp returned by the server (faceEnrolledAt)
+   * @returns {Promise<boolean>}
+   */
+  static async saveCachedServerEmbedding(embedding, serverEnrolledAt) {
+    try {
+      if (!embedding || !Array.isArray(embedding)) {
+        console.warn('⚠️ Invalid embedding for cache');
+        return false;
+      }
+      await AsyncStorage.setItem(KEYS.CACHED_SERVER_EMBEDDING, embedding.join(','));
+      await AsyncStorage.setItem(
+        KEYS.CACHED_SERVER_EMBEDDING_ENROLLED_AT,
+        serverEnrolledAt || new Date().toISOString()
+      );
+      console.log(`✅ Server embedding cached persistently (enrolledAt: ${serverEnrolledAt})`);
+      return true;
+    } catch (error) {
+      console.error('❌ Error saving cached server embedding:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Load the persistent server-fetched embedding cache.
+   * @returns {Promise<{embedding: Array<number>, enrolledAt: string}|null>}
+   *   null if no cache exists.
+   */
+  static async getCachedServerEmbedding() {
+    try {
+      const embeddingStr = await AsyncStorage.getItem(KEYS.CACHED_SERVER_EMBEDDING);
+      const enrolledAt   = await AsyncStorage.getItem(KEYS.CACHED_SERVER_EMBEDDING_ENROLLED_AT);
+      if (!embeddingStr) return null;
+      const embedding = embeddingStr.split(',').map(parseFloat);
+      console.log(`📦 Persistent server embedding loaded (enrolledAt: ${enrolledAt})`);
+      return { embedding, enrolledAt: enrolledAt || null };
+    } catch (error) {
+      console.error('❌ Error loading cached server embedding:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Clear only the persistent server embedding cache.
+   * Called when the enrollment app updates the face or on logout.
+   * @returns {Promise<boolean>}
+   */
+  static async clearCachedServerEmbedding() {
+    try {
+      await AsyncStorage.multiRemove([
+        KEYS.CACHED_SERVER_EMBEDDING,
+        KEYS.CACHED_SERVER_EMBEDDING_ENROLLED_AT,
+      ]);
+      console.log('🗑️ Persistent server embedding cache cleared');
+      return true;
+    } catch (error) {
+      console.error('❌ Error clearing cached server embedding:', error);
+      return false;
+    }
+  }
+
+  // ── End persistent server embedding cache ───────────────────────────────────
+
   /**
    * Clear all face data (logout)
    * @returns {Promise<boolean>} Success status
@@ -125,8 +201,12 @@ class SecureStorage {
         KEYS.FACE_EMBEDDING,
         KEYS.ENROLLMENT_NO,
         KEYS.FACE_ENROLLED_AT,
+        // Also wipe the persistent server embedding so the next login
+        // always fetches a fresh copy from the server.
+        KEYS.CACHED_SERVER_EMBEDDING,
+        KEYS.CACHED_SERVER_EMBEDDING_ENROLLED_AT,
       ]);
-      console.log('🗑️ Face data cleared');
+      console.log('🗑️ Face data cleared (including persistent server embedding cache)');
       return true;
     } catch (error) {
       console.error('❌ Error clearing face data:', error);
