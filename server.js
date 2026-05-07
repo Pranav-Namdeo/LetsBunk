@@ -2977,15 +2977,21 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     computedStatus = 'active';
                 }
             } else {
-                // No active period on server right now — regardless of isRunning, mark absent.
-                // A student cannot be "attending" a class that doesn't exist on the timetable.
-                console.log(`⚠️ [OFFLINE-SYNC] No active period for ${studentId} — forcing status to absent (isRunning=${isRunning})`);
-                computedStatus = 'absent';
+                // No active period on server right now.
+                // If the student's timer is still running (they haven't stopped yet),
+                // keep them as 'active' so the teacher can still see and ring them.
+                // Only force 'absent' if the timer is not running.
+                if (Boolean(isRunning)) {
+                    computedStatus = 'active';
+                } else {
+                    computedStatus = 'absent';
+                }
             }
         } catch (statusErr) {
             console.warn('⚠️ Could not compute status:', statusErr.message);
-            // On error, default to absent — never show attending without a verified active period
-            computedStatus = 'absent';
+            // On error, preserve running state — don't silently mark absent
+            if (Boolean(isRunning)) computedStatus = 'active';
+            else computedStatus = 'absent';
         }
 
         // Update status in DB — both top-level status and attendanceSession.status
