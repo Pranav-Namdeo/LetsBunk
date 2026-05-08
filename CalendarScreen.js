@@ -621,14 +621,14 @@ export default function CalendarScreen({
                                                 </View>
                                             )}
 
-                                            {/* Teacher day-mode: total student count badge */}
-                                            {isTeacher && filterMode === 'day' && stats && !holiday && (
-                                                <View style={styles.teacherDateBadge}>
-                                                    <Text style={[styles.teacherDateCount, { color: theme.primary }]}>
-                                                        {stats.total}
-                                                    </Text>
-                                                </View>
-                                            )}
+                            {/* Teacher day-mode: present student count badge */}
+                            {isTeacher && filterMode === 'day' && stats && !holiday && (
+                                <View style={styles.teacherDateBadge}>
+                                    <Text style={[styles.teacherDateCount, { color: '#10b981' }]}>
+                                        {stats.present}
+                                    </Text>
+                                </View>
+                            )}
 
                                             {/* Teacher subject-mode: dot to show subject was held */}
                                             {isTeacher && filterMode === 'subject' && active && !holiday && (
@@ -666,7 +666,7 @@ export default function CalendarScreen({
                                     <Text style={[styles.legendText, { color: theme.textSecondary }]}>Has data</Text>
                                 </View>
                                 <View style={styles.legendItem}>
-                                    <Text style={[styles.legendText, { color: theme.textSecondary }]}>Badge = total students</Text>
+                                    <Text style={[styles.legendText, { color: theme.textSecondary }]}>Badge = present students</Text>
                                 </View>
                             </>
                         ) : (

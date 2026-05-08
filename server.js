@@ -1402,8 +1402,14 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
         const teacherName = teacher.name;
         console.log(`✅ Found teacher: ${teacherName}`);
 
-        // Find all timetables where this teacher is assigned
-        const timetables = await Timetable.find({});
+        // Find timetables where this teacher is assigned on the current day — filter at DB level
+        const timetables = await Timetable.find({
+            [`timetable.${currentDay}`]: {
+                $elemMatch: {
+                    teacher: { $regex: new RegExp(teacherName, 'i') }
+                }
+            }
+        });
 
         // Find current period
         let currentClass = null;
