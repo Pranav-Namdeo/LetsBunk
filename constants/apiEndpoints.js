@@ -147,7 +147,8 @@ export const GET_TEACHER_ATTENDANCE_LECTURES = (teacherId) => `${BASE_URL}/api/a
 // Attendance — Actions
 // ----------------------------
 export const POST_ATTENDANCE_CHECK_IN             = `${BASE_URL}/api/attendance/check-in`;
-export const POST_ATTENDANCE_RECORD               = `${BASE_URL}/api/attendance/record`;
+// POST_ATTENDANCE_RECORD → redirected to period-sync (old /api/attendance/record endpoint removed)
+export const POST_ATTENDANCE_RECORD               = `${BASE_URL}/api/attendance/period-sync`;
 export const POST_ATTENDANCE_OFFLINE_SYNC         = `${BASE_URL}/api/attendance/offline-sync`;
 export const POST_ATTENDANCE_PERIOD_SYNC          = `${BASE_URL}/api/attendance/period-sync`;
 export const POST_ATTENDANCE_RANDOM_RING_RESPONSE = `${BASE_URL}/api/attendance/random-ring-response`;
@@ -258,13 +259,3 @@ export const POST_ADMIN_PURGE_ORPHAN_SUBJECTS = `${BASE_URL}/api/admin/purge-orp
 // ----------------------------
 export const DELETE_STUDENTS_ALL  = `${BASE_URL}/api/students/delete-all`;  // ⚠️ NOT IMPLEMENTED in server.js
 export const DELETE_TEACHERS_ALL  = `${BASE_URL}/api/teachers/delete-all`;  // ⚠️ NOT IMPLEMENTED in server.js
-
-// POST_STUDENT_REGISTER was the old anonymous name-only registration flow.
-// The app now uses POST /api/login for all authentication.
-// Kept as alias to POST_LOGIN so any remaining call doesn't 404.
-export const POST_STUDENT_REGISTER = `${BASE_URL}/api/login`;
-
-// POST_ATTENDANCE_RECORD was the old daily summary endpoint.
-// Replaced by POST /api/attendance/period-sync (per-period) + offline-sync.
-// Redirect to period-sync so any remaining call hits a live endpoint.
-export const POST_ATTENDANCE_RECORD = `${BASE_URL}/api/attendance/period-sync`;
