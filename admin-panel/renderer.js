@@ -1,11 +1,15 @@
 // Prevent production UI hangs: default all admin fetches to a bounded timeout.
 // Calls that already pass a signal, such as long migrations, keep their own timeout.
 const ADMIN_FETCH_TIMEOUT_MS = 30000;
+const PHOTO_UPLOAD_TIMEOUT_MS = 120000; // 2 minutes for large base64 photos
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async (input, init = {}) => {
     if (init.signal) return nativeFetch(input, init);
+    // Use longer timeout for photo uploads (large base64 payloads)
+    const isPhotoUpload = typeof input === 'string' && input.includes('/api/upload-photo');
+    const timeoutMs = isPhotoUpload ? PHOTO_UPLOAD_TIMEOUT_MS : ADMIN_FETCH_TIMEOUT_MS;
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), ADMIN_FETCH_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
         return await nativeFetch(input, { ...init, signal: controller.signal });
     } finally {

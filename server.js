@@ -5791,7 +5791,7 @@ const studentManagementSchema = new mongoose.Schema({
     password: { type: String, required: true },
     branch: { type: String, required: true },
     semester: { type: String, required: true },
-    dob: { type: Date, required: true },
+    dob: { type: Date },  // optional — not required for system operation
     phone: String,
     photoUrl: String,
     faceEmbedding: { type: [Number], default: null }, // Face recognition embedding (192 floats)
@@ -6271,7 +6271,15 @@ app.post('/api/students', async (req, res) => {
     try {
         console.log('Received student data:', req.body);
         if (mongoose.connection.readyState === 1) {
-            const student = new StudentManagement(req.body);
+            // Sanitise: remove empty-string fields that have schema defaults or are optional
+            const body = { ...req.body };
+            if (!body.dob || body.dob === '') delete body.dob;  // dob required but may be empty string
+            if (!body.phone) delete body.phone;
+            if (!body.photoUrl) delete body.photoUrl;
+            // branch may come as 'course' from older form versions
+            if (!body.branch && body.course) { body.branch = body.course; delete body.course; }
+
+            const student = new StudentManagement(body);
             await student.save();
             console.log('Student saved to MongoDB:', student);
             res.json({ success: true, student });
@@ -6288,6 +6296,14 @@ app.post('/api/students', async (req, res) => {
         }
     } catch (error) {
         console.error('Error saving student:', error);
+        if (error.name === 'ValidationError') {
+            const details = Object.values(error.errors).map(e => e.message).join('; ');
+            return res.status(400).json({ success: false, error: 'Validation failed', details });
+        }
+        if (error.code === 11000) {
+            const field = Object.keys(error.keyPattern || {})[0] || 'field';
+            return res.status(400).json({ success: false, error: `Duplicate value: ${field} already exists` });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 });
