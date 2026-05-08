@@ -81,7 +81,7 @@ export default function CalendarScreen({
             fetchMonthAttendance();
         }
         fetchHolidays();
-    }, [currentDate, studentId, semester, branch, filterMode, selectedSubject, isTimerRunning]);
+    }, [currentDate, studentId, semester, branch, filterMode, selectedSubject]);
 
     // Load subject list when teacher switches to subject mode
     useEffect(() => {
@@ -123,7 +123,11 @@ export default function CalendarScreen({
         setFetchError(null);
         // Optimistic: keep previous data visible while loading
         try {
-            const data = await apiFetch(`${socketUrl}/api/attendance/records?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`);
+            const year  = currentDate.getFullYear();
+            const month = currentDate.getMonth() + 1;
+            const data = await apiFetch(
+                `${socketUrl}/api/attendance/records?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}&year=${year}&month=${month}`
+            );
             if (data.success && data.records) {
                 const dateMap = {};
                 let mp = 0, ma = 0;
@@ -201,7 +205,11 @@ export default function CalendarScreen({
         setLoading(true);
         setFetchError(null);
         try {
-            const data = await apiFetch(`${socketUrl}/api/attendance/records?studentId=${encodeURIComponent(studentId)}`);
+            const year  = currentDate.getFullYear();
+            const month = currentDate.getMonth() + 1; // 1-based
+            const data = await apiFetch(
+                `${socketUrl}/api/attendance/records?studentId=${encodeURIComponent(studentId)}&year=${year}&month=${month}`
+            );
             if (data.success && data.records) {
                 const aMap = {}, rMap = {};
                 data.records.forEach(r => {
@@ -346,22 +354,26 @@ export default function CalendarScreen({
     };
 
     // Is this date highlighted in the current filter mode?
+    // Pre-convert activeDates Set to IST YYYY-MM-DD strings for O(1) lookup
+    const activeDateStrings = React.useMemo(() => {
+        const toISTDateStr = (d) => {
+            const ist = new Date(new Date(d).getTime() + 5.5 * 60 * 60 * 1000);
+            return ist.toISOString().split('T')[0];
+        };
+        const s = new Set();
+        activeDates.forEach(iso => s.add(toISTDateStr(iso)));
+        return s;
+    }, [activeDates]);
+
     const isActiveDate = (date) => {
         if (!date) return false;
         if (!isTeacher) return !!attendanceData[date.toDateString()];
         if (filterMode === 'day') return !!attendanceData[date.toDateString()];
-        // subject mode: dates from server are stored as IST midnight UTC strings e.g. "2026-05-05T18:30:00.000Z"
-        // which equals IST date May 06. Convert both sides to IST YYYY-MM-DD for comparison.
         const toISTDateStr = (d) => {
             const ist = new Date(d.getTime() + 5.5 * 60 * 60 * 1000);
-            return ist.toISOString().split('T')[0]; // "2026-05-06"
+            return ist.toISOString().split('T')[0];
         };
-        const cellDateStr = toISTDateStr(date);
-        for (const iso of activeDates) {
-            const isoDate = new Date(iso);
-            if (toISTDateStr(isoDate) === cellDateStr) return true;
-        }
-        return false;
+        return activeDateStrings.has(toISTDateStr(date));
     };
 
     const getHoliday = (date) => date ? holidays[date.toDateString()] : null;
@@ -377,9 +389,9 @@ export default function CalendarScreen({
             const d = new Date(key);
             if (d.getFullYear() === yr && d.getMonth() === mo) {
                 const status = typeof val === 'string' ? val : val?.status;
-                // Only 'present' (threshold crossed) counts — 'active' is still in progress
                 if (status === 'present') present++;
-                else absent++;
+                else if (status === 'absent') absent++;
+                // 'active' = in-progress today, don't count yet
             }
         });
         return { present, absent, total: present + absent };

@@ -7995,7 +7995,7 @@ app.get('/api/attendance/history/:enrollmentNo', async (req, res) => {
 // Used by: admin-panel showStudentAttendance(), App.js fetchStudentDetails()
 app.get('/api/attendance/records', async (req, res) => {
     try {
-        const { studentId, semester, branch, startDate, endDate } = req.query;
+        const { studentId, semester, branch, startDate, endDate, year, month } = req.query;
 
         if (!studentId && (!semester || !branch)) {
             return res.status(400).json({
@@ -8012,7 +8012,14 @@ app.get('/api/attendance/records', async (req, res) => {
             query = { semester, branch };
         }
 
-        if (startDate || endDate) {
+        // Month-scoped filter (preferred — fast, index-friendly)
+        if (year && month) {
+            const y = parseInt(year), m = parseInt(month) - 1; // month is 1-based from client
+            query.date = {
+                $gte: new Date(y, m, 1),
+                $lt:  new Date(y, m + 1, 1)
+            };
+        } else if (startDate || endDate) {
             query.date = {};
             if (startDate) query.date.$gte = new Date(startDate);
             if (endDate)   query.date.$lte = new Date(endDate);
