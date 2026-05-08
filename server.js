@@ -6056,9 +6056,27 @@ app.get('/api/daily-bssid-schedule', async (req, res) => {
                     }
                 }
 
+                // Look up shortName from Subject collection
+                const subjectName = period.subject || period.teacherName || '';
+                let shortName = '';
+                if (subjectName) {
+                    const subjectDoc = await Subject.findOne({
+                        $or: [
+                            { subjectName: { $regex: new RegExp(`^${subjectName}$`, 'i') } },
+                            { subjectCode: period.subjectCode || '' }
+                        ],
+                        semester: student.semester,
+                        branch: student.branch
+                    }).lean();
+                    if (subjectDoc && subjectDoc.shortName) {
+                        shortName = subjectDoc.shortName;
+                    }
+                }
+
                 return {
                     period: period.period,
-                    subject: period.subject || period.teacherName || '',
+                    subject: subjectName,
+                    shortName: shortName,
                     subjectCode: period.subjectCode || '',
                     teacher: period.teacher || period.teacherName || '',
                     room: period.room || '',

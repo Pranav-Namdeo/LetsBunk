@@ -171,6 +171,11 @@ export default function CircularTimer({
         const newSegments = schedule.map((slot, i) => {
           const subject = (slot.subject || '').toUpperCase().trim();
           
+          // Use shortName from server if available, otherwise derive it
+          const shortLabel = slot.shortName && slot.shortName.trim()
+            ? slot.shortName.trim()
+            : getShortForm(subject) || subject.substring(0, 6) || 'CLASS';
+          
           // Enhanced color mapping with partial matching
           const getColor = (subj) => {
             // Direct matches
@@ -239,12 +244,11 @@ export default function CircularTimer({
             return colors[hash % colors.length];
           };
           
-          const shortLabel = getShortForm(subject);
           const color = getColor(subject);
 
           return {
             id: i + 1,
-            label: shortLabel || 'CLASS',
+            label: shortLabel,
             fullLabel: subject,   // original name shown in tooltip on tap
             room: slot.room || '',
             time: slot.time || '',
