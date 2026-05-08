@@ -24,7 +24,11 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var takeDataButton: Button
 
     private lateinit var cameraExecutor: ExecutorService
-    private lateinit var faceDetectionHelper: FaceDetectionHelper
+
+    // Helpers are created lazily on the camera executor thread to avoid
+    // MediaPipe's "no caller found on the stack" crash when initializing
+    // on the main thread.
+    private var faceDetectionHelper: FaceDetectionHelper? = null
     private lateinit var faceEmbeddingHelper: FaceEmbeddingHelper
     private lateinit var livenessDetector: LivenessDetector
 
@@ -32,45 +36,75 @@ class CameraActivity : AppCompatActivity() {
     private val maxFrames = 10
     private var isProcessing = false
     private var livenessVerified = false
-    private var frameCount = 0
-
-    /**
-     * When false the camera preview runs but NO liveness check or embedding
-     * capture happens — the student can freely adjust their face position.
-     * Flips to true only when the student taps "Take Data".
-     */
     private var readyToCapture = false
+
+    // Set to true once the background init completes successfully
+    @Volatile private var helpersReady = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera)
 
-        previewView     = findViewById(R.id.previewView)
-        statusText      = findViewById(R.id.statusText)
-        progressText    = findViewById(R.id.progressText)
-        livenessStatus  = findViewById(R.id.livenessStatus)
-        takeDataButton  = findViewById(R.id.takeDataButton)
+        previewView    = findViewById(R.id.previewView)
+        statusText     = findViewById(R.id.statusText)
+        progressText   = findViewById(R.id.progressText)
+        livenessStatus = findViewById(R.id.livenessStatus)
+        takeDataButton = findViewById(R.id.takeDataButton)
 
+        // Single-thread executor — all camera + ML work runs here
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        faceDetectionHelper = FaceDetectionHelper(
-            context  = this,
-            onResults = { },
-            onError   = { error ->
-                runOnUiThread { Toast.makeText(this, error, Toast.LENGTH_SHORT).show() }
-            }
-        )
         faceEmbeddingHelper = FaceEmbeddingHelper(this)
         livenessDetector    = LivenessDetector()
 
-        // ── Take Data button ──────────────────────────────────────────────────
+        // Check TFLite model availability up-front
+        if (!faceEmbeddingHelper.isModelReady) {
+            statusText.text = "Error: Face model failed to load. Cannot enroll."
+            takeDataButton.isEnabled = false
+            Toast.makeText(
+                this,
+                "Face recognition model is missing. Please reinstall the app.",
+                Toast.LENGTH_LONG
+            ).show()
+            return
+        }
+
+        // Initialize MediaPipe on the background executor — NOT on the main thread
+        statusText.text = "Initializing camera..."
+        takeDataButton.isEnabled = false
+
+        cameraExecutor.execute {
+            val helper = FaceDetectionHelper(
+                context   = this,
+                onResults = { },
+                onError   = { error ->
+                    runOnUiThread {
+                        Toast.makeText(this, error, Toast.LENGTH_SHORT).show()
+                    }
+                }
+            )
+            helper.initialize()   // safe here — runs on background thread
+            faceDetectionHelper = helper
+            helpersReady = true
+
+            runOnUiThread {
+                if (helper.isReady) {
+                    statusText.text = "Position your face inside the oval, then tap Take Data"
+                    takeDataButton.isEnabled = true
+                } else {
+                    statusText.text = "Face detector failed to initialize."
+                    takeDataButton.isEnabled = false
+                }
+            }
+        }
+
         takeDataButton.setOnClickListener {
             readyToCapture = true
-            takeDataButton.visibility = View.GONE          // hide button once tapped
-            livenessDetector.reset()                       // fresh liveness state
-            statusText.text    = "Please move your head slightly to verify liveness"
+            takeDataButton.visibility = View.GONE
+            livenessDetector.reset()
+            statusText.text     = "Please move your head slightly to verify liveness"
             livenessStatus.text = "Liveness check: Starting..."
-            progressText.text  = "Frames: 0/$maxFrames"
+            progressText.text   = "Frames: 0/$maxFrames"
         }
 
         startCamera()
@@ -93,47 +127,53 @@ class CameraActivity : AppCompatActivity() {
                     it.setAnalyzer(cameraExecutor) { imageProxy -> processImage(imageProxy) }
                 }
 
-            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
-
             try {
                 cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalyzer)
+                cameraProvider.bindToLifecycle(
+                    this,
+                    CameraSelector.DEFAULT_FRONT_CAMERA,
+                    preview,
+                    imageAnalyzer
+                )
             } catch (e: Exception) {
-                Toast.makeText(this, "Camera initialization failed", Toast.LENGTH_SHORT).show()
+                runOnUiThread {
+                    Toast.makeText(this, "Camera initialization failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
             }
-
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun processImage(imageProxy: ImageProxy) {
-        // While waiting for the student to tap "Take Data", just show the preview
-        if (!readyToCapture) {
+        // Don't process until helpers are ready and user tapped Take Data
+        if (!helpersReady || !readyToCapture) {
             imageProxy.close()
             return
         }
-
         if (isProcessing || capturedEmbeddings.size >= maxFrames) {
             imageProxy.close()
             return
         }
 
+        val detector = faceDetectionHelper ?: run {
+            imageProxy.close()
+            return
+        }
+
         isProcessing = true
-        frameCount++
 
         val bitmap        = imageProxy.toBitmap()
         val rotatedBitmap = rotateBitmap(bitmap, imageProxy.imageInfo.rotationDegrees.toFloat())
-
-        val detectionResult = faceDetectionHelper.detectFace(rotatedBitmap)
+        val detectionResult = detector.detectFace(rotatedBitmap)
 
         if (detectionResult != null && detectionResult.detections().isNotEmpty()) {
-            val detection  = detectionResult.detections()[0]
+            val detection   = detectionResult.detections()[0]
             val boundingBox = detection.boundingBox()
 
             if (!livenessVerified) {
                 val livenessResult = livenessDetector.analyzeLiveness(detectionResult, rotatedBitmap)
 
                 runOnUiThread {
-                    statusText.text    = livenessResult.message
+                    statusText.text     = livenessResult.message
                     livenessStatus.text = "Liveness: ${livenessDetector.getProgress()}"
                     livenessStatus.setTextColor(
                         if (livenessResult.isLive) 0xFF4CAF50.toInt() else 0xFFFFEB3B.toInt()
@@ -143,10 +183,10 @@ class CameraActivity : AppCompatActivity() {
                 if (livenessResult.isLive) {
                     livenessVerified = true
                     runOnUiThread {
-                        statusText.text    = "Liveness verified! Capturing facial data..."
+                        statusText.text     = "Liveness verified! Capturing facial data..."
                         livenessStatus.text = "Liveness: ✓ Verified"
                         livenessStatus.setTextColor(0xFF4CAF50.toInt())
-                        progressText.text  = "Frames: 0/$maxFrames"
+                        progressText.text   = "Frames: 0/$maxFrames"
                     }
                 }
             } else {
@@ -184,8 +224,7 @@ class CameraActivity : AppCompatActivity() {
     }
 
     private fun rotateBitmap(bitmap: Bitmap, degrees: Float): Bitmap {
-        val matrix = Matrix()
-        matrix.postRotate(degrees)
+        val matrix = Matrix().apply { postRotate(degrees) }
         return Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
     }
 
@@ -196,11 +235,8 @@ class CameraActivity : AppCompatActivity() {
         }
 
         val averageEmbedding = calculateAverageEmbedding(capturedEmbeddings)
-
-        val intent = intent
         intent.putExtra("face_embedding", averageEmbedding)
         setResult(RESULT_OK, intent)
-
         finish()
     }
 
@@ -213,14 +249,14 @@ class CameraActivity : AppCompatActivity() {
             average[i] = sum / embeddings.size
         }
         val norm = kotlin.math.sqrt(average.sumOf { (it * it).toDouble() }).toFloat()
-        for (i in average.indices) average[i] /= norm
+        if (norm > 0f) for (i in average.indices) average[i] /= norm
         return average
     }
 
     override fun onDestroy() {
         super.onDestroy()
         cameraExecutor.shutdown()
-        faceDetectionHelper.close()
+        faceDetectionHelper?.close()
         faceEmbeddingHelper.close()
     }
 }
@@ -242,9 +278,10 @@ fun ImageProxy.toBitmap(): Bitmap {
     vBuffer.get(nv21, ySize, vSize)
     uBuffer.get(nv21, ySize + vSize, uSize)
 
-    val yuvImage = android.graphics.YuvImage(nv21, android.graphics.ImageFormat.NV21, width, height, null)
+    val yuvImage = android.graphics.YuvImage(
+        nv21, android.graphics.ImageFormat.NV21, width, height, null
+    )
     val out = java.io.ByteArrayOutputStream()
     yuvImage.compressToJpeg(android.graphics.Rect(0, 0, width, height), 100, out)
-    val imageBytes = out.toByteArray()
-    return android.graphics.BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size)
+    return android.graphics.BitmapFactory.decodeByteArray(out.toByteArray(), 0, out.size())
 }
