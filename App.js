@@ -2574,52 +2574,12 @@ export default function App() {
   };
 
   const handleNameSubmit = async () => {
+    // Old anonymous name-only registration flow — replaced by full login.
+    // Redirect to login screen instead of calling the old /api/student/register.
     if (!studentName.trim()) return;
-
-    try {
-      const response = await fetch(POST_STUDENT_REGISTER, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: studentName.trim() })
-      });
-
-      const data = await response.json();
-      if (data.success) {
-        // data.studentId is always enrollmentNo (server guarantees this)
-        const enrollmentNo = data.studentId;
-        await AsyncStorage.setItem(STUDENT_ID_KEY, enrollmentNo);
-        await AsyncStorage.setItem(STUDENT_NAME_KEY, studentName.trim());
-        setStudentId(enrollmentNo);
-        setShowNameInput(false);
-      } else {
-        // Fallback: offline mode — no enrollmentNo available, use timestamp
-        let offlineId;
-        try {
-          const serverTime = getServerTime();
-          offlineId = 'offline_' + serverTime.now();
-        } catch {
-          offlineId = 'offline_' + _appGetBootMs();
-        }
-        await AsyncStorage.setItem(STUDENT_ID_KEY, offlineId);
-        await AsyncStorage.setItem(STUDENT_NAME_KEY, studentName.trim());
-        setStudentId(offlineId);
-        setShowNameInput(false);
-      }
-    } catch (error) {
-      console.log('Error registering student, using offline mode:', error);
-      // Fallback: offline mode — no enrollmentNo available, use timestamp
-      let offlineId;
-      try {
-        const serverTime = getServerTime();
-        offlineId = 'offline_' + serverTime.now();
-      } catch {
-        offlineId = 'offline_' + _appGetBootMs();
-      }
-      await AsyncStorage.setItem(STUDENT_ID_KEY, offlineId);
-      await AsyncStorage.setItem(STUDENT_NAME_KEY, studentName.trim());
-      setStudentId(offlineId);
-      setShowNameInput(false);
-    }
+    console.log('ℹ️ handleNameSubmit: old flow — redirecting to login screen');
+    setShowNameInput(false);
+    setShowLogin(true);
   };
 
   // Timer runs continuously when started - no countdown logic needed
@@ -2692,18 +2652,20 @@ export default function App() {
           clientDate = new Date(_appGetBootMs()).toISOString();
         }
 
+        // POST_ATTENDANCE_RECORD now routes to /api/attendance/period-sync
         await fetch(POST_ATTENDANCE_RECORD, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            studentId,          // === enrollmentNo always
-            studentName,
-            enrollmentNo: studentId,   // explicit alias for server compat
-            status: finalStatus,
-            timerValue: timer,
+            studentId,
+            timerSeconds: timer,
+            period: offlineTimerState?.currentLecture?.period || 'P1',
+            subject: offlineTimerState?.currentLecture?.subject || '',
+            teacher: offlineTimerState?.currentLecture?.teacher || '',
+            room: offlineTimerState?.currentLecture?.room || '',
             semester,
             branch,
-            clientDate: clientDate
+            timestamp: clientDate
           })
         });
       } catch (error) {
