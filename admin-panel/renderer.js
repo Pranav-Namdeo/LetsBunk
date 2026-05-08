@@ -3348,10 +3348,13 @@ async function deleteStudent(id) {
     const identifier = student?._id || id;
 
     try {
-        const response = await fetch(GET_STUDENTS, { method: 'DELETE' });
+        const response = await fetch(`${GET_STUDENTS}/${encodeURIComponent(identifier)}`, { method: 'DELETE' });
         if (response.ok) {
             showNotification('Student deleted', 'success');
             loadStudents();
+        } else {
+            const err = await response.json().catch(() => ({}));
+            showNotification(err.error || 'Error deleting student', 'error');
         }
     } catch (error) {
         showNotification('Error deleting student', 'error');
@@ -3362,10 +3365,13 @@ async function deleteTeacher(id) {
     if (!confirm('Are you sure you want to delete this teacher?')) return;
 
     try {
-        const response = await fetch(GET_TEACHERS, { method: 'DELETE' });
+        const response = await fetch(`${GET_TEACHERS}/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (response.ok) {
             showNotification('Teacher deleted', 'success');
             loadTeachers();
+        } else {
+            const err = await response.json().catch(() => ({}));
+            showNotification(err.error || 'Error deleting teacher', 'error');
         }
     } catch (error) {
         showNotification('Error deleting teacher', 'error');
@@ -3377,10 +3383,13 @@ async function deleteClassroom(id) {
     if (!confirm(`Are you sure you want to delete classroom ${classroom?.roomNumber || 'this'}?`)) return;
 
     try {
-        const response = await fetch(GET_CLASSROOMS, { method: 'DELETE' });
+        const response = await fetch(`${GET_CLASSROOMS}/${encodeURIComponent(id)}`, { method: 'DELETE' });
         if (response.ok) {
             showNotification('Classroom deleted', 'success');
             loadClassrooms();
+        } else {
+            const err = await response.json().catch(() => ({}));
+            showNotification(err.error || 'Error deleting classroom', 'error');
         }
     } catch (error) {
         showNotification('Error deleting classroom', 'error');
@@ -6522,13 +6531,6 @@ async function backfillTimetableHistory() {
     if (!confirm('This will backfill TimetableHistory from existing PeriodAttendance records.\nRun once after deploying the update. Continue?')) return;
     const btn = event?.target;
     if (btn) { btn.disabled = true; btn.textContent = ' Running'; }
-    try {
-        const data = await calApiFetch(POST_TIMETABLE_HISTORY_BACKFILL, 60000);
-        // calApiFetch only does GET  use fetch directly for POST
-        throw new Error('use_fetch'); // fallthrough to catch
-    } catch (_) {
-        // POST needs direct fetch
-    }
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 60000);
