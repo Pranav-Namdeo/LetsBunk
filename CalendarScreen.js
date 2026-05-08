@@ -143,7 +143,9 @@ export default function CalendarScreen({
                 setAttendanceData(dateMap);
                 setMonthStats({ present: mp, absent: ma, total: mp + ma });
             } else {
-                setFetchError('No attendance data found for this class.');
+                setFetchError(null);
+                setAttendanceData({});
+                setMonthStats({ present: 0, absent: 0, total: 0 });
             }
         } catch (err) {
             setFetchError(`Failed to load attendance: ${err.message}`);

@@ -68,25 +68,15 @@ export default function TimetableScreen({
         throw new Error('No teacher identification available');
       }
       
-      // Fetch latest teacher data from server
-      const response = await fetch(`${socketUrl}/api/teachers`);
+      // Fetch this teacher's data directly — no need to load all teachers
+      const response = await fetch(`${socketUrl}/api/teachers/${teacherIdentifier}`);
       const data = await response.json();
-      
-      console.log('Fetched', data.teachers?.length, 'teachers from server');
-      
-      if (data.success && data.teachers) {
-        // Find this teacher in the list
-        const teacher = data.teachers.find(t => 
-          t.employeeId === teacherIdentifier ||
-          t._id === teacherIdentifier ||
-          t._id?.toString() === teacherIdentifier?.toString() ||
-          t.email === teacherIdentifier ||
-          t.name === teacherIdentifier
-        );
-        
-        console.log('Found teacher:', teacher?.name, '| canEditTimetable:', teacher?.canEditTimetable);
-        
-        if (teacher && teacher.canEditTimetable === true) {
+
+      console.log('Teacher data:', data.teacher?.name, '| canEditTimetable:', data.teacher?.canEditTimetable);
+
+      const teacher = data.success ? data.teacher : null;
+
+      if (teacher && teacher.canEditTimetable === true) {
           setEditModeEnabled(true);
           Alert.alert('Edit Mode', 'Edit mode enabled ✅\nYou can now edit the timetable', [{ text: 'OK' }]);
         } else if (teacher) {
@@ -99,9 +89,6 @@ export default function TimetableScreen({
         } else {
           throw new Error('Teacher not found: ' + teacherIdentifier);
         }
-      } else {
-        throw new Error('Failed to fetch teacher data from server');
-      }
     } catch (error) {
       console.error('Error checking permission:', error.message);
       setEditModeEnabled(false);
@@ -343,14 +330,14 @@ export default function TimetableScreen({
       const data = await response.json();
       if (data.success) {
         console.log('✅ Timetable saved successfully');
-        alert('Timetable saved successfully!');
+        Alert.alert('Saved', 'Timetable saved successfully!', [{ text: 'OK' }]);
       } else {
         console.log('❌ Failed to save timetable');
-        alert('Failed to save timetable');
+        Alert.alert('Error', 'Failed to save timetable', [{ text: 'OK' }]);
       }
     } catch (error) {
       console.log('Error saving timetable:', error);
-      alert('Error saving timetable');
+      Alert.alert('Error', 'Error saving timetable', [{ text: 'OK' }]);
     } finally {
       setSaving(false);
     }

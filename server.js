@@ -6671,6 +6671,33 @@ app.get('/api/teachers', async (req, res) => {
     }
 });
 
+// GET /api/teachers/:identifier — fetch single teacher by employeeId, _id, or email
+app.get('/api/teachers/:identifier', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        if (mongoose.connection.readyState === 1) {
+            const teacher = await Teacher.findOne({
+                $or: [
+                    { employeeId: identifier },
+                    { email: identifier },
+                    ...(identifier.match(/^[a-f\d]{24}$/i) ? [{ _id: identifier }] : [])
+                ]
+            });
+            if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
+            res.json({ success: true, teacher });
+        } else {
+            const teacher = teachersMemory.find(t =>
+                t.employeeId === identifier || t.email === identifier || t._id === identifier
+            );
+            if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
+            res.json({ success: true, teacher });
+        }
+    } catch (error) {
+        console.error('Error fetching teacher:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.post('/api/teachers', async (req, res) => {
     try {
         console.log('📝 Adding new teacher:', req.body.name, req.body.employeeId);
