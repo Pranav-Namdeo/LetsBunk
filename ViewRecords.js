@@ -11,6 +11,7 @@ import {
 import { Picker } from '@react-native-picker/picker';
 import { SOCKET_URL } from './config';
 
+import { GET_VIEW_RECORDS_STUDENTS } from './constants/apiEndpoints';
 // Mock student data generator (same as HTML version)
 const generateStudents = (semester, branch) => {
   const branchCode = branch.split(' - ')[0];
@@ -122,7 +123,7 @@ const ViewRecords = ({ onBack, theme }) => {
     setLoading(true);
     try {
       const response = await fetch(
-        `${SOCKET_URL}/api/view-records/students?semester=${selectedSemester}&branch=${encodeURIComponent(selectedBranch)}`
+        GET_VIEW_RECORDS_STUDENTS
       );
       const data = await response.json();
       if (data.success) {

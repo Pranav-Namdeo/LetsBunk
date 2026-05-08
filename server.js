@@ -43,6 +43,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = rateLimit;
 const bcrypt = require('bcrypt'); // Add bcrypt for password hashing
 
 // Face Verification Service
@@ -2159,7 +2160,7 @@ const checkInLimiter = rateLimit({
             return `enrollment:${enrollmentNo}`;
         }
         // Use the built-in IP key generator for proper IPv6 support
-        return req.ip;
+        return ipKeyGenerator(req.ip);
     },
     message: { success: false, message: 'Too many check-in attempts. Please try again later.' }
 });
@@ -5607,7 +5608,7 @@ const loginLimiter = rateLimit({
             return `user:${userId}`;
         }
         // Fallback to IP if no ID provided
-        return req.ip;
+        return ipKeyGenerator(req.ip);
     },
     // Skip rate limiting for successful logins
     skipSuccessfulRequests: true,
@@ -5866,7 +5867,7 @@ app.get('/api/students', async (req, res) => {
 });
 
 // Get distinct branches from students (for admin panel dropdowns)
-app.get('/api/config/branches', async (req, res) => {
+app.get('/api/config/student-branches', async (req, res) => {
     try {
         let branches = [];
         
@@ -5894,7 +5895,7 @@ app.get('/api/config/branches', async (req, res) => {
 });
 
 // Get distinct semesters from students (for admin panel dropdowns)
-app.get('/api/config/semesters', async (req, res) => {
+app.get('/api/config/student-semesters', async (req, res) => {
     try {
         let semesters = [];
         
@@ -7542,7 +7543,7 @@ async function loadAttendanceThreshold() {
 loadAttendanceThreshold();
 
 // GET /api/settings/attendance-threshold
-app.get('/api/settings/attendance-threshold', async (req, res) => {
+app.get('/api/settings/daily-attendance-threshold', async (req, res) => {
     try {
         const setting = await SystemSettings.findOne({ settingKey: 'daily_threshold' });
         res.json({ success: true, threshold: setting ? parseInt(setting.settingValue) : ATTENDANCE_THRESHOLD });
@@ -7552,7 +7553,7 @@ app.get('/api/settings/attendance-threshold', async (req, res) => {
 });
 
 // PUT /api/settings/attendance-threshold
-app.put('/api/settings/attendance-threshold', async (req, res) => {
+app.put('/api/settings/daily-attendance-threshold', async (req, res) => {
     try {
         const { threshold } = req.body;
         const value = parseInt(threshold);
@@ -8985,11 +8986,17 @@ async function gracefulShutdown(signal) {
             console.log('✅ HTTP server closed');
         });
 
-        // Close all socket connections
-        console.log(`🔌 Closing ${activeConnections.size} active socket connections...`);
-        activeConnections.forEach((connection, socketId) => {
-            connection.timers.forEach(timer => clearInterval(timer));
-        });
+        // Close tracked socket timers if a tracker exists. Some builds do not
+        // define activeConnections, so guard this to keep shutdown reliable.
+        const trackedConnections = global.activeConnections;
+        if (trackedConnections && typeof trackedConnections.forEach === 'function') {
+            console.log(`🔌 Closing ${trackedConnections.size || 0} active socket connections...`);
+            trackedConnections.forEach((connection) => {
+                if (connection?.timers && typeof connection.timers.forEach === 'function') {
+                    connection.timers.forEach(timer => clearInterval(timer));
+                }
+            });
+        }
         io.close(() => {
             console.log('✅ Socket.IO server closed');
         });
@@ -9437,7 +9444,7 @@ app.get('/api/departments', async (req, res) => {
 });
 
 // Export attendance data for CSV download
-app.get('/api/attendance/export', async (req, res) => {
+app.get('/api/attendance/history/export', async (req, res) => {
     try {
         const { startDate, endDate, semester, branch, studentId } = req.query;
 

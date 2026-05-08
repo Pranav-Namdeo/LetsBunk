@@ -289,7 +289,7 @@ function createWindow() {
             }).then(result => {
               if (result.response === 1) {
                 mainWindow.webContents.executeJavaScript(`
-                  fetch(SERVER_URL + '/api/students/delete-all', { method: 'DELETE' })
+                  fetch(SERVER_URL + GET_STUDENTS, { method: 'DELETE' })
                     .then(() => {
                       showNotification('All students deleted', 'success');
                       loadStudents();
@@ -314,7 +314,7 @@ function createWindow() {
             }).then(result => {
               if (result.response === 1) {
                 mainWindow.webContents.executeJavaScript(`
-                  fetch(SERVER_URL + '/api/teachers/delete-all', { method: 'DELETE' })
+                  fetch(SERVER_URL + GET_TEACHERS, { method: 'DELETE' })
                     .then(() => {
                       showNotification('All teachers deleted', 'success');
                       loadTeachers();

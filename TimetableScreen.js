@@ -5,6 +5,7 @@ import {
 import { BookIcon, CalendarIcon, CoffeeIcon, LocationIcon } from './Icons';
 import { getServerTime } from './ServerTime';
 
+import { GET_SUBJECTS, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TEACHERS, POST_TIMETABLE } from './constants/apiEndpoints';
 export default function TimetableScreen({ 
   theme, 
   semester, 
@@ -69,7 +70,7 @@ export default function TimetableScreen({
       }
       
       // Fetch latest teacher data from server
-      const response = await fetch(`${socketUrl}/api/teachers`);
+      const response = await fetch(GET_TEACHERS);
       const data = await response.json();
       
       console.log('Fetched', data.teachers?.length, 'teachers from server');
@@ -121,7 +122,7 @@ export default function TimetableScreen({
     const fetchConfigData = async () => {
       try {
         // Fetch subjects
-        const subjectsResponse = await fetch(`${socketUrl}/api/subjects`);
+        const subjectsResponse = await fetch(GET_SUBJECTS);
         const subjectsData = await subjectsResponse.json();
         if (subjectsData.success && subjectsData.subjects) {
           setSubjects(subjectsData.subjects.map(s => s.name || s.subjectName));
@@ -137,7 +138,7 @@ export default function TimetableScreen({
         ]);
 
         // Fetch teachers
-        const teachersResponse = await fetch(`${socketUrl}/api/teachers`);
+        const teachersResponse = await fetch(GET_TEACHERS);
         const teachersData = await teachersResponse.json();
         if (teachersData.success && teachersData.teachers) {
           setTeachers(teachersData.teachers.map(t => t.name));
@@ -213,7 +214,7 @@ export default function TimetableScreen({
       
       try {
         // First, try to get teacher's current class
-        const currentClassResponse = await fetch(`${socketUrl}/api/teacher/current-class-students/${loginId}`);
+        const currentClassResponse = await fetch(GET_TEACHER_CURRENT_CLASS_STUDENTS(loginId));
         const currentClassData = await currentClassResponse.json();
         
         if (currentClassData.success && currentClassData.hasActiveClass) {
@@ -222,7 +223,7 @@ export default function TimetableScreen({
           
           // Fetch timetable for current class
           const branchParam = encodeURIComponent(currentClass.branch);
-          const url = `${socketUrl}/api/timetable/${currentClass.semester}/${branchParam}?t=${Date.now()}`;
+          const url = POST_TIMETABLE;
           console.log('Fetching current class timetable from:', url);
           
           const response = await fetch(url, {
@@ -245,7 +246,7 @@ export default function TimetableScreen({
         if (semester && branch) {
           console.log('📋 Using manual selection:', semester, branch);
           const branchParam = encodeURIComponent(branch);
-          const url = `${socketUrl}/api/timetable/${semester}/${branchParam}?t=${Date.now()}`;
+          const url = POST_TIMETABLE;
           console.log('Fetching manual timetable from:', url);
           
           const response = await fetch(url, {
@@ -287,7 +288,7 @@ export default function TimetableScreen({
     setLoading(true);
     try {
       const branchParam = encodeURIComponent(branch);
-      const url = `${socketUrl}/api/timetable/${semester}/${branchParam}?t=${Date.now()}`;
+      const url = POST_TIMETABLE;
       console.log('Fetching from:', url);
 
       const response = await fetch(url, {
@@ -334,7 +335,7 @@ export default function TimetableScreen({
     setSaving(true);
     try {
       const branchParam = encodeURIComponent(branch);
-      const response = await fetch(`${socketUrl}/api/timetable/${semester}/${branchParam}`, {
+      const response = await fetch(POST_TIMETABLE, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ timetable: timetable.timetable })

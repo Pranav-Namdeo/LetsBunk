@@ -5,6 +5,7 @@ import {
 import { CalendarIcon, ArrowLeftIcon, ArrowRightIcon, CheckIcon, XIcon, RefreshIcon } from './Icons';
 import { getServerTime } from './ServerTime';
 
+import { GET_ATTENDANCE_RECORDS, GET_ATTENDANCE_BY_DATE, GET_ATTENDANCE_BY_DATE_SUBJECT, GET_ATTENDANCE_SUBJECTS, GET_ATTENDANCE_SUBJECT_DATES, GET_HOLIDAYS_RANGE } from './constants/apiEndpoints';
 const DAYS   = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January','February','March','April','May','June',
                 'July','August','September','October','November','December'];
@@ -97,7 +98,7 @@ export default function CalendarScreen({
             const month = currentDate.getMonth();
             const start = new Date(year, month, 1).toISOString();
             const end   = new Date(year, month + 1, 0).toISOString();
-            const data  = await apiFetch(`${socketUrl}/api/holidays/range?startDate=${start}&endDate=${end}`);
+            const data  = await apiFetch(`${GET_HOLIDAYS_RANGE}?startDate=${start}&endDate=${end}`);
             if (data.success && data.holidays) {
                 const map = {};
                 data.holidays.forEach(h => {
@@ -121,19 +122,19 @@ export default function CalendarScreen({
         }
         setLoading(true);
         setFetchError(null);
-        // Optimistic: keep previous data visible while loading
         try {
-            const data = await apiFetch(`${socketUrl}/api/attendance/records?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`);
-            if (data.success && data.records) {
+            const data = await apiFetch(`${GET_ATTENDANCE_RECORDS}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`);
+            if (data.success && Array.isArray(data.records)) {
                 const dateMap = {};
-                let mp = 0, ma = 0;
+                let mp = 0;
+                let ma = 0;
                 data.records.forEach(r => {
                     // Convert to IST date string to match calendar cell keys (device is IST)
-                    const d   = new Date(new Date(r.date).getTime() + 5.5 * 60 * 60 * 1000);
+                    const d = new Date(new Date(r.date).getTime() + 5.5 * 60 * 60 * 1000);
                     const key = d.toDateString();
                     if (!dateMap[key]) dateMap[key] = { present: 0, absent: 0, total: 0 };
                     if (r.status === 'present') { dateMap[key].present++; mp++; }
-                    else                        { dateMap[key].absent++;  ma++; }
+                    else { dateMap[key].absent++; ma++; }
                     dateMap[key].total++;
                 });
                 setAttendanceData(dateMap);
@@ -158,7 +159,7 @@ export default function CalendarScreen({
             return;
         }
         try {
-            const data = await apiFetch(`${socketUrl}/api/attendance/subjects?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`);
+            const data = await apiFetch(`${GET_ATTENDANCE_SUBJECTS}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`);
             if (data.success && data.subjects?.length > 0) {
                 subjectListCacheRef.current[cacheKey] = data.subjects;
                 setSubjectList(data.subjects);
@@ -179,7 +180,7 @@ export default function CalendarScreen({
         setFetchError(null);
         try {
             const data = await apiFetch(
-                `${socketUrl}/api/attendance/subject-dates?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}&subject=${encodeURIComponent(selectedSubject)}`
+                `${GET_ATTENDANCE_SUBJECT_DATES}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}&subject=${encodeURIComponent(selectedSubject)}`
             );
             if (data.success) {
                 setActiveDates(new Set(data.dates));
@@ -201,16 +202,17 @@ export default function CalendarScreen({
         setLoading(true);
         setFetchError(null);
         try {
-            const data = await apiFetch(`${socketUrl}/api/attendance/records?studentId=${encodeURIComponent(studentId)}`);
-            if (data.success && data.records) {
-                const aMap = {}, rMap = {};
+            const data = await apiFetch(`${GET_ATTENDANCE_RECORDS}?studentId=${encodeURIComponent(studentId)}`);
+            if (data.success && Array.isArray(data.records)) {
+                const aMap = {};
+                const rMap = {};
                 data.records.forEach(r => {
                     // Convert to IST date string to match calendar cell keys (device is IST)
-                    const d   = new Date(new Date(r.date).getTime() + 5.5 * 60 * 60 * 1000);
+                    const d = new Date(new Date(r.date).getTime() + 5.5 * 60 * 60 * 1000);
                     const key = d.toDateString();
-                    r.totalAttended  = Number(r.totalAttended)  || 0;
+                    r.totalAttended = Number(r.totalAttended) || 0;
                     r.totalClassTime = Number(r.totalClassTime) || 0;
-                    r.dayPercentage  = Number(r.dayPercentage)  || 0;
+                    r.dayPercentage = Number(r.dayPercentage) || 0;
                     aMap[key] = r.status;
                     rMap[key] = r;
                 });
@@ -277,7 +279,7 @@ export default function CalendarScreen({
             const d = String(date.getDate()).padStart(2, '0');
             const dateStr = `${y}-${m}-${d}`;
             const data = await apiFetch(
-                `${socketUrl}/api/attendance/date/${dateStr}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
+                GET_ATTENDANCE_BY_DATE(dateStr) + `?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
             );
             setStudentsOnDate(data.success ? (data.students || []) : []);
             setAllPeriods([]);
@@ -302,7 +304,7 @@ export default function CalendarScreen({
             const d = String(date.getDate()).padStart(2, '0');
             const dateStr = `${y}-${m}-${d}`;
             const data = await apiFetch(
-                `${socketUrl}/api/attendance/date/${dateStr}/subject/${encodeURIComponent(selectedSubject)}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
+                GET_ATTENDANCE_BY_DATE_SUBJECT(dateStr, selectedSubject) + `?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
             );
             if (data.success) {
                 setStudentsOnDate(data.students || []);

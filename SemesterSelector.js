@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, ActivityIn
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SOCKET_URL } from './config';
 
+import { GET_CONFIG_BRANCHES, GET_CONFIG_SEMESTERS } from './constants/apiEndpoints';
 const CACHE_KEY = '@semester_branch_data';
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes — short cache so new branches appear quickly
 
@@ -67,11 +68,11 @@ const SemesterSelector = ({
       
       // Fetch branches and semesters separately
       const [branchesResponse, semestersResponse] = await Promise.all([
-        fetch(`${SOCKET_URL}/api/config/branches`, {
+        fetch(GET_CONFIG_BRANCHES, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
         }),
-        fetch(`${SOCKET_URL}/api/config/semesters`, {
+        fetch(GET_CONFIG_SEMESTERS, {
           method: 'GET',
           headers: { 'Content-Type': 'application/json' },
         })

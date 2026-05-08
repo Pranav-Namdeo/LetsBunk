@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet, Text, View, TouchableOpacity, ActivityIndicator,
-  Animated, TextInput, ScrollView, FlatList, AppState, useColorScheme, Image, Modal, RefreshControl, PermissionsAndroid, Platform, Alert, NativeModules
+  Animated, TextInput, ScrollView, FlatList, AppState, useColorScheme, Image, Modal, RefreshControl, PermissionsAndroid, Platform, Alert, NativeModules, Vibration
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import Constants from 'expo-constants';
@@ -33,6 +33,7 @@ import HelpAndSupport from './HelpAndSupport';
 import Feedback from './Feedback';
 import SemesterSelector from './SemesterSelector';
 import WiFiManager from './WiFiManager';
+import NativeWiFiService from './NativeWiFiService';
 import TestBSSID from './TestBSSID';
 import SecurityStatusIndicator from './SecurityStatusIndicator';
 // WiFi BSSID Integration from LetsBunk
@@ -49,6 +50,7 @@ import { showToast, ToastContainer } from './Toast';
 // Configuration - Import from centralized config
 import { SERVER_BASE_URL, API_URL as CONFIG_API_URL, SOCKET_URL as CONFIG_SOCKET_URL } from './config';
 
+import { GET_ATTENDANCE_RECORDS, GET_ATTENDANCE_STATS, GET_CONFIG_APP, GET_DAILY_BSSID_SCHEDULE, GET_HEALTH, GET_STUDENT_MANAGEMENT, GET_STUDENT_VALIDATE, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TIMETABLE_BY_SEMESTER_BRANCH, GET_VIEW_RECORDS_STUDENTS, POST_ATTENDANCE_OFFLINE_SYNC, POST_ATTENDANCE_PERIOD_SYNC, POST_ATTENDANCE_RANDOM_RING_RESPONSE, POST_ATTENDANCE_RECORD, POST_LOGIN, POST_RANDOM_RING, POST_RANDOM_RING_TEACHER_ACTION, POST_RANDOM_RING_VERIFY_AFTER_REJECTION, POST_RANDOM_RING_VERIFY_DIRECT, POST_REFRESH_PROFILE, POST_STUDENT_REGISTER, POST_TIMETABLE } from './constants/apiEndpoints';
 // Use Constants.expoConfig.extra for environment variables in Expo SDK 51
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL || CONFIG_API_URL;
 const SOCKET_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_SOCKET_URL || CONFIG_SOCKET_URL;
@@ -222,7 +224,9 @@ export default function App() {
     const current = offlineTimerState.attendanceStatus;
     if (current === 'present' && prevAttendanceStatus.current !== 'present') {
       setShowPartyPopper(true);
-      setTimeout(() => setShowPartyPopper(false), 3500);
+      const hideTimer = setTimeout(() => setShowPartyPopper(false), 3500);
+      prevAttendanceStatus.current = current;
+      return () => clearTimeout(hideTimer);
     }
     prevAttendanceStatus.current = current;
   }, [offlineTimerState.attendanceStatus]);
@@ -306,7 +310,7 @@ export default function App() {
   useEffect(() => {
     if (selectedRole === 'student' && !showLogin) {
       const wifiCheckInterval = setInterval(async () => {
-        if (currentClassInfo) {
+        if (currentClassInfoRef.current) {
           // Background check: silence alerts to avoid spamming the user
           await isConnectedToClassroomWiFi(true); 
         }
@@ -367,6 +371,9 @@ export default function App() {
   const selectedRoleRef = useRef(null); // always current role for socket handlers
   const semesterRef = useRef(null);    // always current semester for socket handlers
   const branchRef = useRef(null);      // always current branch for socket handlers
+  const currentClassInfoRef = useRef(null); // always current class for background WiFi checks
+  const appState = useRef(AppState.currentState);
+  const backgroundTimeRef = useRef(null);
   const shownMissedRingIds = useRef(new Set()); // prevent duplicate "missed ring" alerts
   const periodicSyncRef = useRef(null); // periodic server sync interval
 
@@ -375,6 +382,7 @@ export default function App() {
   useEffect(() => { selectedRoleRef.current = selectedRole; }, [selectedRole]);
   useEffect(() => { semesterRef.current = semester; }, [semester]);
   useEffect(() => { branchRef.current = branch; }, [branch]);
+  useEffect(() => { currentClassInfoRef.current = currentClassInfo; }, [currentClassInfo]);
 
   // Animations
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -1019,6 +1027,15 @@ export default function App() {
   useEffect(() => {
     console.log('🔌 Socket effect triggered - Identity:', studentId || loggedInUserId || 'anonymous', '| Role:', selectedRole);
     setupSocket();
+
+    return () => {
+      if (socketRef.current?.pingInterval) {
+        clearInterval(socketRef.current.pingInterval);
+        socketRef.current.pingInterval = null;
+      }
+      socketRef.current?.removeAllListeners?.();
+      socketRef.current?.disconnect?.();
+    };
   }, [studentId, loggedInUserId, selectedRole]);
 
   // Initialize OfflineTimerService when student logs in
@@ -1387,7 +1404,7 @@ export default function App() {
           { text: 'OK' },
           // Retry button for face verification failures (except no_face_enrolled)
           ...(result.step === 'face_verification' && result.reason !== 'no_face_enrolled'
-            ? [{ text: '🔄 Retry', onPress: () => handleStartTimer() }]
+            ? [{ text: '🔄 Retry', onPress: () => handleTimerStartStop() }]
             : []
           ),
           ...(result.step === 'face_verification' && result.reason === 'no_face_enrolled'
@@ -1421,6 +1438,10 @@ export default function App() {
     // Disconnect existing socket if any
     if (socketRef.current) {
       console.log('🔌 Disconnecting existing socket');
+      if (socketRef.current.pingInterval) {
+        clearInterval(socketRef.current.pingInterval);
+        socketRef.current.pingInterval = null;
+      }
       socketRef.current.disconnect();
       socketRef.current.removeAllListeners();
     }
@@ -1467,7 +1488,7 @@ export default function App() {
           console.log(`   Offline duration: ${offlineDuration}s (${Math.floor(offlineDuration / 60)}m)`);
 
           // Sync with server
-          const response = await fetch(`${SOCKET_URL}/api/attendance/sync-offline`, {
+          const response = await fetch(POST_ATTENDANCE_OFFLINE_SYNC, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1738,7 +1759,7 @@ export default function App() {
               if (wifiResult && wifiResult.bssid) currentBSSID = wifiResult.bssid;
             } catch (e) { console.warn('⚠️ WiFi check failed:', e.message); }
 
-            const res = await fetch(`${SOCKET_URL}/api/random-ring/verify-direct`, {
+            const res = await fetch(POST_RANDOM_RING_VERIFY_DIRECT, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
@@ -2035,7 +2056,7 @@ export default function App() {
       console.log('   Timer seconds:', currentTimerSeconds);
 
       // Use period-sync endpoint to save period-specific timer data (no check-in required)
-      const response = await fetch(`${SOCKET_URL}/api/attendance/period-sync`, {
+      const response = await fetch(POST_ATTENDANCE_PERIOD_SYNC, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -2098,7 +2119,7 @@ export default function App() {
             // Validate enrollment in background — don't block UI restore
             const enrollmentNo = userData.enrollmentNo;
             if (enrollmentNo) {
-              fetch(`${SOCKET_URL}/api/student/validate?enrollmentNo=${enrollmentNo}`)
+              fetch(`${GET_STUDENT_VALIDATE}?enrollmentNo=${encodeURIComponent(enrollmentNo)}`)
                 .then(r => r.json())
                 .then(validateData => {
                   if (validateData.valid === false) {
@@ -2211,7 +2232,7 @@ export default function App() {
 
       // Fetch dynamic app configuration (branches, semesters, etc.)
       try {
-        const appConfigResponse = await fetch(`${SOCKET_URL}/api/config/app`);
+        const appConfigResponse = await fetch(GET_CONFIG_APP);
         const appConfigData = await appConfigResponse.json();
         if (appConfigData.success) {
           console.log('✅ Loaded dynamic app config:', appConfigData.config);
@@ -2243,10 +2264,10 @@ export default function App() {
     try {
       // Use override (e.g. from filter dialog) or current state
       const effectiveSelection = overrideSelection ?? manualSelection;
+
       // When teacher has chosen a filter (branch + semester), use it first so list reflects their selection
       if (selectedRole === 'teacher' && effectiveSelection.semester !== 'auto' && effectiveSelection.branch) {
-        const branchParam = encodeURIComponent(effectiveSelection.branch);
-        const manualResponse = await fetch(`${SOCKET_URL}/api/view-records/students?semester=${effectiveSelection.semester}&branch=${branchParam}`);
+        const manualResponse = await fetch(`${GET_VIEW_RECORDS_STUDENTS}?semester=${encodeURIComponent(effectiveSelection.semester)}&branch=${encodeURIComponent(effectiveSelection.branch)}`);
         const manualData = await manualResponse.json();
         if (manualData.success) {
           console.log(`✅ Filter: ${manualData.students?.length || 0} students for ${effectiveSelection.branch} Sem ${effectiveSelection.semester}`);
@@ -2265,7 +2286,7 @@ export default function App() {
       // For teachers, otherwise use current class from timetable
       if (selectedRole === 'teacher' && loginId) {
         console.log(`🔍 Fetching students for teacher: ${loginId}`);
-        const response = await fetch(`${SOCKET_URL}/api/teacher/current-class-students/${loginId}`);
+        const response = await fetch(GET_TEACHER_CURRENT_CLASS_STUDENTS(loginId));
         const data = await response.json();
 
         if (data.success) {
@@ -2279,44 +2300,24 @@ export default function App() {
             // Update semester and branch to match current class (for other components)
             setSemester(data.currentClass.semester.toString());
             setBranch(data.currentClass.branch);
-            return; // Exit early - we have the current class data
-          } else {
-            console.log('ℹ️  No active class right now');
-
-            // Check if manual selection is active
-            if (manualSelection.semester !== 'auto' && manualSelection.branch) {
-              console.log(`📊 Using manual selection: ${manualSelection.branch} Semester ${manualSelection.semester}`);
-              const manualResponse = await fetch(`${SOCKET_URL}/api/view-records/students?semester=${manualSelection.semester}&branch=${manualSelection.branch}`);
-              const manualData = await manualResponse.json();
-              if (manualData.success) {
-                console.log(`✅ Found ${manualData.students?.length || 0} students for manual selection`);
-                setStudents(manualData.students || []);
-                joinClassRoom(manualSelection.semester, manualSelection.branch);
-                // Don't override currentClassInfo if it's already set by manual selection
-                if (!currentClassInfo || !currentClassInfo.isManual) {
-                  setCurrentClassInfo({
-                    subject: 'Manual Selection',
-                    branch: manualSelection.branch,
-                    semester: manualSelection.semester,
-                    isManual: true
-                  });
-                }
-                return;
-              }
-            }
-
-            // No active class and no manual selection
-            setStudents([]);
-            setCurrentClassInfo(null);
+            return;
           }
+
+          console.log('ℹ️  No active class right now');
         }
-      } else if (selectedRole === 'teacher' && !loginId && semester && branch) {
+
+        // No active class and no manual selection
+        setStudents([]);
+        setCurrentClassInfo(null);
+        return;
+      }
+
+      if (selectedRole === 'teacher' && !loginId && semester && branch) {
         // Fallback: only if loginId not available AND semester/branch are explicitly set
         console.log(`📊 Fetching students for ${branch} Semester ${semester} (fallback - no loginId)`);
-        const response = await fetch(`${SOCKET_URL}/api/view-records/students?semester=${semester}&branch=${branch}`);
+        const response = await fetch(`${GET_VIEW_RECORDS_STUDENTS}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`);
         const data = await response.json();
         if (data.success) {
-          console.log(`✅ Found ${data.students?.length || 0} students total`);
           setStudents(data.students || []);
         }
       }
@@ -2333,7 +2334,7 @@ export default function App() {
   const fetchStudentForList = async (studentId) => {
     try {
       console.log('🔍 Fetching student details for instant add:', studentId);
-      const response = await fetch(`${SOCKET_URL}/api/student-management?enrollmentNo=${studentId}`);
+      const response = await fetch(`${GET_STUDENT_MANAGEMENT}?enrollmentNo=${encodeURIComponent(studentId)}`);
       const data = await response.json();
       if (data.success && data.student) {
         setStudents(prev => {
@@ -2363,7 +2364,7 @@ export default function App() {
 
     try {
       // Fetch student management details
-      const detailsResponse = await fetch(`${SOCKET_URL}/api/student-management?enrollmentNo=${student.enrollmentNo || student._id}`);
+      const detailsResponse = await fetch(`${GET_STUDENT_MANAGEMENT}?enrollmentNo=${encodeURIComponent(student.enrollmentNo)}`);
       const detailsData = await detailsResponse.json();
 
       // Fetch attendance records (last 30 days) - use server time
@@ -2376,11 +2377,11 @@ export default function App() {
         thirtyDaysAgo = new Date();
         thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
       }
-      const recordsResponse = await fetch(`${SOCKET_URL}/api/attendance/records?studentId=${student.enrollmentNo || student._id}&startDate=${thirtyDaysAgo.toISOString()}`);
+      const recordsResponse = await fetch(`${GET_ATTENDANCE_RECORDS}?studentId=${encodeURIComponent(student.enrollmentNo)}&startDate=${thirtyDaysAgo.toISOString()}`);
       const recordsData = await recordsResponse.json();
 
       // Fetch attendance statistics
-      const statsResponse = await fetch(`${SOCKET_URL}/api/attendance/stats?studentId=${student._id}`);
+      const statsResponse = await fetch(`${GET_ATTENDANCE_STATS}?studentId=${encodeURIComponent(student.enrollmentNo)}`);
       const statsData = await statsResponse.json();
 
       if (detailsData.success) {
@@ -2453,7 +2454,7 @@ export default function App() {
     try {
       console.log('🔄 Fetching timetable for:', sem, br);
       const branchParam = encodeURIComponent(br);
-      const response = await fetch(`${SOCKET_URL}/api/timetable/${sem}/${branchParam}`);
+      const response = await fetch(GET_TIMETABLE_BY_SEMESTER_BRANCH(sem, branchParam));
       console.log('✅ Response status:', response.status);
       const data = await response.json();
 
@@ -2499,7 +2500,7 @@ export default function App() {
       console.log('🔄 Fetching fresh BSSID schedule...');
 
       const response = await fetch(
-        `${SOCKET_URL}/api/daily-bssid-schedule?enrollmentNo=${enrollmentNo}`
+        `${GET_DAILY_BSSID_SCHEDULE}?enrollmentNo=${encodeURIComponent(enrollmentNo)}`
       );
 
       const data = await response.json();
@@ -2542,7 +2543,7 @@ export default function App() {
 
   const saveTimetable = async (updatedTimetable) => {
     try {
-      const response = await fetch(`${SOCKET_URL}/api/timetable`, {
+      const response = await fetch(POST_TIMETABLE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedTimetable)
@@ -2576,7 +2577,7 @@ export default function App() {
     if (!studentName.trim()) return;
 
     try {
-      const response = await fetch(`${SOCKET_URL}/api/student/register`, {
+      const response = await fetch(POST_STUDENT_REGISTER, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: studentName.trim() })
@@ -2691,7 +2692,7 @@ export default function App() {
           clientDate = new Date(_appGetBootMs()).toISOString();
         }
 
-        await fetch(`${SOCKET_URL}/api/attendance/record`, {
+        await fetch(POST_ATTENDANCE_RECORD, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -3015,8 +3016,8 @@ export default function App() {
 
       // Choose endpoint based on flow path
       const endpoint = randomRingData.isRejection
-        ? `${SOCKET_URL}/api/random-ring/verify-after-rejection`
-        : `${SOCKET_URL}/api/random-ring/verify-direct`;
+        ? POST_RANDOM_RING_VERIFY_AFTER_REJECTION
+        : POST_RANDOM_RING_VERIFY_DIRECT;
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -3235,7 +3236,7 @@ export default function App() {
 
     try {
       console.log('🔄 Refreshing profile for:', loginId, selectedRole);
-      const response = await fetch(`${SOCKET_URL}/api/refresh-profile`, {
+      const response = await fetch(POST_REFRESH_PROFILE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3282,7 +3283,7 @@ export default function App() {
     setLoginError('');
 
     try {
-      const response = await fetch(`${SOCKET_URL}/api/login`, {
+      const response = await fetch(POST_LOGIN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3404,7 +3405,7 @@ export default function App() {
     setIsOffline(false);
     try {
       // Test server connection first
-      const healthCheck = await fetch(`${SOCKET_URL}/api/health`, { timeout: 5000 });
+      const healthCheck = await fetch(GET_HEALTH, { timeout: 5000 });
       if (!healthCheck.ok) {
         throw new Error('Server not responding');
       }
@@ -3446,7 +3447,7 @@ export default function App() {
       }
 
       // Test server connection
-      const healthCheck = await fetch(`${SOCKET_URL}/api/health`, { timeout: 5000 });
+      const healthCheck = await fetch(GET_HEALTH, { timeout: 5000 });
       if (!healthCheck.ok) {
         throw new Error('Server not responding');
       }
@@ -3913,10 +3914,10 @@ export default function App() {
         return;
       }
 
-      console.log(`📡 Sending request to: ${SOCKET_URL}/api/random-ring/teacher-action`);
+      console.log(POST_RANDOM_RING_TEACHER_ACTION);
       console.log(`📦 Request body:`, { randomRingId, studentId, action });
 
-      const response = await fetch(`${SOCKET_URL}/api/random-ring/teacher-action`, {
+      const response = await fetch(POST_RANDOM_RING_TEACHER_ACTION, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4227,7 +4228,7 @@ export default function App() {
           onConfirm={async (data) => {
             console.log('🔔 Random Ring confirmed:', data);
             try {
-              const response = await fetch(`${SOCKET_URL}/api/random-ring`, {
+              const response = await fetch(POST_RANDOM_RING, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -5431,7 +5432,7 @@ export default function App() {
                     style={{ backgroundColor: '#ffffff', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 20, flex: 1, alignItems: 'center' }}
                     onPress={async () => {
                       try {
-                        const res = await fetch(`${SOCKET_URL}/api/attendance/random-ring-response`, {
+                        const res = await fetch(POST_ATTENDANCE_RANDOM_RING_RESPONSE, {
                           method: 'POST',
                           headers: { 'Content-Type': 'application/json' },
                           body: JSON.stringify({
@@ -6517,16 +6518,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: '#00d9ff',
-  },
-  statNumber: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#00f5ff',
-  },
-  statLabel: {
-    fontSize: 12,
-    color: '#00d9ff',
-    marginTop: 5,
   },
   recordRow: {
     flexDirection: 'row',

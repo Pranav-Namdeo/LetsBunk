@@ -12,6 +12,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { NativeModules } from 'react-native';
 
+import { GET_TIME } from './constants/apiEndpoints';
 const { TimerModule } = NativeModules;
 
 const SERVER_TIME_OFFSET_KEY   = '@server_time_offset';
@@ -185,7 +186,7 @@ class ServerTime {
     try {
       const t0 = Date.now(); // Device time before request
 
-      const response = await fetch(`${this.socketUrl}/api/time`, {
+      const response = await fetch(GET_TIME, {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
       });

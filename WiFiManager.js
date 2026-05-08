@@ -2,6 +2,7 @@ import { NativeModules, PermissionsAndroid, Platform, Alert, Linking } from 'rea
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NativeWiFiService from './NativeWiFiService';
 
+import { GET_CLASSROOMS, POST_TIMETABLE } from './constants/apiEndpoints';
 // Use native Kotlin WiFi module instead of react-native-wifi-reborn
 console.log('📶 Using native Kotlin WiFi module for BSSID detection');
 
@@ -358,7 +359,7 @@ class WiFiManager {
         console.log('📥 Fetching authorized BSSIDs from server...');
 
         // Get classrooms with BSSID data
-        const classroomResponse = await fetch(`${serverUrl}/api/classrooms`);
+        const classroomResponse = await fetch(GET_CLASSROOMS);
         const classroomData = await classroomResponse.json();
 
         if (classroomData.success && classroomData.classrooms) {
@@ -377,7 +378,7 @@ class WiFiManager {
           if (studentData && studentData.semester && studentData.branch) {
             try {
               const timetableResponse = await fetch(
-                `${serverUrl}/api/timetable/${studentData.semester}/${encodeURIComponent(studentData.branch)}`
+                POST_TIMETABLE
               );
               const timetableData = await timetableResponse.json();
 

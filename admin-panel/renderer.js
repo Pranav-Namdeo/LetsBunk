@@ -1,3 +1,17 @@
+// Prevent production UI hangs: default all admin fetches to a bounded timeout.
+// Calls that already pass a signal, such as long migrations, keep their own timeout.
+const ADMIN_FETCH_TIMEOUT_MS = 30000;
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (input, init = {}) => {
+    if (init.signal) return nativeFetch(input, init);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ADMIN_FETCH_TIMEOUT_MS);
+    try {
+        return await nativeFetch(input, { ...init, signal: controller.signal });
+    } finally {
+        clearTimeout(timer);
+    }
+};
 
 //  ADMIN AUTH 
 // Credentials are stored as SHA-256 hashes  never plaintext in source.
@@ -168,6 +182,52 @@ if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') 
 const DEFAULT_SERVER_URL = 'https://letsbunk-omqs.onrender.com';
 let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
+// Endpoint helpers for the classic Electron renderer script.
+// Keep this local because index.html loads renderer.js without type="module".
+const api = (path) => `${SERVER_URL}${path}`;
+const GET_HEALTH = api('/api/health');
+const GET_TIME = api('/api/time');
+const GET_CONFIG_BRANCHES = api('/api/config/branches');
+const GET_CONFIG_SEMESTERS = api('/api/config/semesters');
+const GET_CONFIG_DEPARTMENTS = api('/api/config/departments');
+const GET_STUDENTS = api('/api/students');
+const GET_TEACHERS = api('/api/teachers');
+const GET_CLASSROOMS = api('/api/classrooms');
+const GET_STUDENT_MANAGEMENT = api('/api/student-management');
+const GET_SUBJECTS = api('/api/subjects');
+const GET_TIMETABLES = api('/api/timetables');
+const GET_TIMETABLE_CURRENT_PERIOD = api('/api/timetable/current-period');
+const GET_PERIODS = api('/api/periods');
+const GET_HOLIDAYS = api('/api/holidays');
+const GET_SETTINGS_ATTENDANCE_THRESHOLD = api('/api/settings/attendance-threshold');
+const GET_ATTENDANCE_DAILY_REPORT = api('/api/attendance/daily-report?limit=1000');
+const GET_ATTENDANCE_RECORDS = api('/api/attendance/records');
+const GET_ATTENDANCE_DATE_RANGE = api('/api/attendance/date-range');
+const GET_ATTENDANCE_PERIOD_REPORT = api('/api/attendance/period-report');
+const GET_ATTENDANCE_AUDIT_TRAIL = api('/api/attendance/audit-trail');
+const GET_ATTENDANCE_EXPORT = api('/api/attendance/export');
+const GET_ATTENDANCE_ALL = api('/api/attendance/all');
+const GET_ATTENDANCE_SUBJECTS = api('/api/attendance/subjects');
+const GET_ATTENDANCE_SUBJECT_DATES = api('/api/attendance/subject-dates');
+const GET_ATTENDANCE_BY_DATE = (date) => api(`/api/attendance/date/${date}`);
+const GET_ATTENDANCE_BY_DATE_SUBJECT = (date, subject) => api(`/api/attendance/date/${date}/subject/${encodeURIComponent(subject)}`);
+const GET_ATTENDANCE_HISTORY = (enrollmentNo) => api(`/api/attendance/history/${encodeURIComponent(enrollmentNo)}`);
+const GET_ATTENDANCE_SUMMARY = (enrollmentNo) => api(`/api/attendance/summary/${encodeURIComponent(enrollmentNo)}`);
+const GET_STUDENT_ATTENDANCE_DATES = (enrollmentNo) => api(`/api/attendance/student/${encodeURIComponent(enrollmentNo)}/dates`);
+const GET_STUDENT_ATTENDANCE_BY_DATE = (enrollmentNo, date) => api(`/api/attendance/student/${encodeURIComponent(enrollmentNo)}/date/${date}`);
+const GET_STUDENT_ATTENDANCE_BY_DATE_PERIOD = (enrollmentNo, date, period) => api(`/api/attendance/student/${encodeURIComponent(enrollmentNo)}/date/${date}/lecture/${encodeURIComponent(period)}`);
+const POST_UPLOAD_PHOTO = api('/api/upload-photo');
+const POST_STUDENTS_BULK = api('/api/students/bulk');
+const POST_TEACHERS_BULK = api('/api/teachers/bulk');
+const POST_TIMETABLE = api('/api/timetable');
+const POST_TIMETABLE_HISTORY_BACKFILL = api('/api/timetable-history/backfill');
+const POST_DB_MIGRATE = api('/api/db/migrate');
+const POST_DB_RESYNC_ATTENDANCE = api('/api/db/resync-attendance');
+const POST_ADMIN_PURGE_ORPHAN_SUBJECTS = api('/api/admin/purge-orphan-subjects');
+const POST_ATTENDANCE_MANUAL_MARK = api('/api/attendance/manual-mark');
+const POST_PERIODS_UPDATE_ALL = api('/api/periods/update-all');
+const PUT_SUBJECTS_BULK_UPDATE = api('/api/subjects/bulk-update');
+
 console.log(' Admin Panel Server URL:', SERVER_URL);
 
 // State
@@ -220,7 +280,7 @@ async function loadDynamicDropdownData() {
 
     try {
         // Fetch branches/courses
-        const branchesResponse = await fetch(`${SERVER_URL}/api/config/branches`);
+        const branchesResponse = await fetch(GET_CONFIG_BRANCHES);
         console.log(' Branches API response status:', branchesResponse.status);
         
         if (branchesResponse.ok) {
@@ -241,7 +301,7 @@ async function loadDynamicDropdownData() {
         }
 
         // Fetch semesters
-        const semestersResponse = await fetch(`${SERVER_URL}/api/config/semesters`);
+        const semestersResponse = await fetch(GET_CONFIG_SEMESTERS);
         if (semestersResponse.ok) {
             const semestersData = await semestersResponse.json();
             if (semestersData.success && semestersData.semesters) {
@@ -251,7 +311,7 @@ async function loadDynamicDropdownData() {
         }
 
         // Fetch departments from config API
-        const departmentsResponse = await fetch(`${SERVER_URL}/api/config/departments`);
+        const departmentsResponse = await fetch(GET_CONFIG_DEPARTMENTS);
         if (departmentsResponse.ok) {
             const departmentsData = await departmentsResponse.json();
             if (departmentsData.success && departmentsData.departments) {
@@ -519,7 +579,7 @@ function setupEventListeners() {
     const refreshAttendanceBtn = document.getElementById('refreshAttendanceBtn');
     if (refreshAttendanceBtn) refreshAttendanceBtn.addEventListener('click', loadAttendanceHistory);
     const exportAttendanceBtn = document.getElementById('exportAttendanceBtn');
-    if (exportAttendanceBtn) exportAttendanceBtn.addEventListener('click', exportAttendanceReport);
+    if (exportAttendanceBtn) exportAttendanceBtn.addEventListener('click', exportAllAttendanceReport);
     const attendanceSemFilter = document.getElementById('attendanceSemesterFilter');
     if (attendanceSemFilter) attendanceSemFilter.addEventListener('change', onAttendanceFilterChange);
     const attendanceCrsFilter = document.getElementById('attendanceCourseFilter');
@@ -615,8 +675,10 @@ function switchSection(sectionName) {
 
 // Server Connection
 async function checkServerConnection() {
+    if (checkServerConnection._inFlight) return;
+    checkServerConnection._inFlight = true;
     try {
-        const response = await fetch(`${SERVER_URL}/api/health`);
+        const response = await fetch(GET_HEALTH);
         if (response.ok) {
             updateServerStatus(true);
         } else {
@@ -624,9 +686,16 @@ async function checkServerConnection() {
         }
     } catch (error) {
         updateServerStatus(false);
+    } finally {
+        checkServerConnection._inFlight = false;
     }
-    setTimeout(checkServerConnection, 5000);
+    clearTimeout(checkServerConnection._timer);
+    checkServerConnection._timer = setTimeout(checkServerConnection, 5000);
 }
+
+window.addEventListener('beforeunload', () => {
+    clearTimeout(checkServerConnection._timer);
+});
 
 function updateServerStatus(connected) {
     const indicator = document.getElementById('serverStatus');
@@ -645,9 +714,9 @@ function updateServerStatus(connected) {
 async function loadDashboardData() {
     try {
         const [studentsRes, teachersRes, dailyAttendanceRes] = await Promise.all([
-            fetch(`${SERVER_URL}/api/students`),
-            fetch(`${SERVER_URL}/api/teachers`),
-            fetch(`${SERVER_URL}/api/attendance/daily-report?limit=1000`)
+            fetch(GET_STUDENTS),
+            fetch(GET_TEACHERS),
+            fetch(GET_ATTENDANCE_DAILY_REPORT)
         ]);
 
         const studentsData = await studentsRes.json();
@@ -676,7 +745,7 @@ async function loadDashboardData() {
         // Fetch dynamic branches from server
         let courses = [];
         try {
-            const branchResponse = await fetch(`${SERVER_URL}/api/config/branches`);
+            const branchResponse = await fetch(GET_CONFIG_BRANCHES);
             const branchData = await branchResponse.json();
             if (branchData.success) {
                 courses = branchData.branches.map(b => b.name);
@@ -768,7 +837,7 @@ function loadRecentActivity() {
 // Students Management
 async function loadStudents() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/students`);
+        const response = await fetch(GET_STUDENTS);
         const data = await response.json();
         students = data.students || [];
         renderStudents(students);
@@ -1014,7 +1083,7 @@ async function handleAddStudent(e) {
     // Upload photo to server if captured
     if (studentData.photoData) {
         try {
-            const photoResponse = await fetch(`${SERVER_URL}/api/upload-photo`, {
+            const photoResponse = await fetch(POST_UPLOAD_PHOTO, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1044,7 +1113,7 @@ async function handleAddStudent(e) {
     }
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/students`, {
+        const response = await fetch(GET_STUDENTS, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(studentData)
@@ -1135,7 +1204,7 @@ async function processBulkStudents() {
     }
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/students/bulk`, {
+        const response = await fetch(POST_STUDENTS_BULK, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ students })
@@ -1157,7 +1226,7 @@ async function processBulkStudents() {
 // Teachers Management
 async function loadTeachers() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/teachers`);
+        const response = await fetch(GET_TEACHERS);
         const data = await response.json();
         teachers = data.teachers || [];
         renderTeachers(teachers);
@@ -1217,7 +1286,7 @@ function renderTeachers(teachersToRender) {
 // Load departments for teacher filter
 async function loadDepartmentsFilter() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/config/departments`);
+        const response = await fetch(GET_CONFIG_DEPARTMENTS);
         const data = await response.json();
 
         if (data.success && data.departments) {
@@ -1282,7 +1351,7 @@ async function showAddTeacherModal() {
     // Load all subjects for the multi-select
     let allSubjects = [];
     try {
-        const r = await calApiFetch(`${SERVER_URL}/api/subjects`);
+        const r = await calApiFetch(GET_SUBJECTS);
         if (r.success) allSubjects = r.subjects || [];
     } catch (_) {}
 
@@ -1404,7 +1473,7 @@ async function handleAddTeacher(e) {
     // Upload photo to server if captured
     if (teacherData.photoData) {
         try {
-            const photoResponse = await fetch(`${SERVER_URL}/api/upload-photo`, {
+            const photoResponse = await fetch(POST_UPLOAD_PHOTO, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1434,7 +1503,7 @@ async function handleAddTeacher(e) {
     }
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/teachers`, {
+        const response = await fetch(GET_TEACHERS, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(teacherData)
@@ -1572,7 +1641,7 @@ async function processBulkTeachers() {
     try {
         showNotification(`Processing ${teachers.length} teachers...`, 'info');
 
-        const response = await fetch(`${SERVER_URL}/api/teachers/bulk`, {
+        const response = await fetch(POST_TEACHERS_BULK, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ teachers })
@@ -1781,7 +1850,7 @@ function showStudentTemplateExample() {
 
 async function toggleTimetableAccess(teacherId, canEdit) {
     try {
-        const response = await fetch(`${SERVER_URL}/api/teachers/${teacherId}/timetable-access`, {
+        const response = await fetch(GET_TEACHERS, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ canEditTimetable: canEdit })
@@ -1802,7 +1871,7 @@ async function toggleTimetableAccess(teacherId, canEdit) {
 // Classrooms Management
 async function loadClassrooms() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/classrooms`);
+        const response = await fetch(GET_CLASSROOMS);
         const data = await response.json();
         classrooms = data.classrooms || [];
         renderClassrooms(classrooms);
@@ -1906,7 +1975,7 @@ async function handleAddClassroom(e) {
     };
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/classrooms`, {
+        const response = await fetch(GET_CLASSROOMS, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(classroomData)
@@ -2017,7 +2086,7 @@ async function handleBulkClassroomImport(e) {
             let successCount = 0;
             for (const classroom of classroomsToImport) {
                 try {
-                    const response = await fetch(`${SERVER_URL}/api/classrooms`, {
+                    const response = await fetch(GET_CLASSROOMS, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(classroom)
@@ -2078,9 +2147,9 @@ async function loadTimetable() {
     try {
         // Load timetable and classrooms in parallel
         const [timetableRes, classroomsRes, teachersRes] = await Promise.all([
-            fetch(`${SERVER_URL}/api/timetable/${semester}/${course}`),
-            fetch(`${SERVER_URL}/api/classrooms`),
-            fetch(`${SERVER_URL}/api/teachers`)
+            fetch(POST_TIMETABLE),
+            fetch(GET_CLASSROOMS),
+            fetch(GET_TEACHERS)
         ]);
 
         const timetableData = await timetableRes.json();
@@ -2334,7 +2403,7 @@ async function applyCurrentPeriodDot() {
     document.querySelectorAll('.tt-cell-live').forEach(el => el.classList.remove('tt-cell-live'));
 
     try {
-        const res  = await fetch(`${SERVER_URL}/api/timetable/current-period`);
+        const res  = await fetch(GET_TIMETABLE_CURRENT_PERIOD);
         if (!res.ok) return;
         const data = await res.json();
         if (!data.success || !data.active?.length) return;
@@ -2442,7 +2511,7 @@ async function editAdvancedCell(dayIdx, periodIdx) {
     let subjectOptions = '';
     try {
         console.log(` Fetching subjects for: ${currentTimetable.branch} - Semester ${currentTimetable.semester}`);
-        const url = `${SERVER_URL}/api/subjects?semester=${currentTimetable.semester}&branch=${encodeURIComponent(currentTimetable.branch)}`;
+        const url = GET_SUBJECTS;
         console.log('API URL:', url);
 
         const response = await fetch(url);
@@ -2583,7 +2652,7 @@ async function editAdvancedCell(dayIdx, periodIdx) {
 async function checkTeacherConflict(teacherName, day, periodNumber, room, currentBranch, currentSemester) {
     try {
         // Fetch all timetables from server
-        const response = await fetch(`${SERVER_URL}/api/timetables`);
+        const response = await fetch(GET_TIMETABLES);
         if (!response.ok) {
             console.error('Failed to fetch timetables for conflict check');
             return null;
@@ -2741,7 +2810,7 @@ async function saveTimetable(silent = false) {
     if (!currentTimetable) return;
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/timetable`, {
+        const response = await fetch(POST_TIMETABLE, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(currentTimetable)
@@ -2776,7 +2845,7 @@ async function saveAndRefreshSchedule() {
 
     try {
         // Step 1: Save timetable
-        const saveResp = await fetch(`${SERVER_URL}/api/timetable`, {
+        const saveResp = await fetch(POST_TIMETABLE, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(currentTimetable)
@@ -2784,22 +2853,6 @@ async function saveAndRefreshSchedule() {
 
         if (!saveResp.ok) {
             throw new Error('Failed to save timetable');
-        }
-
-        // Step 2: Trigger BSSID schedule broadcast so students' offline cache updates
-        // POST /api/timetable already calls broadcastBSSIDScheduleUpdate on the server.
-        // We also call PUT to ensure the broadcast fires with the latest saved data.
-        const semester = currentTimetable.semester;
-        const branch = currentTimetable.branch;
-        if (semester && branch) {
-            await fetch(`${SERVER_URL}/api/timetable/${semester}/${encodeURIComponent(branch)}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    timetable: currentTimetable.timetable,
-                    periods: currentTimetable.periods
-                })
-            });
         }
 
         // Update UI to saved state
@@ -3261,11 +3314,6 @@ function closeModal() {
     modal.style.display = '';   // reset inline style so next openModal() works
 }
 
-function showNotification(message, type = 'info') {
-    // Simple notification - you can enhance this
-    alert(message);
-}
-
 function formatDate(dateString) {
     if (!dateString) return 'N/A';
     const date = new Date(dateString);
@@ -3281,85 +3329,15 @@ function loadSettings() {
 }
 
 function saveServerSettings() {
-    const url = document.getElementById('serverUrl').value;
+    const url = document.getElementById('serverUrl').value.trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(url)) {
+        showNotification('Server URL must start with http:// or https://', 'error');
+        return;
+    }
     SERVER_URL = url;
     localStorage.setItem('serverUrl', url);
-    showNotification('Settings saved', 'success');
-    checkServerConnection();
-}
-
-// Load attendance threshold
-async function loadAttendanceThreshold() {
-    try {
-        const response = await fetch(`${SERVER_URL}/api/settings/attendance-threshold`);
-        const data = await response.json();
-
-        if (data.success) {
-            const threshold = data.threshold || 75;
-            document.getElementById('attendanceThreshold').value = threshold;
-            document.getElementById('attendanceThresholdValue').value = threshold;
-            document.getElementById('currentThresholdDisplay').textContent = `${threshold}%`;
-            console.log(` Loaded attendance threshold: ${threshold}%`);
-        }
-    } catch (error) {
-        console.error('Error loading threshold:', error);
-    }
-}
-
-// Save attendance threshold
-async function saveAttendanceThreshold() {
-    try {
-        const threshold = parseInt(document.getElementById('attendanceThresholdValue').value);
-
-        if (isNaN(threshold) || threshold < 0 || threshold > 100) {
-            showNotification('Threshold must be between 0 and 100', 'error');
-            return;
-        }
-
-        const response = await fetch(`${SERVER_URL}/api/settings/attendance-threshold`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                threshold: threshold,
-                updatedBy: 'admin'
-            })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-            showNotification(`Attendance threshold updated to ${threshold}%`, 'success');
-            document.getElementById('currentThresholdDisplay').textContent = `${threshold}%`;
-            console.log(` Threshold saved: ${threshold}%`);
-        } else {
-            showNotification('Failed to save threshold: ' + data.error, 'error');
-        }
-    } catch (error) {
-        console.error('Error saving threshold:', error);
-        showNotification('Error saving threshold', 'error');
-    }
-}
-
-// Sync slider and input
-function setupThresholdSync() {
-    const slider = document.getElementById('attendanceThreshold');
-    const input = document.getElementById('attendanceThresholdValue');
-
-    if (slider && input) {
-        slider.addEventListener('input', (e) => {
-            input.value = e.target.value;
-        });
-
-        input.addEventListener('input', (e) => {
-            const value = parseInt(e.target.value) || 0;
-            if (value >= 0 && value <= 100) {
-                slider.value = value;
-            }
-        });
-    }
-
-    // Load threshold when settings section is opened
-    loadAttendanceThreshold();
+    showNotification('Settings saved. Reloading admin panel...', 'success');
+    setTimeout(() => window.location.reload(), 500);
 }
 
 // Delete functions
@@ -3370,7 +3348,7 @@ async function deleteStudent(id) {
     const identifier = student?._id || id;
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/students/${identifier}`, { method: 'DELETE' });
+        const response = await fetch(GET_STUDENTS, { method: 'DELETE' });
         if (response.ok) {
             showNotification('Student deleted', 'success');
             loadStudents();
@@ -3384,7 +3362,7 @@ async function deleteTeacher(id) {
     if (!confirm('Are you sure you want to delete this teacher?')) return;
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/teachers/${id}`, { method: 'DELETE' });
+        const response = await fetch(GET_TEACHERS, { method: 'DELETE' });
         if (response.ok) {
             showNotification('Teacher deleted', 'success');
             loadTeachers();
@@ -3399,7 +3377,7 @@ async function deleteClassroom(id) {
     if (!confirm(`Are you sure you want to delete classroom ${classroom?.roomNumber || 'this'}?`)) return;
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/classrooms/${id}`, { method: 'DELETE' });
+        const response = await fetch(GET_CLASSROOMS, { method: 'DELETE' });
         if (response.ok) {
             showNotification('Classroom deleted', 'success');
             loadClassrooms();
@@ -3600,7 +3578,7 @@ async function editStudent(id) {
             // Upload photo to server if changed
             if (studentData.photoData) {
                 try {
-                    const photoResponse = await fetch(`${SERVER_URL}/api/upload-photo`, {
+                    const photoResponse = await fetch(POST_UPLOAD_PHOTO, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -3629,7 +3607,7 @@ async function editStudent(id) {
 
             try {
                 const identifier = student._id || id;
-                const response = await fetch(`${SERVER_URL}/api/students/${identifier}`, {
+                const response = await fetch(GET_STUDENTS, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(studentData)
@@ -3677,7 +3655,7 @@ async function editTeacher(id) {
     // Load all subjects for multi-select
     let allSubjects = [];
     try {
-        const r = await calApiFetch(`${SERVER_URL}/api/subjects`);
+        const r = await calApiFetch(GET_SUBJECTS);
         if (r.success) allSubjects = r.subjects || [];
     } catch (_) {}
 
@@ -3813,7 +3791,7 @@ async function editTeacher(id) {
         // Upload photo to server if changed
         if (teacherData.photoData) {
             try {
-                const photoResponse = await fetch(`${SERVER_URL}/api/upload-photo`, {
+                const photoResponse = await fetch(POST_UPLOAD_PHOTO, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -3843,7 +3821,7 @@ async function editTeacher(id) {
         }
 
         try {
-            const response = await fetch(`${SERVER_URL}/api/teachers/${id}`, {
+            const response = await fetch(GET_TEACHERS, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(teacherData)
@@ -3937,7 +3915,7 @@ async function editClassroom(id) {
         };
 
         try {
-            const response = await fetch(`${SERVER_URL}/api/classrooms/${id}`, {
+            const response = await fetch(GET_CLASSROOMS, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(classroomData)
@@ -4356,17 +4334,17 @@ async function showStudentAttendance(studentId, studentName) {
 
     // Trigger an immediate server-side sync for this student so data is fresh
     // (fire-and-forget — don't wait, modal will refresh via student_timer_sync event)
-    fetch(`${SERVER_URL}/api/attendance/records?studentId=${encodeURIComponent(studentId)}`)
+    fetch(GET_ATTENDANCE_RECORDS)
         .catch(() => {});
 
     try {
         // Fetch student details
-        const studentRes = await fetch(`${SERVER_URL}/api/student-management?enrollmentNo=${studentId}`);
+        const studentRes = await fetch(GET_STUDENT_MANAGEMENT);
         const studentData = await studentRes.json();
         const student = studentData.student;
 
         // Fetch attendance records
-        const attendanceRes = await fetch(`${SERVER_URL}/api/attendance/records?studentId=${studentId}`);
+        const attendanceRes = await fetch(GET_ATTENDANCE_RECORDS);
         const attendanceData = await attendanceRes.json();
         const records = attendanceData.records || [];
 
@@ -4999,7 +4977,7 @@ function duplicateTimetable() {
         newTimetable.branch = formData.get('course');
 
         try {
-            const response = await fetch(`${SERVER_URL}/api/timetable`, {
+            const response = await fetch(POST_TIMETABLE, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(newTimetable)
@@ -5191,7 +5169,7 @@ function autoFillTimetable() {
             });
         } else if (mode === 'random') {
             // Fetch subjects from database for random fill
-            fetch(`${SERVER_URL}/api/subjects?semester=${currentTimetable.semester}&branch=${encodeURIComponent(currentTimetable.branch)}`)
+            fetch(GET_SUBJECTS)
                 .then(response => response.json())
                 .then(data => {
                     const subjects = data.subjects || [];
@@ -5253,7 +5231,7 @@ async function validateTimetable() {
     showNotification('Checking for teacher conflicts...', 'info');
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/timetables`);
+        const response = await fetch(GET_TIMETABLES);
         if (response.ok) {
             const data = await response.json();
             const allTimetables = data.timetables || [];
@@ -5325,11 +5303,6 @@ async function validateTimetable() {
         `;
         openModal();
     }
-}
-
-// Print
-function printTimetable() {
-    window.print();
 }
 
 // Share
@@ -5454,14 +5427,6 @@ function showPeriodSettings() {
 
     modalBody.innerHTML = html;
     openModal();
-}
-
-function calculateDuration(startTime, endTime) {
-    const [startH, startM] = startTime.split(':').map(Number);
-    const [endH, endM] = endTime.split(':').map(Number);
-    const startMinutes = startH * 60 + startM;
-    const endMinutes = endH * 60 + endM;
-    return endMinutes - startMinutes;
 }
 
 function editPeriod(index) {
@@ -5937,7 +5902,7 @@ async function loadCalendarSubjects() {
     const br  = calFilterBranch;
     if (!sem || !br) { calSubjectList = []; renderCalendarSubjectDropdown(); return; }
     try {
-        const data = await calApiFetch(`${SERVER_URL}/api/attendance/subjects?semester=${encodeURIComponent(sem)}&branch=${encodeURIComponent(br)}`);
+        const data = await calApiFetch(GET_ATTENDANCE_SUBJECTS);
         calSubjectList = (data.success && data.subjects?.length) ? data.subjects : [];
         if (!calSubjectList.length) {
             console.warn('No subjects found for', sem, br);
@@ -6004,7 +5969,7 @@ async function fetchCalendarDayData() {
     calDayData = {};
     if (!calFilterSemester || !calFilterBranch) return;
     try {
-        const data = await calApiFetch(`${SERVER_URL}/api/attendance/records?semester=${encodeURIComponent(calFilterSemester)}&branch=${encodeURIComponent(calFilterBranch)}`);
+        const data = await calApiFetch(GET_ATTENDANCE_RECORDS);
         if (data.success && data.records) {
             data.records.forEach(r => {
                 const key = new Date(r.date).toDateString();
@@ -6026,7 +5991,7 @@ async function fetchCalendarSubjectDates() {
     if (!calFilterSemester || !calFilterBranch || !calFilterSubject) return;
     try {
         const data = await calApiFetch(
-            `${SERVER_URL}/api/attendance/subject-dates?semester=${encodeURIComponent(calFilterSemester)}&branch=${encodeURIComponent(calFilterBranch)}&subject=${encodeURIComponent(calFilterSubject)}`
+            GET_ATTENDANCE_SUBJECT_DATES
         );
         if (data.success) data.dates.forEach(d => calActiveDates.add(d));
         else showNotification('No scheduled dates found for this subject.', 'warning');
@@ -6038,7 +6003,7 @@ async function fetchCalendarSubjectDates() {
 
 async function loadHolidays() {
     try {
-        const data = await calApiFetch(`${SERVER_URL}/api/holidays`);
+        const data = await calApiFetch(GET_HOLIDAYS);
         if (data.success) {
             holidays = data.holidays || [];
         } else {
@@ -6215,7 +6180,7 @@ async function showDayAttendanceModal(date) {
     openModal();
     try {
         const data = await calApiFetch(
-            `${SERVER_URL}/api/attendance/date/${dateStr}?semester=${encodeURIComponent(calFilterSemester)}&branch=${encodeURIComponent(calFilterBranch)}`
+            GET_ATTENDANCE_BY_DATE(dateStr) + `?semester=${encodeURIComponent(calFilterSemester)}&branch=${encodeURIComponent(calFilterBranch)}`
         );
         if (!data.success || !data.students?.length) {
             modalBody.innerHTML = `<h2> ${date.toDateString()}</h2>
@@ -6432,7 +6397,7 @@ async function showSubjectAttendanceModal(date) {
     openModal();
     try {
         const data = await calApiFetch(
-            `${SERVER_URL}/api/attendance/date/${dateStr}/subject/${encodeURIComponent(calFilterSubject)}?semester=${encodeURIComponent(calFilterSemester)}&branch=${encodeURIComponent(calFilterBranch)}`
+            GET_ATTENDANCE_BY_DATE_SUBJECT(dateStr, calFilterSubject) + `?semester=${encodeURIComponent(calFilterSemester)}&branch=${encodeURIComponent(calFilterBranch)}`
         );
         if (!data.success || !data.students?.length) {
             modalBody.innerHTML = `<h2> ${calFilterSubject}  ${date.toDateString()}</h2>
@@ -6558,7 +6523,7 @@ async function backfillTimetableHistory() {
     const btn = event?.target;
     if (btn) { btn.disabled = true; btn.textContent = ' Running'; }
     try {
-        const data = await calApiFetch(`${SERVER_URL}/api/timetable-history/backfill`, 60000);
+        const data = await calApiFetch(POST_TIMETABLE_HISTORY_BACKFILL, 60000);
         // calApiFetch only does GET  use fetch directly for POST
         throw new Error('use_fetch'); // fallthrough to catch
     } catch (_) {
@@ -6567,7 +6532,7 @@ async function backfillTimetableHistory() {
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 60000);
-        const res  = await fetch(`${SERVER_URL}/api/timetable-history/backfill`, {
+        const res  = await fetch(POST_TIMETABLE_HISTORY_BACKFILL, {
             method: 'POST', signal: controller.signal
         });
         clearTimeout(timer);
@@ -6592,7 +6557,7 @@ async function runDbMigration() {
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 120000);
-        const res  = await fetch(`${SERVER_URL}/api/db/migrate`, { method: 'POST', signal: controller.signal });
+        const res  = await fetch(POST_DB_MIGRATE, { method: 'POST', signal: controller.signal });
         clearTimeout(timer);
         const data = await res.json();
         if (data.success) {
@@ -6619,7 +6584,7 @@ async function runAttendanceResync() {
     try {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 120000);
-        const res  = await fetch(`${SERVER_URL}/api/db/resync-attendance`, { method: 'POST', signal: controller.signal });
+        const res  = await fetch(POST_DB_RESYNC_ATTENDANCE, { method: 'POST', signal: controller.signal });
         clearTimeout(timer);
         const data = await res.json();
         if (data.success) {
@@ -6696,7 +6661,7 @@ async function handleAddHoliday(e) {
     };
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/holidays`, {
+        const response = await fetch(GET_HOLIDAYS, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(holiday)
@@ -6775,7 +6740,7 @@ async function saveHolidayEdit(holidayId) {
     };
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/holidays/${holidayId}`, {
+        const response = await fetch(GET_HOLIDAYS, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updatedHoliday)
@@ -6801,7 +6766,7 @@ async function deleteHoliday(holidayId) {
     if (!confirm('Are you sure you want to delete this holiday?')) return;
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/holidays/${holidayId}`, {
+        const response = await fetch(GET_HOLIDAYS, {
             method: 'DELETE'
         });
 
@@ -6941,7 +6906,7 @@ async function loadPeriods() {
 
         // Always fetch from server first  this is the source of truth
         try {
-            const res = await fetch(`${SERVER_URL}/api/periods`);
+            const res = await fetch(GET_PERIODS);
             if (res.ok) {
                 const data = await res.json();
                 if (data.success && Array.isArray(data.periods) && data.periods.length > 0) {
@@ -7074,7 +7039,7 @@ function renderPeriods() {
                 </div>
                 
                 <div class="period-actions-cell">
-                    <button class="period-btn period-btn-delete" onclick="deletePeriod(${index})">
+                    <button class="period-btn period-btn-delete" onclick="deleteConfigPeriod(${index})">
                          Delete
                     </button>
                 </div>
@@ -7255,7 +7220,7 @@ function addNewPeriodSlot() {
     showNotification('Period added. Don\'t forget to save!', 'success');
 }
 
-function deletePeriod(index) {
+function deleteConfigPeriod(index) {
     if (currentPeriods.length <= 1) {
         showNotification('Cannot delete the last period', 'error');
         return;
@@ -7370,10 +7335,10 @@ async function savePeriodsConfig() {
     try {
         showNotification('Updating all timetables...', 'info');
 
-        console.log('Sending periods update to:', `${SERVER_URL}/api/periods/update-all`);
+        console.log('Sending periods update to:', POST_PERIODS_UPDATE_ALL);
         console.log('Periods data:', currentPeriods);
 
-        const response = await fetch(`${SERVER_URL}/api/periods/update-all`, {
+        const response = await fetch(POST_PERIODS_UPDATE_ALL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ periods: currentPeriods })
@@ -7434,7 +7399,7 @@ async function loadAttendanceDateRange() {
         console.log(' Loading attendance date range...');
 
         // Get all attendance history records to find date range
-        const response = await fetch(`${SERVER_URL}/api/attendance/date-range`);
+        const response = await fetch(GET_ATTENDANCE_DATE_RANGE);
 
         if (response.ok) {
             const data = await response.json();
@@ -7489,7 +7454,7 @@ async function loadAttendanceDateRange() {
 async function loadAttendanceDateRangeAlternative() {
     try {
         // Get all students
-        const studentsResponse = await fetch(`${SERVER_URL}/api/student-management`);
+        const studentsResponse = await fetch(GET_STUDENT_MANAGEMENT);
         const studentsData = await studentsResponse.json();
 
         if (!studentsData.success || !studentsData.students || studentsData.students.length === 0) {
@@ -7501,7 +7466,7 @@ async function loadAttendanceDateRangeAlternative() {
 
         // Get first student's history to check date range
         const firstStudent = studentsData.students[0];
-        const historyResponse = await fetch(`${SERVER_URL}/api/attendance/history/${firstStudent.enrollmentNo}`);
+        const historyResponse = await fetch(GET_ATTENDANCE_HISTORY(firstStudent.enrollmentNo));
         const historyData = await historyResponse.json();
 
         if (historyData.success && historyData.history && historyData.history.length > 0) {
@@ -7545,7 +7510,7 @@ async function loadAttendanceDateRangeAlternative() {
 }
 
 // Load Attendance History
-async function loadAttendanceHistory() {
+async function loadAttendanceHistoryLegacy() {
     try {
         console.log(' Loading attendance history...');
 
@@ -7585,7 +7550,7 @@ async function loadAttendanceHistory() {
 
         // Get all students filtered by semester/branch server-side
         const studentsResponse = await fetch(
-            `${SERVER_URL}/api/students?semester=${encodeURIComponent(semesterFilter)}&branch=${encodeURIComponent(courseFilter)}`
+            GET_STUDENTS
         );
         const studentsData = await studentsResponse.json();
 
@@ -7613,7 +7578,7 @@ async function loadAttendanceHistory() {
         // Load attendance summary for each student
         const attendancePromises = filteredStudents.map(async (student) => {
             try {
-                let url = `${SERVER_URL}/api/attendance/summary/${student.enrollmentNo}`;
+                let url = GET_ATTENDANCE_SUMMARY(student.enrollmentNo);
                 if (startDate && endDate) {
                     url += `?startDate=${startDate}&endDate=${endDate}`;
                 }
@@ -7685,8 +7650,8 @@ async function loadAttendanceHistory() {
     }
 }
 
-// Render Attendance History Table
-function renderAttendanceHistoryTable(students) {
+// Legacy attendance table renderer retained for reference. Active renderer is below.
+function renderAttendanceHistoryTableLegacy(students) {
     const tbody = document.getElementById('attendanceHistoryTableBody');
 
     console.log(` Rendering ${students.length} students in attendance table`);
@@ -7787,7 +7752,7 @@ async function viewDetailedAttendance(enrollmentNo) {
         console.log(` Loading attendance overview for ${enrollmentNo}...`);
 
         // Get student info
-        const studentsResponse = await fetch(`${SERVER_URL}/api/students?enrollmentNo=${enrollmentNo}`);
+        const studentsResponse = await fetch(GET_STUDENTS);
         const studentsData = await studentsResponse.json();
         const student = (studentsData.students || []).find(s => s.enrollmentNo === enrollmentNo) || studentsData.student;
 
@@ -7800,7 +7765,7 @@ async function viewDetailedAttendance(enrollmentNo) {
         const endDate = document.getElementById('attendanceEndDate').value;
 
         // Use new endpoint for student dates overview
-        let url = `${SERVER_URL}/api/attendance/student/${enrollmentNo}/dates`;
+        let url = GET_STUDENT_ATTENDANCE_DATES(enrollmentNo);
         if (startDate && endDate) {
             url += `?startDate=${startDate}&endDate=${endDate}`;
         }
@@ -7829,7 +7794,7 @@ async function viewDateDetails(enrollmentNo, date, studentName) {
     try {
         console.log(` Loading date details for ${enrollmentNo} on ${date}...`);
 
-        const response = await fetch(`${SERVER_URL}/api/attendance/student/${enrollmentNo}/date/${date}`);
+        const response = await fetch(GET_STUDENT_ATTENDANCE_BY_DATE(enrollmentNo, date));
         const data = await response.json();
 
         if (!data.success) {
@@ -7852,7 +7817,7 @@ async function viewLectureDetails(enrollmentNo, date, period, studentName) {
     try {
         console.log(` Loading lecture details for ${enrollmentNo} - ${period} on ${date}...`);
 
-        const response = await fetch(`${SERVER_URL}/api/attendance/student/${enrollmentNo}/date/${date}/lecture/${period}`);
+        const response = await fetch(GET_STUDENT_ATTENDANCE_BY_DATE_PERIOD(enrollmentNo, date, period));
         const data = await response.json();
 
         if (!data.success) {
@@ -8439,7 +8404,7 @@ async function exportStudentAttendance(enrollmentNo) {
         const startDate = document.getElementById('attendanceStartDate').value;
         const endDate = document.getElementById('attendanceEndDate').value;
 
-        let url = `${SERVER_URL}/api/attendance/history/${enrollmentNo}`;
+        let url = GET_ATTENDANCE_HISTORY(enrollmentNo);
         if (startDate && endDate) {
             url += `?startDate=${startDate}&endDate=${endDate}`;
         }
@@ -8564,7 +8529,7 @@ async function exportAllAttendance() {
 
     try {
         // Fetch all attendance data from server
-        const response = await fetch('/api/attendance/all');
+        const response = await fetch(GET_ATTENDANCE_ALL);
         const attendanceData = await response.json();
 
         if (!attendanceData || attendanceData.length === 0) {
@@ -8642,7 +8607,7 @@ async function exportAttendanceData() {
             new Date().toISOString().split('T')[0]; // Today
 
         // Fetch attendance data for date range
-        const response = await fetch(`/api/attendance/export?startDate=${startDate}&endDate=${endDate}`);
+        const response = await fetch(GET_ATTENDANCE_EXPORT);
 
         if (!response.ok) {
             throw new Error('Failed to fetch attendance data');
@@ -8783,7 +8748,7 @@ async function loadSubjects() {
         const type = document.getElementById('subjectTypeFilter').value;
         const status = document.getElementById('subjectStatusFilter')?.value;
 
-        let url = `${SERVER_URL}/api/subjects?`;
+        let url = GET_SUBJECTS;
         if (semester) url += `semester=${semester}&`;
         if (branch) url += `branch=${encodeURIComponent(branch)}&`;
         if (type) url += `type=${type}&`;
@@ -9165,7 +9130,7 @@ async function saveNewSubject() {
     // Test server connection first
     try {
         console.log(' Testing server connection...');
-        const testResponse = await fetch(`${SERVER_URL}/api/health`);
+        const testResponse = await fetch(GET_HEALTH);
         console.log(' Health check status:', testResponse.status);
         if (!testResponse.ok) {
             showNotification('Server is not responding. Please check if the server is running.', 'error');
@@ -9218,7 +9183,7 @@ async function saveNewSubject() {
         console.log(' Sending payload:', payload);
         console.log(' Server URL:', SERVER_URL);
 
-        const response = await fetch(`${SERVER_URL}/api/subjects`, {
+        const response = await fetch(GET_SUBJECTS, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -9255,7 +9220,7 @@ async function saveNewSubject() {
 
 async function editSubject(subjectCode) {
     try {
-        const response = await fetch(`${SERVER_URL}/api/subjects/${subjectCode}`);
+        const response = await fetch(GET_SUBJECTS);
         const data = await response.json();
 
         if (!data.success) {
@@ -9352,7 +9317,7 @@ async function saveEditedSubject(subjectCode) {
     const isActive = document.getElementById('editIsActive').checked;
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/subjects/${subjectCode}`, {
+        const response = await fetch(GET_SUBJECTS, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -9388,7 +9353,7 @@ async function deleteSubject(subjectCode) {
     }
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/subjects/${subjectCode}`, {
+        const response = await fetch(GET_SUBJECTS, {
             method: 'DELETE'
         });
 
@@ -9415,7 +9380,7 @@ async function purgeOrphanSubjects() {
 
     try {
         showNotification('Purging ghost subjects...', 'info');
-        const res  = await fetch(`${SERVER_URL}/api/admin/purge-orphan-subjects`, { method: 'POST' });
+        const res  = await fetch(POST_ADMIN_PURGE_ORPHAN_SUBJECTS, { method: 'POST' });
         const data = await res.json();
         if (data.success) {
             const d = data.deleted;
@@ -9435,7 +9400,7 @@ async function purgeOrphanSubjects() {
 // Duplicate subject
 async function duplicateSubject(subjectCode) {
     try {
-        const response = await fetch(`${SERVER_URL}/api/subjects/${subjectCode}`);
+        const response = await fetch(GET_SUBJECTS);
         const data = await response.json();
 
         if (!data.success) {
@@ -9494,7 +9459,7 @@ async function duplicateSubject(subjectCode) {
             };
 
             try {
-                const response = await fetch(`${SERVER_URL}/api/subjects`, {
+                const response = await fetch(GET_SUBJECTS, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(newSubject)
@@ -9541,7 +9506,7 @@ async function bulkActivateSubjects() {
             const subject = subjects.find(s => s.subjectCode === subjectCode);
             if (!subject) continue;
 
-            const response = await fetch(`${SERVER_URL}/api/subjects/${subjectCode}`, {
+            const response = await fetch(GET_SUBJECTS, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ...subject, isActive: true })
@@ -9581,7 +9546,7 @@ async function bulkDeactivateSubjects() {
             const subject = subjects.find(s => s.subjectCode === subjectCode);
             if (!subject) continue;
 
-            const response = await fetch(`${SERVER_URL}/api/subjects/${subjectCode}`, {
+            const response = await fetch(GET_SUBJECTS, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ...subject, isActive: false })
@@ -9679,7 +9644,7 @@ async function bulkDuplicateSubjects() {
                     isActive: subject.isActive
                 };
 
-                const response = await fetch(`${SERVER_URL}/api/subjects`, {
+                const response = await fetch(GET_SUBJECTS, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(newSubject)
@@ -9722,7 +9687,7 @@ async function bulkDeleteSelectedSubjects() {
 
     for (const subjectCode of selectedSubjects) {
         try {
-            const response = await fetch(`${SERVER_URL}/api/subjects/${subjectCode}`, {
+            const response = await fetch(GET_SUBJECTS, {
                 method: 'DELETE'
             });
 
@@ -9833,7 +9798,7 @@ function importSubjectsFromCSV() {
 
                 for (const subject of subjectsToImport) {
                     try {
-                        const response = await fetch(`${SERVER_URL}/api/subjects`, {
+                        const response = await fetch(GET_SUBJECTS, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(subject)
@@ -9996,7 +9961,7 @@ function showFeatureRequestDialog() {
         closeModal();
 
         // TODO: Send to backend API
-        // await fetch(`${SERVER_URL}/api/feature-requests`, {
+        // Feature request endpoint is not currently implemented.
         //     method: 'POST',
         //     headers: { 'Content-Type': 'application/json' },
         //     body: JSON.stringify(featureRequest)
@@ -10190,7 +10155,7 @@ async function saveSimpleSubject() {
 
         console.log('Sending payload:', payload);
 
-        const response = await fetch(`${SERVER_URL}/api/subjects`, {
+        const response = await fetch(GET_SUBJECTS, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -10400,7 +10365,7 @@ async function executeBulkEdit() {
 
     try {
         // Send bulk update request
-        const response = await fetch(`${SERVER_URL}/api/subjects/bulk-update`, {
+        const response = await fetch(PUT_SUBJECTS_BULK_UPDATE, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -10931,7 +10896,7 @@ document.addEventListener('DOMContentLoaded', () => {
 // Load branches configuration
 async function loadBranchesConfig() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/config/branches`);
+        const response = await fetch(GET_CONFIG_BRANCHES);
         const data = await response.json();
 
         const container = document.getElementById('branchesListContainer');
@@ -10960,7 +10925,7 @@ async function loadBranchesConfig() {
 // Load semesters configuration
 async function loadSemestersConfig() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/config/semesters`);
+        const response = await fetch(GET_CONFIG_SEMESTERS);
         const data = await response.json();
 
         const container = document.getElementById('semestersListContainer');
@@ -10980,35 +10945,6 @@ async function loadSemestersConfig() {
     } catch (error) {
         console.error('Error loading semesters:', error);
         showNotification('Failed to load semesters', 'error');
-    }
-}
-
-// Load departments configuration
-async function loadDepartmentsConfig() {
-    try {
-        const response = await fetch(`${SERVER_URL}/api/config/departments`);
-        const data = await response.json();
-
-        const container = document.getElementById('departmentsListContainer');
-
-        if (!data.success || data.departments.length === 0) {
-            container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No departments configured</div>';
-            return;
-        }
-
-        container.innerHTML = data.departments.map(dept => `
-            <div class="config-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--border-color);">
-                <div>
-                    <div style="font-weight: 500; color: var(--text-primary);">${dept.name}</div>
-                    <div style="font-size: 12px; color: var(--text-secondary);">${dept.code}</div>
-                </div>
-                <button class="btn btn-danger btn-sm" onclick="deleteDepartment('${dept.value}', '${dept.name}')"></button>
-            </div>
-        `).join('');
-
-    } catch (error) {
-        console.error('Error loading departments:', error);
-        showNotification('Failed to load departments', 'error');
     }
 }
 
@@ -11040,7 +10976,7 @@ function showAddBranchModal() {
         const displayName = document.getElementById('branchDisplayName').value.trim();
 
         try {
-            const response = await fetch(`${SERVER_URL}/api/config/branches`, {
+            const response = await fetch(GET_CONFIG_BRANCHES, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ value, displayName })
@@ -11088,7 +11024,7 @@ function showAddSemesterModal() {
         const value = document.getElementById('semesterValue').value;
 
         try {
-            const response = await fetch(`${SERVER_URL}/api/config/semesters`, {
+            const response = await fetch(GET_CONFIG_SEMESTERS, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ value })
@@ -11113,59 +11049,6 @@ function showAddSemesterModal() {
     openModal();
 }
 
-// Add department modal
-function showAddDepartmentModal() {
-    const modalBody = document.getElementById('modalBody');
-    modalBody.innerHTML = `
-        <h2> Add New Department</h2>
-        <form id="addDepartmentForm">
-            <div class="form-group">
-                <label>Department Code *</label>
-                <input type="text" id="departmentValue" class="form-input" placeholder="e.g., CSE" required>
-            </div>
-            <div class="form-group">
-                <label>Department Name *</label>
-                <input type="text" id="departmentDisplayName" class="form-input" placeholder="e.g., Computer Science" required>
-            </div>
-            <div class="form-actions">
-                <button type="submit" class="btn btn-primary">Add Department</button>
-                <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-            </div>
-        </form>
-    `;
-
-    document.getElementById('addDepartmentForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-
-        const value = document.getElementById('departmentValue').value.trim();
-        const displayName = document.getElementById('departmentDisplayName').value.trim();
-
-        try {
-            const response = await fetch(`${SERVER_URL}/api/config/departments`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ value, displayName })
-            });
-
-            const data = await response.json();
-
-            if (data.success) {
-                showNotification('Department added successfully', 'success');
-                closeModal();
-                loadDepartmentsConfig();
-                loadDepartmentsFilter(); // Refresh department filter
-            } else {
-                showNotification(data.error || 'Failed to add department', 'error');
-            }
-        } catch (error) {
-            console.error('Error adding department:', error);
-            showNotification('Failed to add department', 'error');
-        }
-    });
-
-    openModal();
-}
-
 // Delete branch
 async function deleteBranch(branchId, branchName) {
     if (!confirm(`Are you sure you want to delete branch "${branchName}"?\n\nThis will not delete existing students or timetables.`)) {
@@ -11174,7 +11057,7 @@ async function deleteBranch(branchId, branchName) {
 
     try {
         // Use branchId (the actual value) instead of branchName (display name)
-        const deleteResponse = await fetch(`${SERVER_URL}/api/config/branches/${encodeURIComponent(branchId)}`, {
+        const deleteResponse = await fetch(GET_CONFIG_BRANCHES, {
             method: 'DELETE'
         });
 
@@ -11200,7 +11083,7 @@ async function deleteSemester(semesterValue) {
     }
 
     try {
-        const deleteResponse = await fetch(`${SERVER_URL}/api/config/semesters/${semesterValue}`, {
+        const deleteResponse = await fetch(GET_CONFIG_SEMESTERS, {
             method: 'DELETE'
         });
 
@@ -11222,7 +11105,7 @@ async function deleteSemester(semesterValue) {
 // Load departments configuration
 async function loadDepartmentsConfig() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/config/departments`);
+        const response = await fetch(GET_CONFIG_DEPARTMENTS);
         const data = await response.json();
 
         const container = document.getElementById('departmentsListContainer');
@@ -11276,7 +11159,7 @@ function showAddDepartmentModal() {
         const displayName = document.getElementById('deptDisplayName').value.trim();
 
         try {
-            const response = await fetch(`${SERVER_URL}/api/config/departments`, {
+            const response = await fetch(GET_CONFIG_DEPARTMENTS, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ value, displayName })
@@ -11309,7 +11192,7 @@ async function deleteDepartment(value, name) {
     }
 
     try {
-        const deleteResponse = await fetch(`${SERVER_URL}/api/config/departments/${value}`, {
+        const deleteResponse = await fetch(GET_CONFIG_DEPARTMENTS, {
             method: 'DELETE'
         });
 
@@ -11392,7 +11275,7 @@ async function loadPeriodReport() {
         if (period) params.append('period', period);
         params.append('limit', '100');
         
-        const response = await fetch(`${SERVER_URL}/api/attendance/period-report?${params}`);
+        const response = await fetch(GET_ATTENDANCE_PERIOD_REPORT);
         const data = await response.json();
         
         if (data.success) {
@@ -11471,7 +11354,7 @@ async function exportPeriodReportCSV() {
         if (branch) params.append('branch', branch);
         if (period) params.append('period', period);
         
-        const url = `${SERVER_URL}/api/attendance/export?${params}`;
+        const url = GET_ATTENDANCE_EXPORT;
         window.open(url, '_blank');
         showNotification('Exporting period report...', 'success');
     } catch (error) {
@@ -11496,7 +11379,7 @@ async function loadStudentsForManualMarking() {
         console.log(' Loading students for manual marking...', { semester, branch, date, period });
         
         // Get students for this semester and branch
-        const studentsResponse = await fetch(`${SERVER_URL}/api/students`);
+        const studentsResponse = await fetch(GET_STUDENTS);
         const studentsData = await studentsResponse.json();
         
         if (!studentsData.success) {
@@ -11510,7 +11393,7 @@ async function loadStudentsForManualMarking() {
         
         // Get existing attendance for this date and period
         const params = new URLSearchParams({ date, period, semester, branch });
-        const attendanceResponse = await fetch(`${SERVER_URL}/api/attendance/period-report?${params}`);
+        const attendanceResponse = await fetch(GET_ATTENDANCE_PERIOD_REPORT);
         const attendanceData = await attendanceResponse.json();
         
         const attendanceMap = {};
@@ -11600,7 +11483,7 @@ async function submitManualMarking(enrollmentNo, period, status, reason, date) {
     try {
         console.log(' Submitting manual marking...', { enrollmentNo, period, status, reason });
         
-        const response = await fetch(`${SERVER_URL}/api/attendance/manual-mark`, {
+        const response = await fetch(POST_ATTENDANCE_MANUAL_MARK, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -11686,7 +11569,7 @@ async function loadAuditTrail() {
         if (period) params.append('period', period);
         params.append('limit', '100');
         
-        const response = await fetch(`${SERVER_URL}/api/attendance/audit-trail?${params}`);
+        const response = await fetch(GET_ATTENDANCE_AUDIT_TRAIL);
         const data = await response.json();
         
         if (data.success) {
@@ -11755,7 +11638,7 @@ async function exportAuditTrailCSV() {
         if (period) params.append('period', period);
         params.append('limit', '10000');
         
-        const response = await fetch(`${SERVER_URL}/api/attendance/audit-trail?${params}`);
+        const response = await fetch(GET_ATTENDANCE_AUDIT_TRAIL);
         const data = await response.json();
         
         if (data.success && data.records.length > 0) {
@@ -11911,7 +11794,7 @@ function setupThresholdSync() {
 
 async function loadAttendanceThresholdSetting() {
     try {
-        const res = await fetch(`${SERVER_URL}/api/settings/attendance-threshold`);
+        const res = await fetch(GET_SETTINGS_ATTENDANCE_THRESHOLD);
         const data = await res.json();
         if (data.success) {
             const v = data.threshold;
@@ -11935,7 +11818,7 @@ async function saveAttendanceThreshold() {
         return;
     }
     try {
-        const res = await fetch(`${SERVER_URL}/api/settings/attendance-threshold`, {
+        const res = await fetch(GET_SETTINGS_ATTENDANCE_THRESHOLD, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ threshold: value })
@@ -12325,11 +12208,6 @@ document.addEventListener('DOMContentLoaded', () => {
 // ATTENDANCE HISTORY SECTION
 // ============================================================
 
-function debounce(fn, delay) {
-    let t;
-    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), delay); };
-}
-
 let _attendanceSocket = null;
 // Track which student's attendance modal is currently open for live refresh
 let _openAttendanceEnrollmentNo = null;
@@ -12406,7 +12284,7 @@ function _handleTimerSyncForCalendar(data) {
             clearTimeout(pctElement._refreshTimer);
             pctElement._refreshTimer = setTimeout(async () => {
                 try {
-                    const response = await fetch(`${SERVER_URL}/api/attendance/summary/${data.enrollmentNo}`);
+                    const response = await fetch(GET_ATTENDANCE_SUMMARY(data.enrollmentNo));
                     const result = await response.json();
                     if (result.success && result.summary) {
                         const newPct = result.summary.overallPercentage || 0;
@@ -12462,7 +12340,7 @@ async function loadAttendanceHistory() {
         const search    = document.getElementById('attendanceStudentSearch')?.value?.toLowerCase() || '';
 
         // 1. Get students for this semester/branch
-        const studRes  = await fetch(`${SERVER_URL}/api/students?semester=${encodeURIComponent(semesterFilter)}&branch=${encodeURIComponent(courseFilter)}`);
+        const studRes  = await fetch(GET_STUDENTS);
         const studData = await studRes.json();
         if (!studData.success) throw new Error('Failed to load students');
 
@@ -12474,7 +12352,7 @@ async function loadAttendanceHistory() {
         // 2. Fetch summary for each student in parallel
         const withSummary = await Promise.all(students.map(async s => {
             try {
-                let url = `${SERVER_URL}/api/attendance/summary/${s.enrollmentNo}`;
+                let url = GET_ATTENDANCE_SUMMARY(s.enrollmentNo);
                 const params = [];
                 if (startDate) params.push(`startDate=${startDate}`);
                 if (endDate)   params.push(`endDate=${endDate}`);
@@ -12611,13 +12489,13 @@ function renderAttendanceHistoryTable(students) {
     }).join('');
 }
 
-async function exportAttendanceReport() {
+async function exportAllAttendanceReport() {
     const sem = document.getElementById('attendanceSemesterFilter')?.value;
     const crs = document.getElementById('attendanceCourseFilter')?.value;
     if (!sem || !crs) { showNotification('Select branch and semester first', 'warning'); return; }
     const start = document.getElementById('attendanceStartDate')?.value || '';
     const end   = document.getElementById('attendanceEndDate')?.value   || '';
-    let url = `${SERVER_URL}/api/attendance/export?semester=${encodeURIComponent(sem)}&branch=${encodeURIComponent(crs)}`;
+    let url = GET_ATTENDANCE_EXPORT;
     if (start) url += `&startDate=${start}`;
     if (end)   url += `&endDate=${end}`;
     window.open(url, '_blank');
@@ -12686,7 +12564,7 @@ function restoreShowcaseSelections() {
 
 async function loadShowcaseBranches() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/config/branches`);
+        const response = await fetch(GET_CONFIG_BRANCHES);
         const data = await response.json();
         if (data.success) {
             showcaseData.branches = data.branches;
@@ -12713,7 +12591,7 @@ async function loadShowcaseBranches() {
 
 async function loadShowcaseSemesters() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/config/semesters`);
+        const response = await fetch(GET_CONFIG_SEMESTERS);
         const data = await response.json();
         if (data.success) {
             showcaseData.semesters = data.semesters;
@@ -12740,7 +12618,7 @@ async function loadShowcaseSemesters() {
 
 async function loadShowcaseTeachers() {
     try {
-        const response = await fetch(`${SERVER_URL}/api/teachers`);
+        const response = await fetch(GET_TEACHERS);
         const data = await response.json();
         if (data.success) {
             showcaseData.teachers = data.teachers;
@@ -12798,7 +12676,7 @@ async function loadShowcaseStudents() {
     }
     
     try {
-        const response = await fetch(`${SERVER_URL}/api/students?branch=${encodeURIComponent(branch)}&semester=${semester}`);
+        const response = await fetch(GET_STUDENTS);
         const data = await response.json();
         if (data.success) {
             const container = document.getElementById('studentListContainer');
@@ -12807,7 +12685,7 @@ async function loadShowcaseStudents() {
             
             for (const student of data.students) {
                 try {
-                    const attendanceResponse = await fetch(`${SERVER_URL}/api/attendance/summary/${student.enrollmentNo}`);
+                    const attendanceResponse = await fetch(GET_ATTENDANCE_SUMMARY(student.enrollmentNo));
                     const attendanceData = await attendanceResponse.json();
                     let percentage = 0;
                     // summary endpoint returns data.summary.overallPercentage
@@ -12866,7 +12744,7 @@ async function showStudentCalendar(enrollmentNo, studentName) {
     _openCalendarEnrollmentNo = enrollmentNo;
     _openCalendarStudentName  = studentName;
     try {
-        const response = await fetch(`${SERVER_URL}/api/attendance/student/${enrollmentNo}/dates`);
+        const response = await fetch(GET_STUDENT_ATTENDANCE_DATES(enrollmentNo));
         const data = await response.json();
         if (data.success) {
             // data.dates = array of objects: { date: "2026-04-05T00:00:00.000Z", status: "present"|"absent", ... }
@@ -12948,7 +12826,7 @@ async function showPeriodBreakdown(enrollmentNo, date) {
 
     try {
         // 1. Fetch period records first — they carry semester/branch directly
-        const periodRes  = await fetch(`${SERVER_URL}/api/attendance/period-report?enrollmentNo=${enrollmentNo}&date=${date}&limit=20`);
+        const periodRes  = await fetch(GET_ATTENDANCE_PERIOD_REPORT);
         const periodData = await periodRes.json();
         const periodRecords = periodData.records || [];
 
@@ -12962,7 +12840,7 @@ async function showPeriodBreakdown(enrollmentNo, date) {
 
         // 2. Fetch remaining data in parallel — only tested, deployed endpoints
         const [auditData] = await Promise.allSettled([
-            fetch(`${SERVER_URL}/api/attendance/audit-trail?enrollmentNo=${enrollmentNo}&date=${date}&limit=50`).then(r => r.ok ? r.json() : { records: [] })
+            fetch(GET_ATTENDANCE_AUDIT_TRAIL).then(r => r.ok ? r.json() : { records: [] })
         ]).then(results => results.map(r => r.status === 'fulfilled' ? r.value : {}));
 
         // 3. Build lookup maps
@@ -13114,7 +12992,7 @@ async function loadShowcaseSubject() {
         </div>`;
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/attendance/period-report?limit=10000`);
+        const response = await fetch(GET_ATTENDANCE_PERIOD_REPORT);
         const data = await response.json();
 
         if (!data.success || !data.records) {
@@ -13242,8 +13120,8 @@ async function showSubjectDateAttendance(date, subject, branch, semester) {
     try {
         // Fetch students + all period records in parallel
         const [studentsRes, periodsRes] = await Promise.all([
-            fetch(`${SERVER_URL}/api/students?branch=${encodeURIComponent(branch)}&semester=${encodeURIComponent(semester)}`),
-            fetch(`${SERVER_URL}/api/attendance/period-report?limit=10000`)
+            fetch(GET_STUDENTS),
+            fetch(GET_ATTENDANCE_PERIOD_REPORT)
         ]);
         const studentsData = await studentsRes.json();
         const periodsData  = await periodsRes.json();
@@ -13414,7 +13292,7 @@ async function loadShowcaseTeacher() {
         const container = document.getElementById('teacherClassesContainer');
         container.innerHTML = '<div style="text-align: center; padding: 20px;">Loading teacher classes...</div>';
 
-        const response = await fetch(`${SERVER_URL}/api/attendance/period-report?limit=10000`);
+        const response = await fetch(GET_ATTENDANCE_PERIOD_REPORT);
         const data = await response.json();
 
         if (data.success && data.records) {
@@ -13482,7 +13360,7 @@ function renderTeacherClasses(teacherName, classesMap) {
 
 async function showTeacherClassDetails(teacherId, semester, branch) {
     try {
-        const response = await fetch(`${SERVER_URL}/api/attendance/period-report?limit=10000`);
+        const response = await fetch(GET_ATTENDANCE_PERIOD_REPORT);
         const data = await response.json();
         
         if (data.success && data.records) {
@@ -13588,7 +13466,7 @@ async function loadSubjectsForShowcase() {
     console.log(`Loading subjects for branch="${branch}" semester="${semester}"`);
 
     try {
-        const response = await fetch(`${SERVER_URL}/api/attendance/subjects?branch=${encodeURIComponent(branch)}&semester=${encodeURIComponent(semester)}`);
+        const response = await fetch(GET_ATTENDANCE_SUBJECTS);
         const data = await response.json();
         console.log('Subjects response:', data);
 
@@ -13610,38 +13488,4 @@ async function loadSubjectsForShowcase() {
         document.getElementById('subjectViewSelect').innerHTML = '<option value="">Error loading subjects</option>';
     }
 }
-
-// Refresh current section data
-function refreshCurrentSection() {
-    const activeSection = document.querySelector('.section.active')?.id?.replace('-section', '');
-    if (!activeSection) return;
-
-    const refreshMap = {
-        'dashboard': loadDashboardData,
-        'students': loadStudents,
-        'teachers': loadTeachers,
-        'timetable': loadTimetable,
-        'subjects': loadSubjects,
-        'classrooms': loadClassrooms,
-        'calendar': loadCalendar,
-        'attendance-showcase': () => { /* Already has refresh in UI */ },
-        'attendance': loadAttendanceHistory,
-        'period-reports': loadPeriodReport,
-        'manual-marking': loadStudentsForManualMarking,
-        'audit-trail': loadAuditTrail,
-        'periods': loadPeriods,
-        'settings': loadSettings
-    };
-
-    if (refreshMap[activeSection]) {
-        refreshMap[activeSection]();
-        showToast('Data refreshed successfully');
-    } else {
-        showToast('Refresh not available for this section');
-    }
-}
-
-
-
-
 

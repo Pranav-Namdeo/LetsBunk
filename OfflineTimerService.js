@@ -11,6 +11,7 @@ import WiFiManager from './WiFiManager';
 import BSSIDStorage from './BSSIDStorage';
 import { getServerTime } from './ServerTime';
 
+import { GET_HEALTH, GET_STUDENT_FACE_DATA, POST_ATTENDANCE_CHECK_IN, POST_ATTENDANCE_OFFLINE_SYNC } from './constants/apiEndpoints';
 const KEEP_AWAKE_TAG = 'offline-timer';
 const { TimerModule } = NativeModules;
 
@@ -448,7 +449,7 @@ class OfflineTimerService {
       console.log('📡 Fetching fresh face embedding from server...');
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
-      const response = await fetch(`${this.serverUrl}/api/students/${this.studentId}/face-data`, {
+      const response = await fetch(GET_STUDENT_FACE_DATA(this.studentId), {
         method: 'GET',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -513,7 +514,7 @@ class OfflineTimerService {
         timestamp = new Date(_getBootMs() || Date.now()).toISOString();
       }
 
-      const response = await fetch(`${this.serverUrl}/api/attendance/check-in`, {
+      const response = await fetch(POST_ATTENDANCE_CHECK_IN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -693,7 +694,7 @@ class OfflineTimerService {
       console.log('   Timer seconds:', this.previousLectureData.timerSeconds);
       
       // Perform final sync with previous lecture data
-      const response = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
+      const response = await fetch(POST_ATTENDANCE_OFFLINE_SYNC, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1299,7 +1300,7 @@ class OfflineTimerService {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
         
-        const response = await fetch(`${this.serverUrl}/api/health`, {
+        const response = await fetch(GET_HEALTH, {
           method: 'GET',
           signal: controller.signal,
           headers: { 'Cache-Control': 'no-cache' }
@@ -1374,7 +1375,7 @@ class OfflineTimerService {
         const queueTimeoutId = setTimeout(() => queueController.abort(), 10000);
         let queueResponse;
         try {
-          queueResponse = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
+          queueResponse = await fetch(POST_ATTENDANCE_OFFLINE_SYNC, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -1495,7 +1496,7 @@ class OfflineTimerService {
 
       let response;
       try {
-        response = await fetch(`${this.serverUrl}/api/attendance/offline-sync`, {
+        response = await fetch(POST_ATTENDANCE_OFFLINE_SYNC, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

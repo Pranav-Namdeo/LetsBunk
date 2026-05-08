@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { BellIcon, CheckIcon, ClockIcon } from './Icons';
 import { getServerTime } from './ServerTime';
+import { GET_TEACHER_SCHEDULE } from './constants/apiEndpoints';
 
 export default function NotificationsScreen({ theme, userData, socketUrl }) {
   const [notifications, setNotifications] = useState([]);
@@ -50,7 +51,7 @@ export default function NotificationsScreen({ theme, userData, socketUrl }) {
       }
 
       // Fetch all timetables and filter by teacher
-      const response = await fetch(`${socketUrl}/api/teacher-schedule/${userData.employeeId}/${currentDay}`);
+      const response = await fetch(GET_TEACHER_SCHEDULE(userData.employeeId, currentDay));
       const data = await response.json();
 
       if (data.success) {

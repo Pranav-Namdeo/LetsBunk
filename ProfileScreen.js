@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { UserIcon, ChartIcon, SettingsIcon, LogoutIcon, SunIcon, MoonIcon, RefreshIcon, SchoolIcon } from './Icons';
 
+import { GET_ATTENDANCE_STATS } from './constants/apiEndpoints';
 export default function ProfileScreen({
   theme,
   userData,
@@ -28,7 +29,7 @@ export default function ProfileScreen({
 
     console.log('📊 Fetching stats for student:', userData._id);
     try {
-      const url = `${socketUrl}/api/attendance/stats?studentId=${userData._id}`;
+      const url = `${GET_ATTENDANCE_STATS}?studentId=${userData._id}`;
       console.log('📡 Fetching from:', url);
 
       const response = await fetch(url);
