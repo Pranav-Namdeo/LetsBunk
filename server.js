@@ -177,8 +177,8 @@ async function createDatabaseIndexes() {
         console.log('📊 Creating database indexes...');
 
         // StudentManagement indexes
-        await StudentManagement.collection.createIndex({ enrollmentNo: 1 }, { unique: true });
-        await StudentManagement.collection.createIndex({ email: 1 });
+        // Note: enrollmentNo and email are already unique via schema field definition.
+        // Only add compound/non-unique indexes here to avoid duplicate index conflicts.
         await StudentManagement.collection.createIndex({ semester: 1, course: 1 });
         await StudentManagement.collection.createIndex({ isRunning: 1 });
 
@@ -204,8 +204,8 @@ async function createDatabaseIndexes() {
         await Timetable.collection.createIndex({ semester: 1, branch: 1 }, { unique: true });
 
         // Teacher indexes
-        await Teacher.collection.createIndex({ employeeId: 1 }, { unique: true });
-        await Teacher.collection.createIndex({ email: 1 });
+        // Note: employeeId and email are already unique via schema field definition.
+        await Teacher.collection.createIndex({ department: 1 });
 
         // Classroom indexes
         await Classroom.collection.createIndex({ roomNumber: 1 }, { unique: true });
@@ -5837,8 +5837,7 @@ const studentManagementSchema = new mongoose.Schema({
 });
 
 // Indexes for fast login lookups
-studentManagementSchema.index({ enrollmentNo: 1 });
-studentManagementSchema.index({ email: 1 });
+studentManagementSchema.index({ enrollmentNo: 1 }); // email already indexed via unique:true on field
 
 const StudentManagement = mongoose.model('StudentManagement', studentManagementSchema);
 
