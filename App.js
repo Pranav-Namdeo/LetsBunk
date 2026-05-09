@@ -2160,6 +2160,13 @@ export default function App() {
               console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch);
               setSemester(storedSemester);
               setBranch(storedBranch);
+              setManualSelection({ semester: storedSemester, branch: storedBranch });
+              setCurrentClassInfo({
+                subject: 'Manual Selection',
+                branch: storedBranch,
+                semester: storedSemester,
+                isManual: true
+              });
             }
             
             fetchStudents();
@@ -3398,6 +3405,13 @@ export default function App() {
             console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch);
             setSemester(storedSemester);
             setBranch(storedBranch);
+            setManualSelection({ semester: storedSemester, branch: storedBranch });
+            setCurrentClassInfo({
+              subject: 'Manual Selection',
+              branch: storedBranch,
+              semester: storedSemester,
+              isManual: true
+            });
           }
           
           // Fetch students after a short delay to ensure socket is connecting
@@ -4332,6 +4346,9 @@ export default function App() {
                 console.log(`📝 Manual selection: ${selection.branch} Semester ${selection.semester}`);
                 setSemester(selection.semester);
                 setBranch(selection.branch);
+                // Persist so it survives app restarts
+                AsyncStorage.setItem(SEMESTER_KEY, selection.semester).catch(() => {});
+                AsyncStorage.setItem(BRANCH_KEY, selection.branch).catch(() => {});
                 setCurrentClassInfo({
                   subject: 'Manual Selection',
                   branch: selection.branch,
@@ -4344,6 +4361,9 @@ export default function App() {
                 console.log(`🔄 Switched to auto mode - will use current class from timetable`);
                 setSemester(null);
                 setBranch(null);
+                // Clear persisted manual selection when switching back to auto
+                AsyncStorage.removeItem(SEMESTER_KEY).catch(() => {});
+                AsyncStorage.removeItem(BRANCH_KEY).catch(() => {});
                 setCurrentClassInfo(null);
                 fetchStudents({ semester: 'auto', branch: null });
               }

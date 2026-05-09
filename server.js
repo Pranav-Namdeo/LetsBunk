@@ -4458,6 +4458,9 @@ app.get('/api/attendance/date/:date', async (req, res) => {
         }
 
         // ── Fallback: AttendanceRecord for students with no PeriodAttendance ──
+        // Track which enrollmentNos actually came from PeriodAttendance (have real lecture data)
+        const hasPeriodData = new Set(Object.keys(studentMap));
+
         const arRecords = await AttendanceRecord.find({
             date: { $gte: startOfDay, $lte: endOfDay },
             $or: [{ semester: sem, branch }, { enrollmentNo: { $in: enrollmentNos } }]
@@ -4465,7 +4468,8 @@ app.get('/api/attendance/date/:date', async (req, res) => {
 
         for (const r of arRecords) {
             const key = r.enrollmentNo || r.studentId;
-            if (!key || studentMap[key]) continue; // skip if already have PeriodAttendance data
+            // Skip only if we already have real PeriodAttendance data for this student
+            if (!key || hasPeriodData.has(key)) continue;
             studentMap[key] = {
                 enrollmentNo: key,
                 name:         r.studentName || nameMap[key] || 'Unknown',
@@ -6370,20 +6374,23 @@ app.post('/api/enrollment', async (req, res) => {
             });
         }
 
-        // Update student with face embedding
-        student.faceEmbedding = faceEmbedding;
-        student.faceEnrolledAt = new Date();
-        await student.save();
+        // Update only the face fields — bypass full-document validation so that
+        // legacy documents with out-of-enum status values don't block enrollment.
+        const updated = await StudentManagement.findOneAndUpdate(
+            { enrollmentNo },
+            { $set: { faceEmbedding, faceEnrolledAt: new Date() } },
+            { new: true, runValidators: false }
+        );
 
-        console.log(`✅ Face enrolled for student: ${enrollmentNo} (${student.name})`);
+        console.log(`✅ Face enrolled for student: ${enrollmentNo} (${updated.name})`);
 
         res.status(201).json({ 
             success: true, 
-            message: `Face enrolled successfully for ${student.name}`,
+            message: `Face enrolled successfully for ${updated.name}`,
             data: {
-                enrollmentNo: student.enrollmentNo,
-                name: student.name,
-                faceEnrolledAt: student.faceEnrolledAt
+                enrollmentNo: updated.enrollmentNo,
+                name: updated.name,
+                faceEnrolledAt: updated.faceEnrolledAt
             }
         });
 

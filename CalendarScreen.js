@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
-    View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Modal
+    View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Modal,
+    Platform, Dimensions, TextInput,
 } from 'react-native';
 import { CalendarIcon, ArrowLeftIcon, ArrowRightIcon, CheckIcon, XIcon, RefreshIcon } from './Icons';
 import { getServerTime } from './ServerTime';
@@ -50,6 +51,14 @@ export default function CalendarScreen({
     // student drill-down
     const [drillStudent,      setDrillStudent]       = useState(null); // student object with lectures
     const [drillSubjectStats, setDrillSubjectStats]  = useState([]);   // per-subject bubbles
+    // modal filter/search/pagination
+    const [modalFilter,       setModalFilter]        = useState('all'); // 'all' | 'present' | 'absent'
+    const [modalSearch,       setModalSearch]        = useState('');
+    const [modalPage,         setModalPage]          = useState(1);
+    const MODAL_PAGE_SIZE = 25;
+
+    // Reset page to 1 whenever filter or search changes
+    useEffect(() => { setModalPage(1); }, [modalFilter, modalSearch]);
 
     // ── effects ───────────────────────────────────────────────────────────────
     // ── shared fetch helper with timeout ─────────────────────────────────────
@@ -113,18 +122,28 @@ export default function CalendarScreen({
     };
 
     // ── teacher: day mode ─────────────────────────────────────────────────────
-    const fetchTeacherMonthData = async () => {
+    const fetchTeacherMonthData = async (forceRefresh = false) => {
         if (!semester || !branch) {
             setFetchError('Select a semester and branch to view attendance.');
             setLoading(false);
             return;
         }
+        const year  = currentDate.getFullYear();
+        const month = currentDate.getMonth() + 1;
+        const cacheKey = `${semester}||${branch}||${year}||${month}`;
+
+        if (!forceRefresh) {
+            const cached = cacheGet(monthDataCacheRef, cacheKey);
+            if (cached) {
+                setAttendanceData(cached.dateMap);
+                setMonthStats(cached.stats);
+                return;
+            }
+        }
+
         setLoading(true);
         setFetchError(null);
-        // Optimistic: keep previous data visible while loading
         try {
-            const year  = currentDate.getFullYear();
-            const month = currentDate.getMonth() + 1;
             const data = await apiFetch(
                 `${socketUrl}/api/attendance/records?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}&year=${year}&month=${month}`
             );
@@ -132,7 +151,6 @@ export default function CalendarScreen({
                 const dateMap = {};
                 let mp = 0, ma = 0;
                 data.records.forEach(r => {
-                    // Convert to IST date string to match calendar cell keys (device is IST)
                     const d   = new Date(new Date(r.date).getTime() + 5.5 * 60 * 60 * 1000);
                     const key = d.toDateString();
                     if (!dateMap[key]) dateMap[key] = { present: 0, absent: 0, total: 0 };
@@ -140,8 +158,10 @@ export default function CalendarScreen({
                     else                        { dateMap[key].absent++;  ma++; }
                     dateMap[key].total++;
                 });
+                const stats = { present: mp, absent: ma, total: mp + ma };
+                cacheSet(monthDataCacheRef, cacheKey, { dateMap, stats });
                 setAttendanceData(dateMap);
-                setMonthStats({ present: mp, absent: ma, total: mp + ma });
+                setMonthStats(stats);
             } else {
                 setFetchError(null);
                 setAttendanceData({});
@@ -156,6 +176,24 @@ export default function CalendarScreen({
 
     // ── teacher: subject list — cached, only fetches once per semester/branch ──
     const subjectListCacheRef = React.useRef({});
+
+    // ── smart cache refs (TTL = 5 min) ───────────────────────────────────────
+    const CACHE_TTL_MS = 5 * 60 * 1000;
+    const monthDataCacheRef    = React.useRef({}); // key: "sem||branch||year||month" → {data, ts}
+    const subjectDatesCacheRef = React.useRef({}); // key: "sem||branch||subject||year||month" → {data, ts}
+    const dateTapCacheRef      = React.useRef({}); // key: "sem||branch||date" → {students, allPeriods, ts}
+    const dateTapSubjCacheRef  = React.useRef({}); // key: "sem||branch||date||subject" → {students, allPeriods, ts}
+
+    const cacheGet = (ref, key) => {
+        const entry = ref.current[key];
+        if (!entry) return null;
+        if (Date.now() - entry.ts > CACHE_TTL_MS) { delete ref.current[key]; return null; }
+        return entry.data;
+    };
+    const cacheSet = (ref, key, data) => { ref.current[key] = { data, ts: Date.now() }; };
+    const cacheClear = (ref, keyPrefix) => {
+        Object.keys(ref.current).forEach(k => { if (k.startsWith(keyPrefix)) delete ref.current[k]; });
+    };
     const fetchSubjectList = async () => {
         const cacheKey = `${semester}||${branch}`;
         if (subjectListCacheRef.current[cacheKey]) {
@@ -179,8 +217,20 @@ export default function CalendarScreen({
     };
 
     // ── teacher: subject mode — fetch active dates ────────────────────────────
-    const fetchSubjectDates = async () => {
+    const fetchSubjectDates = async (forceRefresh = false) => {
         if (!selectedSubject) return;
+        const year  = currentDate.getFullYear();
+        const month = currentDate.getMonth() + 1;
+        const cacheKey = `${semester}||${branch}||${selectedSubject}||${year}||${month}`;
+
+        if (!forceRefresh) {
+            const cached = cacheGet(subjectDatesCacheRef, cacheKey);
+            if (cached) {
+                setActiveDates(new Set(cached));
+                return;
+            }
+        }
+
         setLoading(true);
         setFetchError(null);
         try {
@@ -188,6 +238,7 @@ export default function CalendarScreen({
                 `${socketUrl}/api/attendance/subject-dates?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}&subject=${encodeURIComponent(selectedSubject)}`
             );
             if (data.success) {
+                cacheSet(subjectDatesCacheRef, cacheKey, data.dates);
                 setActiveDates(new Set(data.dates));
             } else {
                 setActiveDates(new Set());
@@ -258,12 +309,24 @@ export default function CalendarScreen({
         if (!date) return;
         setSelectedDate(date);
         if (isTeacher) {
+            // Reset stale state before opening so the skeleton always shows first
+            setStudentsOnDate([]);
+            setAllPeriods([]);
+            setCurrentPeriodIdx(0);
+            setDrillStudent(null);
+            setModalFilter('all');
+            setModalSearch('');
+            setModalPage(1);
+            setLoadingStudents(true);   // set true BEFORE opening modal — no blank flash
+            setShowDetailsModal(true);
             if (filterMode === 'subject' && selectedSubject) {
                 fetchStudentsForDateSubject(date);
-            } else {
+            } else if (filterMode === 'day') {
                 fetchStudentsForDate(date);
+            } else {
+                // subject mode but no subject selected yet — show empty gracefully
+                setLoadingStudents(false);
             }
-            setShowDetailsModal(true);
         } else {
             const key     = date.toDateString();
             const record  = attendanceRecords[key];
@@ -277,19 +340,32 @@ export default function CalendarScreen({
 
     // teacher day-mode: fetch student list for a date
     const fetchStudentsForDate = async (date) => {
-        if (!semester || !branch) return;
-        setLoadingStudents(true);
-        setStudentsOnDate([]); // optimistic clear
+        if (!semester || !branch) {
+            setLoadingStudents(false);
+            return;
+        }
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        const dateStr = `${y}-${m}-${d}`;
+        const cacheKey = `${semester}||${branch}||${dateStr}`;
+
+        const cached = cacheGet(dateTapCacheRef, cacheKey);
+        if (cached) {
+            setStudentsOnDate(cached.students);
+            setAllPeriods([]);
+            setCurrentPeriodIdx(0);
+            setLoadingStudents(false);
+            return;
+        }
+
         try {
-            // Use local date parts to build YYYY-MM-DD — avoids UTC offset shifting the date
-            const y = date.getFullYear();
-            const m = String(date.getMonth() + 1).padStart(2, '0');
-            const d = String(date.getDate()).padStart(2, '0');
-            const dateStr = `${y}-${m}-${d}`;
             const data = await apiFetch(
                 `${socketUrl}/api/attendance/date/${dateStr}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
             );
-            setStudentsOnDate(data.success ? (data.students || []) : []);
+            const students = data.success ? (data.students || []) : [];
+            cacheSet(dateTapCacheRef, cacheKey, { students });
+            setStudentsOnDate(students);
             setAllPeriods([]);
             setCurrentPeriodIdx(0);
         } catch (err) {
@@ -302,21 +378,35 @@ export default function CalendarScreen({
 
     // teacher subject-mode: fetch per-period student list for a date+subject
     const fetchStudentsForDateSubject = async (date) => {
-        if (!semester || !branch || !selectedSubject) return;
-        setLoadingStudents(true);
-        setStudentsOnDate([]); // optimistic clear
+        if (!semester || !branch || !selectedSubject) {
+            setLoadingStudents(false);
+            return;
+        }
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        const dateStr = `${y}-${m}-${d}`;
+        const cacheKey = `${semester}||${branch}||${dateStr}||${selectedSubject}`;
+
+        const cached = cacheGet(dateTapSubjCacheRef, cacheKey);
+        if (cached) {
+            setStudentsOnDate(cached.students);
+            setAllPeriods(cached.allPeriods);
+            setCurrentPeriodIdx(0);
+            setLoadingStudents(false);
+            return;
+        }
+
         try {
-            // Use local date parts to build YYYY-MM-DD — avoids UTC offset shifting the date
-            const y = date.getFullYear();
-            const m = String(date.getMonth() + 1).padStart(2, '0');
-            const d = String(date.getDate()).padStart(2, '0');
-            const dateStr = `${y}-${m}-${d}`;
             const data = await apiFetch(
                 `${socketUrl}/api/attendance/date/${dateStr}/subject/${encodeURIComponent(selectedSubject)}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
             );
             if (data.success) {
-                setStudentsOnDate(data.students || []);
-                setAllPeriods(data.allPeriods || []);
+                const students   = data.students   || [];
+                const allPeriods = data.allPeriods || [];
+                cacheSet(dateTapSubjCacheRef, cacheKey, { students, allPeriods });
+                setStudentsOnDate(students);
+                setAllPeriods(allPeriods);
                 setCurrentPeriodIdx(0);
             } else {
                 setStudentsOnDate([]);
@@ -415,10 +505,17 @@ export default function CalendarScreen({
                     <TouchableOpacity
                         onPress={() => {
                             if (isTeacher) {
+                                // Force-refresh: clear relevant cache entries first
+                                const year  = currentDate.getFullYear();
+                                const month = currentDate.getMonth() + 1;
                                 if (filterMode === 'subject' && selectedSubject) {
-                                    fetchSubjectDates();
+                                    cacheClear(subjectDatesCacheRef, `${semester}||${branch}||${selectedSubject}`);
+                                    cacheClear(dateTapSubjCacheRef, `${semester}||${branch}`);
+                                    fetchSubjectDates(true);
                                 } else {
-                                    fetchTeacherMonthData();
+                                    cacheClear(monthDataCacheRef, `${semester}||${branch}||${year}||${month}`);
+                                    cacheClear(dateTapCacheRef, `${semester}||${branch}`);
+                                    fetchTeacherMonthData(true);
                                 }
                             } else {
                                 fetchMonthAttendance();
@@ -623,8 +720,8 @@ export default function CalendarScreen({
 
                             {/* Teacher day-mode: present student count badge */}
                             {isTeacher && filterMode === 'day' && stats && !holiday && (
-                                <View style={styles.teacherDateBadge}>
-                                    <Text style={[styles.teacherDateCount, { color: '#10b981' }]}>
+                                <View style={[styles.teacherDateBadge, { backgroundColor: stats.present > 0 ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)' }]}>
+                                    <Text style={[styles.teacherDateCount, { color: stats.present > 0 ? '#10b981' : '#ef4444' }]}>
                                         {stats.present}
                                     </Text>
                                 </View>
@@ -662,7 +759,7 @@ export default function CalendarScreen({
                         filterMode === 'day' ? (
                             <>
                                 <View style={styles.legendItem}>
-                                    <View style={[styles.legendDot, { backgroundColor: 'rgba(16,185,129,0.15)' }]} />
+                                    <View style={[styles.legendDot, { backgroundColor: 'rgba(0,217,255,0.25)' }]} />
                                     <Text style={[styles.legendText, { color: theme.textSecondary }]}>Has data</Text>
                                 </View>
                                 <View style={styles.legendItem}>
@@ -699,31 +796,34 @@ export default function CalendarScreen({
                 </View>
             </View>
 
-            {/* ── Details Modal ── */}
+            {/* ── Details Modal — only mounted when needed ── */}
+            {showDetailsModal && (
             <Modal
                 visible={showDetailsModal}
                 transparent
-                animationType="slide"
-                onRequestClose={() => { setShowDetailsModal(false); setDrillStudent(null); }}
+                animationType="none"
+                presentationStyle="overFullScreen"
+                statusBarTranslucent={true}
+                onRequestClose={() => { setShowDetailsModal(false); setDrillStudent(null); setLoadingStudents(false); }}
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.modalContent, { backgroundColor: theme.cardBackground }]}>
                         {/* Modal header */}
                         <View style={styles.modalHeader}>
-                            <Text style={[styles.modalTitle, { color: theme.text }]}>
+                            <Text style={[styles.modalTitle, { color: theme.text, flex: 1, marginRight: 12 }]}>
                                 {selectedDate.toDateString()}
                                 {isTeacher && filterMode === 'subject' && selectedSubject
                                     ? ` — ${selectedSubject}` : ''}
                             </Text>
-                            <TouchableOpacity onPress={() => { setShowDetailsModal(false); setDrillStudent(null); }}>
+                            <TouchableOpacity onPress={() => { setShowDetailsModal(false); setDrillStudent(null); setLoadingStudents(false); }}>
                                 <XIcon size={24} color={theme.text} />
                             </TouchableOpacity>
                         </View>
 
                         {/* ── Teacher view ── */}
                         {isTeacher ? (
-                            <View style={{ flex: 1 }}>
-                            <ScrollView style={styles.modalBody}>
+                            <View style={{ flex: 1, minHeight: 300 }}>
+                            <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: 20 }}>
                                 {loadingStudents ? (
                                     /* ── Skeleton placeholder while data loads ── */
                                     <View>
@@ -746,142 +846,292 @@ export default function CalendarScreen({
                                                 borderColor: theme.border,
                                                 opacity: 1 - i * 0.15
                                             }]}>
-                                                {/* Avatar */}
                                                 <View style={[styles.skeletonAvatar, { backgroundColor: theme.border }]} />
-                                                {/* Name + enrollment */}
                                                 <View style={{ flex: 1, gap: 8 }}>
                                                     <View style={[styles.skeletonLine, { width: '55%', height: 14, backgroundColor: theme.border }]} />
                                                     <View style={[styles.skeletonLine, { width: '35%', height: 11, backgroundColor: theme.border }]} />
                                                 </View>
-                                                {/* Status badge */}
                                                 <View style={[styles.skeletonBadge, { backgroundColor: theme.border }]} />
                                             </View>
                                         ))}
                                     </View>
                                 ) : studentsOnDate.length === 0 ? (
                                     <View style={styles.noDataContainer}>
+                                        <Text style={{ fontSize: 36, marginBottom: 10 }}>📭</Text>
                                         <Text style={[styles.noDataText, { color: theme.textSecondary }]}>
-                                            No attendance records for this date.
+                                            No attendance session was held on this date.
                                         </Text>
                                     </View>
-                                ) : (
-                                    <>
-                                        {/* Summary */}
-                                        <View style={[styles.summaryCard, { backgroundColor: theme.background }]}>
-                                            <Text style={[styles.summaryTitle, { color: theme.text }]}>📊 Summary</Text>
-                                            <View style={styles.summaryRow}>
-                                                {[
-                                                    { label: 'Present', color: '#10b981',
-                                                      value: filterMode === 'subject' && allPeriods.length > 0
-                                                          ? studentsOnDate.filter(s => s.periods?.[currentPeriodIdx]?.status === 'present').length
-                                                          : studentsOnDate.filter(s => s.status === 'present').length },
-                                                    { label: 'Absent',  color: '#ef4444',
-                                                      value: filterMode === 'subject' && allPeriods.length > 0
-                                                          ? studentsOnDate.filter(s => s.periods?.[currentPeriodIdx]?.status === 'absent').length
-                                                          : studentsOnDate.filter(s => s.status === 'absent').length },
-                                                    { label: 'Total',   color: theme.primary,
-                                                      value: studentsOnDate.length },
-                                                ].map(item => (
-                                                    <View key={item.label} style={styles.summaryItem}>
-                                                        <Text style={[styles.summaryValue, { color: item.color }]}>{item.value}</Text>
-                                                        <Text style={[styles.summaryLabel, { color: theme.textSecondary }]}>{item.label}</Text>
+                                ) : (() => {
+                                    // ── Derived counts ────────────────────────────────────────────
+                                    const getStatus = (s) => {
+                                        if (filterMode === 'subject' && allPeriods.length > 0)
+                                            return s.periods?.[currentPeriodIdx]?.status || 'absent';
+                                        return s.status || 'absent';
+                                    };
+                                    const presentCount = studentsOnDate.filter(s => getStatus(s) === 'present').length;
+                                    const absentCount  = studentsOnDate.length - presentCount;
+                                    const rate         = studentsOnDate.length > 0
+                                        ? Math.round((presentCount / studentsOnDate.length) * 100) : 0;
+                                    const rateColor    = rate >= 75 ? '#10b981' : rate >= 50 ? '#f59e0b' : '#ef4444';
+
+                                    // ── Filter + search ───────────────────────────────────────────
+                                    const filtered = studentsOnDate.filter(s => {
+                                        const st = getStatus(s);
+                                        if (modalFilter === 'present' && st !== 'present') return false;
+                                        if (modalFilter === 'absent'  && st !== 'absent')  return false;
+                                        if (modalSearch.trim()) {
+                                            const q = modalSearch.trim().toLowerCase();
+                                            const name = (s.name || s.studentName || '').toLowerCase();
+                                            const enr  = (s.enrollmentNo || '').toLowerCase();
+                                            if (!name.includes(q) && !enr.includes(q)) return false;
+                                        }
+                                        return true;
+                                    });
+
+                                    return (
+                                        <>
+                                            {/* ── Summary card with rate bar ── */}
+                                            <View style={[styles.summaryCard, { backgroundColor: theme.background }]}>
+                                                <View style={styles.summaryRow}>
+                                                    <View style={styles.summaryItem}>
+                                                        <Text style={[styles.summaryValue, { color: '#10b981' }]}>{presentCount}</Text>
+                                                        <Text style={[styles.summaryLabel, { color: theme.textSecondary }]}>Present</Text>
                                                     </View>
+                                                    <View style={styles.summaryItem}>
+                                                        <Text style={[styles.summaryValue, { color: '#ef4444' }]}>{absentCount}</Text>
+                                                        <Text style={[styles.summaryLabel, { color: theme.textSecondary }]}>Absent</Text>
+                                                    </View>
+                                                    <View style={styles.summaryItem}>
+                                                        <Text style={[styles.summaryValue, { color: rateColor }]}>{rate}%</Text>
+                                                        <Text style={[styles.summaryLabel, { color: theme.textSecondary }]}>Rate</Text>
+                                                    </View>
+                                                </View>
+                                                {/* Attendance rate bar */}
+                                                <View style={[styles.rateBarBg, { backgroundColor: theme.border }]}>
+                                                    <View style={[styles.rateBarFill, {
+                                                        width: `${rate}%`,
+                                                        backgroundColor: rateColor
+                                                    }]} />
+                                                </View>
+                                            </View>
+
+                                            {/* ── Chevron period navigator (subject mode only) ── */}
+                                            {filterMode === 'subject' && allPeriods.length > 1 && (
+                                                <View style={[styles.periodNav, { borderColor: theme.border }]}>
+                                                    <TouchableOpacity
+                                                        style={[styles.chevronBtn, currentPeriodIdx === 0 && styles.chevronDisabled]}
+                                                        onPress={() => setCurrentPeriodIdx(i => Math.max(0, i - 1))}
+                                                        disabled={currentPeriodIdx === 0}
+                                                    >
+                                                        <ChevronLeft color={currentPeriodIdx === 0 ? '#555' : theme.primary} size={22} />
+                                                    </TouchableOpacity>
+                                                    <Text style={[styles.periodNavText, { color: theme.text }]}>
+                                                        {allPeriods[currentPeriodIdx]}
+                                                        {'  '}
+                                                        <Text style={{ color: theme.textSecondary, fontSize: 12 }}>
+                                                            ({currentPeriodIdx + 1} of {allPeriods.length})
+                                                        </Text>
+                                                    </Text>
+                                                    <TouchableOpacity
+                                                        style={[styles.chevronBtn, currentPeriodIdx === allPeriods.length - 1 && styles.chevronDisabled]}
+                                                        onPress={() => setCurrentPeriodIdx(i => Math.min(allPeriods.length - 1, i + 1))}
+                                                        disabled={currentPeriodIdx === allPeriods.length - 1}
+                                                    >
+                                                        <ChevronRight color={currentPeriodIdx === allPeriods.length - 1 ? '#555' : theme.primary} size={22} />
+                                                    </TouchableOpacity>
+                                                </View>
+                                            )}
+
+                                            {/* ── Filter tabs ── */}
+                                            <View style={[styles.modalFilterRow, { borderColor: theme.border }]}>
+                                                {[
+                                                    { key: 'all',     label: `All (${studentsOnDate.length})` },
+                                                    { key: 'present', label: `Present (${presentCount})` },
+                                                    { key: 'absent',  label: `Absent (${absentCount})` },
+                                                ].map(tab => (
+                                                    <TouchableOpacity
+                                                        key={tab.key}
+                                                        style={[styles.modalFilterTab,
+                                                            modalFilter === tab.key && {
+                                                                backgroundColor: tab.key === 'present' ? 'rgba(16,185,129,0.15)'
+                                                                    : tab.key === 'absent' ? 'rgba(239,68,68,0.12)'
+                                                                    : 'rgba(0,217,255,0.12)',
+                                                                borderColor: tab.key === 'present' ? '#10b981'
+                                                                    : tab.key === 'absent' ? '#ef4444'
+                                                                    : theme.primary,
+                                                            }
+                                                        ]}
+                                                        onPress={() => setModalFilter(tab.key)}
+                                                    >
+                                                        <Text style={[styles.modalFilterText, {
+                                                            color: modalFilter === tab.key
+                                                                ? (tab.key === 'present' ? '#10b981' : tab.key === 'absent' ? '#ef4444' : theme.primary)
+                                                                : theme.textSecondary,
+                                                            fontWeight: modalFilter === tab.key ? '700' : '500'
+                                                        }]}>{tab.label}</Text>
+                                                    </TouchableOpacity>
                                                 ))}
                                             </View>
-                                        </View>
 
-                                        {/* ── Chevron period navigator (subject mode only) ── */}
-                                        {filterMode === 'subject' && allPeriods.length > 1 && (
-                                            <View style={[styles.periodNav, { borderColor: theme.border }]}>
-                                                <TouchableOpacity
-                                                    style={[styles.chevronBtn,
-                                                        currentPeriodIdx === 0 && styles.chevronDisabled]}
-                                                    onPress={() => setCurrentPeriodIdx(i => Math.max(0, i - 1))}
-                                                    disabled={currentPeriodIdx === 0}
-                                                >
-                                                    <ChevronLeft color={currentPeriodIdx === 0 ? '#555' : theme.primary} size={22} />
-                                                </TouchableOpacity>
-
-                                                <Text style={[styles.periodNavText, { color: theme.text }]}>
-                                                    {allPeriods[currentPeriodIdx]}
-                                                    {'  '}
-                                                    <Text style={{ color: theme.textSecondary, fontSize: 12 }}>
-                                                        ({currentPeriodIdx + 1} of {allPeriods.length})
-                                                    </Text>
-                                                </Text>
-
-                                                <TouchableOpacity
-                                                    style={[styles.chevronBtn,
-                                                        currentPeriodIdx === allPeriods.length - 1 && styles.chevronDisabled]}
-                                                    onPress={() => setCurrentPeriodIdx(i => Math.min(allPeriods.length - 1, i + 1))}
-                                                    disabled={currentPeriodIdx === allPeriods.length - 1}
-                                                >
-                                                    <ChevronRight color={currentPeriodIdx === allPeriods.length - 1 ? '#555' : theme.primary} size={22} />
-                                                </TouchableOpacity>
+                                            {/* ── Search box ── */}
+                                            <View style={[styles.modalSearchBox, { backgroundColor: theme.background, borderColor: theme.border }]}>
+                                                <Text style={{ color: theme.textSecondary, fontSize: 14, marginRight: 8 }}>🔍</Text>
+                                                <TextInput
+                                                    style={[styles.modalSearchInput, { color: theme.text }]}
+                                                    placeholder="Search name or enrollment…"
+                                                    placeholderTextColor={theme.textSecondary}
+                                                    value={modalSearch}
+                                                    onChangeText={setModalSearch}
+                                                    autoCorrect={false}
+                                                    autoCapitalize="none"
+                                                />
+                                                {modalSearch.length > 0 && (
+                                                    <TouchableOpacity onPress={() => setModalSearch('')}>
+                                                        <Text style={{ color: theme.textSecondary, fontSize: 16, paddingLeft: 6 }}>✕</Text>
+                                                    </TouchableOpacity>
+                                                )}
                                             </View>
-                                        )}
 
-                        {/* Student list */}
-                                        <Text style={[styles.studentsTitle, { color: theme.text }]}>
-                                            Students ({studentsOnDate.length})
-                                        </Text>
-                                        {studentsOnDate.map((student, i) => {
-                                            const periodRecord = filterMode === 'subject' && allPeriods.length > 0
-                                                ? student.periods?.[currentPeriodIdx]
-                                                : null;
-                                            const status    = periodRecord ? periodRecord.status : student.status;
-                                            const isPresent = status === 'present';
-                                            const initials  = (student.name || student.studentName || '?')[0].toUpperCase();
-                                            const lecs      = student.lectures || [];
-                                            const lPresent  = lecs.filter(l => l.status === 'present').length;
+                                            {/* ── Student list ── */}
+                                            {(() => {
+                                                const totalPages = Math.ceil(filtered.length / MODAL_PAGE_SIZE);
+                                                const safePage   = Math.min(modalPage, Math.max(1, totalPages));
+                                                const pageSlice  = filtered.slice(
+                                                    (safePage - 1) * MODAL_PAGE_SIZE,
+                                                    safePage * MODAL_PAGE_SIZE
+                                                );
+                                                const start = (safePage - 1) * MODAL_PAGE_SIZE + 1;
+                                                const end   = Math.min(safePage * MODAL_PAGE_SIZE, filtered.length);
 
-                                            return (
-                                                <TouchableOpacity key={i} activeOpacity={0.7} onPress={() => {
-                                                    const drillLecs = filterMode === 'subject' && allPeriods.length > 0
-                                                        ? allPeriods.map((p, pi) => {
-                                                            const pr = student.periods?.[pi];
-                                                            return { period: p, subject: selectedSubject,
-                                                                     status: pr?.status || 'absent',
-                                                                     verificationType: pr?.verificationType,
-                                                                     room: pr?.room, teacher: pr?.teacher };
-                                                          })
-                                                        : lecs;
-                                                    setDrillStudent({ ...student, name: student.name || student.studentName, lectures: drillLecs });
-                                                }}>
-                                                    <View style={[styles.studentCard, {
-                                                        backgroundColor: isPresent ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)',
-                                                        borderLeftColor: isPresent ? '#10b981' : '#ef4444',
-                                                        borderColor: isPresent ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)',
-                                                        borderWidth: 1
-                                                    }]}>
-                                                        <View style={[styles.scAvatar, {
-                                                            backgroundColor: isPresent ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'
-                                                        }]}>
-                                                            <Text style={{ color: isPresent ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: 15 }}>{initials}</Text>
-                                                        </View>
-                                                        <View style={{ flex: 1 }}>
-                                                            <Text style={[styles.studentName, { color: theme.text }]}>
-                                                                {student.name || student.studentName || 'Unknown'}
+                                                return (
+                                                    <>
+                                                        {/* List header */}
+                                                        <View style={styles.listHeaderRow}>
+                                                            <Text style={[styles.studentsTitle, { color: theme.text, marginBottom: 0 }]}>
+                                                                {filtered.length === studentsOnDate.length
+                                                                    ? `Students (${studentsOnDate.length})`
+                                                                    : `${filtered.length} of ${studentsOnDate.length} students`}
                                                             </Text>
-                                                            <Text style={[styles.studentId, { color: theme.textSecondary }]}>
-                                                                {student.enrollmentNo || '—'}
-                                                                {lecs.length > 0 ? `  ·  ${lPresent}/${lecs.length} lectures` : ''}
-                                                            </Text>
+                                                            {filtered.length > 0 && (
+                                                                <Text style={{ color: theme.textSecondary, fontSize: 12 }}>
+                                                                    {start}–{end}
+                                                                </Text>
+                                                            )}
                                                         </View>
-                                                        <View style={[styles.scBadge, {
-                                                            backgroundColor: isPresent ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'
-                                                        }]}>
-                                                            <Text style={{ color: isPresent ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: 13 }}>
-                                                                {isPresent ? '✓' : '✗'}
-                                                            </Text>
-                                                        </View>
-                                                        <Text style={{ color: theme.textSecondary, fontSize: 16, marginLeft: 4 }}>›</Text>
-                                                    </View>
-                                                </TouchableOpacity>
-                                            );
-                                        })}
-                                    </>
-                                )}
+
+                                                        {filtered.length === 0 ? (
+                                                            <View style={{ alignItems: 'center', paddingVertical: 30 }}>
+                                                                <Text style={{ color: theme.textSecondary, fontSize: 14 }}>No students match this filter.</Text>
+                                                            </View>
+                                                        ) : (
+                                                            <>
+                                                                {pageSlice.map((student, i) => {
+                                                                    const periodRecord = filterMode === 'subject' && allPeriods.length > 0
+                                                                        ? student.periods?.[currentPeriodIdx]
+                                                                        : null;
+                                                                    const status    = periodRecord ? periodRecord.status : student.status;
+                                                                    const isPresent = status === 'present';
+                                                                    const initials  = (student.name || student.studentName || '?')[0].toUpperCase();
+                                                                    const lecs      = student.lectures || [];
+                                                                    const lPresent  = lecs.filter(l => l.status === 'present').length;
+
+                                                                    return (
+                                                                        <TouchableOpacity
+                                                                            key={student.enrollmentNo || i}
+                                                                            activeOpacity={0.7}
+                                                                            onPress={() => {
+                                                                                const drillLecs = filterMode === 'subject' && allPeriods.length > 0
+                                                                                    ? allPeriods.map((p, pi) => {
+                                                                                        const pr = student.periods?.[pi];
+                                                                                        return { period: p, subject: selectedSubject,
+                                                                                                 status: pr?.status || 'absent',
+                                                                                                 verificationType: pr?.verificationType,
+                                                                                                 room: pr?.room, teacher: pr?.teacher };
+                                                                                      })
+                                                                                    : lecs;
+                                                                                setDrillStudent({ ...student, name: student.name || student.studentName, lectures: drillLecs });
+                                                                            }}
+                                                                        >
+                                                                            <View style={[styles.studentCard, {
+                                                                                backgroundColor: isPresent ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.04)',
+                                                                                borderLeftColor: isPresent ? '#10b981' : '#ef4444',
+                                                                                borderColor: isPresent ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.12)',
+                                                                                borderWidth: 1
+                                                                            }]}>
+                                                                                <View style={[styles.scAvatar, {
+                                                                                    backgroundColor: isPresent ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.12)'
+                                                                                }]}>
+                                                                                    <Text style={{ color: isPresent ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: 15 }}>{initials}</Text>
+                                                                                </View>
+                                                                                <View style={{ flex: 1 }}>
+                                                                                    <Text style={[styles.studentName, { color: theme.text }]}>
+                                                                                        {student.name || student.studentName || 'Unknown'}
+                                                                                    </Text>
+                                                                                    <Text style={[styles.studentId, { color: theme.textSecondary }]}>
+                                                                                        {student.enrollmentNo || '—'}
+                                                                                        {lecs.length > 0 ? `  ·  ${lPresent}/${lecs.length} lectures` : ''}
+                                                                                    </Text>
+                                                                                </View>
+                                                                                <View style={[styles.scBadge, {
+                                                                                    backgroundColor: isPresent ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.12)'
+                                                                                }]}>
+                                                                                    <Text style={{ color: isPresent ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: 13 }}>
+                                                                                        {isPresent ? '✓' : '✗'}
+                                                                                    </Text>
+                                                                                </View>
+                                                                                <Text style={{ color: theme.textSecondary, fontSize: 16, marginLeft: 4 }}>›</Text>
+                                                                            </View>
+                                                                        </TouchableOpacity>
+                                                                    );
+                                                                })}
+
+                                                                {/* ── Pagination controls ── */}
+                                                                {totalPages > 1 && (
+                                                                    <View style={[styles.paginationRow, { borderColor: theme.border }]}>
+                                                                        <TouchableOpacity
+                                                                            style={[styles.pageBtn, safePage === 1 && styles.pageBtnDisabled]}
+                                                                            onPress={() => setModalPage(1)}
+                                                                            disabled={safePage === 1}
+                                                                        >
+                                                                            <Text style={{ color: safePage === 1 ? '#555' : theme.primary, fontSize: 13 }}>«</Text>
+                                                                        </TouchableOpacity>
+                                                                        <TouchableOpacity
+                                                                            style={[styles.pageBtn, safePage === 1 && styles.pageBtnDisabled]}
+                                                                            onPress={() => setModalPage(p => Math.max(1, p - 1))}
+                                                                            disabled={safePage === 1}
+                                                                        >
+                                                                            <Text style={{ color: safePage === 1 ? '#555' : theme.primary, fontSize: 13 }}>‹</Text>
+                                                                        </TouchableOpacity>
+
+                                                                        <Text style={{ color: theme.text, fontSize: 13, fontWeight: '600', flex: 1, textAlign: 'center' }}>
+                                                                            Page {safePage} of {totalPages}
+                                                                        </Text>
+
+                                                                        <TouchableOpacity
+                                                                            style={[styles.pageBtn, safePage === totalPages && styles.pageBtnDisabled]}
+                                                                            onPress={() => setModalPage(p => Math.min(totalPages, p + 1))}
+                                                                            disabled={safePage === totalPages}
+                                                                        >
+                                                                            <Text style={{ color: safePage === totalPages ? '#555' : theme.primary, fontSize: 13 }}>›</Text>
+                                                                        </TouchableOpacity>
+                                                                        <TouchableOpacity
+                                                                            style={[styles.pageBtn, safePage === totalPages && styles.pageBtnDisabled]}
+                                                                            onPress={() => setModalPage(totalPages)}
+                                                                            disabled={safePage === totalPages}
+                                                                        >
+                                                                            <Text style={{ color: safePage === totalPages ? '#555' : theme.primary, fontSize: 13 }}>»</Text>
+                                                                        </TouchableOpacity>
+                                                                    </View>
+                                                                )}
+                                                            </>
+                                                        )}
+                                                    </>
+                                                );
+                                            })()}
+                                        </>
+                                    );
+                                })()}
                             </ScrollView>
 
                             {/* ── Drill-down: student lecture detail ── */}
@@ -889,15 +1139,15 @@ export default function CalendarScreen({
                                 <View style={[StyleSheet.absoluteFillObject,
                                     { backgroundColor: theme.cardBackground, borderTopLeftRadius: 20, borderTopRightRadius: 20 }]}>
                                     <View style={styles.modalHeader}>
-                        <TouchableOpacity onPress={() => setDrillStudent(null)} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                        <TouchableOpacity onPress={() => setDrillStudent(null)} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                             <Text style={{ color: theme.primary, fontSize: 18 }}>‹</Text>
                                             <Text style={{ color: theme.primary, fontSize: 14 }}>Back</Text>
                                         </TouchableOpacity>
-                                        <View style={{ flex: 1, marginHorizontal: 8 }}>
-                                            <Text style={[styles.modalTitle, { color: theme.text }]} numberOfLines={1}>
+                                        <View style={{ flex: 1, marginHorizontal: 8, minWidth: 0 }}>
+                                            <Text style={[styles.modalTitle, { color: theme.text, fontSize: 15 }]} numberOfLines={1}>
                                                 {drillStudent.name || 'Unknown'}
                                             </Text>
-                                            <Text style={[styles.studentId, { color: theme.textSecondary }]}>
+                                            <Text style={[styles.studentId, { color: theme.textSecondary }]} numberOfLines={1}>
                                                 {drillStudent.enrollmentNo || ''}
                                             </Text>
                                         </View>
@@ -905,7 +1155,7 @@ export default function CalendarScreen({
                                             <XIcon size={22} color={theme.text} />
                                         </TouchableOpacity>
                                     </View>
-                                    <ScrollView style={styles.modalBody}>
+                                    <ScrollView style={[styles.modalBody, { flex: 1 }]}>
                                         {/* Stats row */}
                                         {(() => {
                                             const lecs   = drillStudent.lectures || [];
@@ -990,9 +1240,9 @@ export default function CalendarScreen({
                                                                 const shortName = (lec.subject || '').length > 5 ? (lec.subject || '').substring(0, 4) + '…' : (lec.subject || pid);
                                                                 return (
                                                                     <View key={pid} style={[styles.bubbleWrap, { borderColor: color }]}>
-                                                                        <Text style={{ color, fontSize: 9, fontWeight: '700', textAlign: 'center' }} numberOfLines={1}>{shortName}</Text>
-                                                                        <Text style={{ color, fontSize: 9, fontWeight: '600' }}>{pid}</Text>
-                                                                        <Text style={{ color: isP ? '#10b981' : '#ef4444', fontSize: 8 }}>{isP ? '✓' : '✗'}</Text>
+                                                                        <Text style={{ color, fontSize: 8, fontWeight: '700', textAlign: 'center', lineHeight: 11 }} numberOfLines={1}>{shortName}</Text>
+                                                                        <Text style={{ color, fontSize: 9, fontWeight: '700', lineHeight: 12 }}>{pid}</Text>
+                                                                        <Text style={{ color, fontSize: 10, lineHeight: 12 }}>{isP ? '✓' : '✗'}</Text>
                                                                     </View>
                                                                 );
                                                             })}
@@ -1071,6 +1321,7 @@ export default function CalendarScreen({
                     </View>
                 </View>
             </Modal>
+            )}
         </ScrollView>
     );
 }
@@ -1155,7 +1406,7 @@ const styles = StyleSheet.create({
     statusIcon:     { position: 'absolute', bottom: 4 },
     teacherDateBadge: {
         position: 'absolute', bottom: 2, right: 2,
-        backgroundColor: 'rgba(0,217,255,0.2)', borderRadius: 8,
+        borderRadius: 8,
         paddingHorizontal: 4, paddingVertical: 2, minWidth: 16, alignItems: 'center',
     },
     teacherDateCount: { fontSize: 8, fontWeight: 'bold' },
@@ -1188,13 +1439,35 @@ const styles = StyleSheet.create({
     skeletonBadge:  { width: 28, height: 28, borderRadius: 14 },
 
     // ── modal ─────────────────────────────────────────────────────────────────
-    modalOverlay:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalContent:  { borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '85%' },
+    modalOverlay:  {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.6)',
+        justifyContent: 'flex-end',
+        // statusBarTranslucent makes the modal cover the full screen including
+        // the status bar. We don't add any bottom padding here — the sheet
+        // itself handles safe-area insets so it never hides behind the nav bar.
+        paddingBottom: 0,
+        zIndex: 9999,
+        elevation: 9999,
+    },
+    modalContent:  {
+        borderTopLeftRadius: 20,
+        borderTopRightRadius: 20,
+        // Fixed height so inner flex:1 children resolve correctly.
+        // A ScrollView inside a view with only maxHeight (no height) collapses to 0.
+        height: Dimensions.get('window').height * 0.88,
+        width: '100%',
+        overflow: 'hidden',
+        zIndex: 10000,
+        elevation: 10000,
+        // Pad the bottom so content clears the Android gesture/nav bar.
+        paddingBottom: Platform.OS === 'android' ? 16 : 0,
+    },
     modalHeader: {
         flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
         padding: 20, borderBottomWidth: 1, borderBottomColor: '#e5e7eb',
     },
-    modalTitle:   { fontSize: 16, fontWeight: 'bold', flex: 1, marginRight: 12 },
+    modalTitle:   { fontSize: 16, fontWeight: 'bold' },
     modalBody:    { padding: 20 },
 
     // ── period chevron nav ────────────────────────────────────────────────────
@@ -1236,7 +1509,7 @@ const styles = StyleSheet.create({
 
     // ── subject bubbles ───────────────────────────────────────────────────────
     bubbleWrap: {
-        width: 60, height: 60, borderRadius: 30,
+        width: 64, height: 64, borderRadius: 32,
         borderWidth: 2, justifyContent: 'center', alignItems: 'center',
         backgroundColor: 'rgba(255,255,255,0.04)',
     },
@@ -1258,4 +1531,42 @@ const styles = StyleSheet.create({
     holidayInfoEmoji: { fontSize: 40, marginBottom: 8 },
     holidayInfoName:  { fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
     holidayInfoDesc:  { fontSize: 13, textAlign: 'center' },
+
+    // ── modal filter tabs + search ────────────────────────────────────────────
+    modalFilterRow: {
+        flexDirection: 'row', gap: 8, marginBottom: 12,
+        paddingBottom: 12, borderBottomWidth: 1,
+    },
+    modalFilterTab: {
+        flex: 1, paddingVertical: 7, borderRadius: 20,
+        alignItems: 'center', borderWidth: 1,
+        borderColor: 'transparent', backgroundColor: 'rgba(128,128,128,0.08)',
+    },
+    modalFilterText: { fontSize: 12 },
+    modalSearchBox: {
+        flexDirection: 'row', alignItems: 'center',
+        paddingHorizontal: 12, paddingVertical: 8,
+        borderRadius: 10, borderWidth: 1, marginBottom: 14,
+    },
+    modalSearchInput: { flex: 1, fontSize: 14, padding: 0 },
+
+    // ── rate bar ──────────────────────────────────────────────────────────────
+    rateBarBg:   { height: 6, borderRadius: 3, marginTop: 14, overflow: 'hidden' },
+    rateBarFill: { height: 6, borderRadius: 3 },
+
+    // ── pagination ────────────────────────────────────────────────────────────
+    listHeaderRow: {
+        flexDirection: 'row', justifyContent: 'space-between',
+        alignItems: 'center', marginBottom: 10,
+    },
+    paginationRow: {
+        flexDirection: 'row', alignItems: 'center',
+        marginTop: 12, paddingTop: 12, borderTopWidth: 1,
+    },
+    pageBtn: {
+        width: 36, height: 36, borderRadius: 18,
+        justifyContent: 'center', alignItems: 'center',
+        backgroundColor: 'rgba(128,128,128,0.1)',
+    },
+    pageBtnDisabled: { opacity: 0.35 },
 });

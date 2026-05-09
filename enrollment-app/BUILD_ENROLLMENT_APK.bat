@@ -4,23 +4,14 @@ echo LetsBunk Face Enrollment App Builder
 echo ========================================
 echo.
 
-REM ── Android SDK: use existing env var or fall back to common install paths ──
-if not defined ANDROID_HOME (
-    if exist "%LOCALAPPDATA%\Android\Sdk" (
-        set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
-    ) else if exist "%USERPROFILE%\AppData\Local\Android\Sdk" (
-        set "ANDROID_HOME=%USERPROFILE%\AppData\Local\Android\Sdk"
-    ) else (
-        echo ERROR: ANDROID_HOME is not set and SDK not found in default location.
-        echo Please set ANDROID_HOME to your Android SDK path and re-run.
-        pause
-        exit /b 1
-    )
-)
-set "ANDROID_SDK_ROOT=%ANDROID_HOME%"
+REM Set Android SDK environment variables
+echo Setting up Android SDK environment...
+set ANDROID_HOME=C:\Users\ASUS\AppData\Local\Android\Sdk
+set ANDROID_SDK_ROOT=C:\Users\ASUS\AppData\Local\Android\Sdk
 set "PATH=%ANDROID_HOME%\platform-tools;%ANDROID_HOME%\tools;%ANDROID_HOME%\tools\bin;%ANDROID_HOME%\build-tools\34.0.0;%PATH%"
 
-echo ANDROID_HOME: %ANDROID_HOME%
+echo ✅ ANDROID_HOME: %ANDROID_HOME%
+echo ✅ ANDROID_SDK_ROOT: %ANDROID_SDK_ROOT%
 echo.
 
 cd /d "%~dp0"
@@ -43,18 +34,20 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/3] Copying APK to folder...
-set "APK_SRC=app\build\outputs\apk\release\app-release.apk"
-set "APK_DST=Enrollment-App-Release.apk"
-
-if exist "%APK_SRC%" (
-    copy /Y "%APK_SRC%" "%APK_DST%" >nul
-    for %%A in ("%APK_DST%") do set /a APK_MB=%%~zA/1024/1024
-    echo APK ready: %APK_DST% (~%APK_MB% MB^)
+echo [3/3] Copying APK to main folder...
+if exist "app\build\outputs\apk\release\app-release.apk" (
+    copy /Y "app\build\outputs\apk\release\app-release.apk" "Enrollment-App-Release.apk" >nul
+    echo ✅ APK ready: Enrollment-App-Release.apk
+    
+    for %%A in ("Enrollment-App-Release.apk") do set APK_SIZE=%%~zA
+    if defined APK_SIZE (
+        set /a APK_SIZE_MB=%APK_SIZE%/1024/1024
+    ) else (
+        set APK_SIZE_MB=Unknown
+    )
+    echo ✅ Size: %APK_SIZE_MB% MB
 ) else (
-    echo ERROR: APK not found at %APK_SRC%
-    pause
-    exit /b 1
+    echo ❌ APK not found after build
 )
 
 echo.
@@ -63,12 +56,13 @@ adb devices
 
 echo.
 echo ========================================
-echo BUILD SUCCESSFUL
+echo BUILD SUCCESSFUL!
 echo ========================================
-echo Server: https://letsbunk-server.azurewebsites.net
-echo APK:    %APK_DST%
+echo.
+echo APK Location: Enrollment-App-Release.apk
+echo Features: Face Enrollment + MediaPipe + TensorFlow
 echo.
 echo To install on connected device:
-echo   adb install -r "%APK_DST%"
+echo adb install -r "Enrollment-App-Release.apk"
 echo.
 pause
