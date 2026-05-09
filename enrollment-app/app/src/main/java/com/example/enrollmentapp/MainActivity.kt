@@ -304,8 +304,10 @@ class MainActivity : AppCompatActivity() {
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        android.util.Log.d("EnrollDebug", "onActivityResult: requestCode=$requestCode resultCode=$resultCode data=$data")
         if (requestCode == CAMERA_REQUEST_CODE && resultCode == RESULT_OK) {
             faceEmbedding = data?.getFloatArrayExtra("face_embedding")
+            android.util.Log.d("EnrollDebug", "onActivityResult: faceEmbedding=${faceEmbedding?.size ?: "NULL"}")
             if (faceEmbedding != null) {
                 saveEnrollment()
             } else {
@@ -315,8 +317,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveEnrollment() {
-        val student   = pendingStudent ?: return
-        val embedding = faceEmbedding  ?: return
+        val student   = pendingStudent ?: run {
+            android.util.Log.e("EnrollDebug", "saveEnrollment: pendingStudent is NULL")
+            return
+        }
+        val embedding = faceEmbedding  ?: run {
+            android.util.Log.e("EnrollDebug", "saveEnrollment: faceEmbedding is NULL")
+            return
+        }
+        android.util.Log.d("EnrollDebug", "saveEnrollment: student=${student.enrollmentNo} embedding.size=${embedding.size}")
 
         val progressDialog = AlertDialog.Builder(this)
             .setMessage("Saving face data for ${student.name}...")

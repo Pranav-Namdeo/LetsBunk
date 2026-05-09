@@ -128,6 +128,7 @@ class ApiService(private val context: Context) {
         return withContext(Dispatchers.IO) {
             try {
                 val url = URL("$baseUrl/enrollment")
+                android.util.Log.d("EnrollDebug", "createEnrollment: POST to $url enrollmentNo=$enrollmentNo embeddingSize=${faceEmbedding.size}")
                 val connection = url.openConnection() as HttpURLConnection
                 connection.requestMethod = "POST"
                 connection.setRequestProperty("Content-Type", "application/json")
@@ -154,6 +155,7 @@ class ApiService(private val context: Context) {
                              else connection.errorStream
 
                 val responseJson = JSONObject(stream.bufferedReader().readText())
+                android.util.Log.d("EnrollDebug", "createEnrollment: responseCode=$responseCode body=${responseJson.toString().take(200)}")
                 ApiResponse(
                     responseJson.optBoolean("success", false),
                     responseJson.optString("message", "Unknown error"),

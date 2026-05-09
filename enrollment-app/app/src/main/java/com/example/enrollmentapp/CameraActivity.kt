@@ -196,10 +196,12 @@ class CameraActivity : AppCompatActivity() {
         }
 
         val averageEmbedding = calculateAverageEmbedding(capturedEmbeddings)
+        android.util.Log.d("EnrollDebug", "finishCapture: embedding size=${averageEmbedding.size}, first=${averageEmbedding[0]}")
 
-        val intent = intent
-        intent.putExtra("face_embedding", averageEmbedding)
-        setResult(RESULT_OK, intent)
+        val resultIntent = android.content.Intent()
+        resultIntent.putExtra("face_embedding", averageEmbedding)
+        setResult(RESULT_OK, resultIntent)
+        android.util.Log.d("EnrollDebug", "finishCapture: setResult RESULT_OK done, calling finish()")
 
         finish()
     }
