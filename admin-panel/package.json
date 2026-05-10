@@ -1,0 +1,53 @@
+{
+  "name": "letsbunk-admin",
+  "version": "1.0.0",
+  "description": "LetsBunk - Admin Panel",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "build-win": "electron-builder --win --x64",
+    "build-installer": "electron-builder --win --x64 --config electron-builder.json",
+    "build-portable": "electron-builder --win --x64 --config electron-builder.json --dir",
+    "clean": "rimraf dist",
+    "rebuild": "npm run clean && npm run build-installer"
+  },
+  "author": "LetsBunk",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^27.0.0",
+    "electron-builder": "^24.6.4"
+  },
+  "dependencies": {
+    "electron-squirrel-startup": "^1.0.0"
+  },
+  "build": {
+    "appId": "com.letsbunk.admin",
+    "productName": "LetsBunk Admin",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "LetsBunk Admin",
+      "license": "LICENSE.txt"
+    },
+    "files": [
+      "**/*",
+      "!node_modules/**/*",
+      "node_modules/electron-squirrel-startup/**/*"
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  }
+}
