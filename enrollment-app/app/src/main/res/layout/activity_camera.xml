@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- Full-screen camera preview -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/bottomPanel"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+    <!-- Face guide oval overlay (purely visual) -->
+    <View
+        android:id="@+id/faceGuide"
+        android:layout_width="220dp"
+        android:layout_height="280dp"
+        android:background="@drawable/face_guide_oval"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toTopOf="@id/bottomPanel"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintVertical_bias="0.42" />
+
+    <!-- Bottom panel -->
+    <LinearLayout
+        android:id="@+id/bottomPanel"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:background="#EE000000"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <TextView
+            android:id="@+id/statusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Position your face inside the oval, then tap Take Data"
+            android:textColor="#FFFFFF"
+            android:textAlignment="center"
+            android:textSize="15sp"
+            android:layout_marginBottom="6dp" />
+
+        <TextView
+            android:id="@+id/progressText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Frames: 0/10"
+            android:textColor="#00D9FF"
+            android:textAlignment="center"
+            android:textSize="13sp"
+            android:layout_marginBottom="14dp" />
+
+        <!-- Take Data button — visible until capture starts -->
+        <Button
+            android:id="@+id/takeDataButton"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:text="Take Data"
+            android:textSize="17sp"
+            android:textStyle="bold"
+            android:textColor="#000000"
+            android:backgroundTint="#00D9FF"
+            android:layout_marginBottom="4dp" />
+
+    </LinearLayout>
+
+    <!-- Title bar at top -->
+    <TextView
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="0dp"
+        android:text="Face Enrollment"
+        android:textColor="#FFFFFF"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        android:textAlignment="center"
+        android:padding="16dp"
+        android:background="#CC000000"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent" />
+
+</androidx.constraintlayout.widget.ConstraintLayout>
