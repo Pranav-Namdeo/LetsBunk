@@ -16,7 +16,7 @@ class LoginActivity : AppCompatActivity() {
     private lateinit var errorText: TextView
 
     private val VALID_USERNAME = "Letsbunk"
-    private val VALID_PASSWORD = "Samosa123"
+    private val VALID_PASSWORD = "aditya"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
