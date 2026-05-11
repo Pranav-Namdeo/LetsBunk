@@ -1,4 +1,4 @@
-// Deployment trigger - Updated March 20, 2026 - v2.10 - Fix student socket room rejoin after server restart.
+// Deployment trigger - Updated May 12, 2026 - v2.11 - Redis caching for timetables, student profiles, live timer state.
 // Force IST timezone — all period times are stored as IST strings (HH:MM)
 process.env.TZ = 'Asia/Kolkata';
 
@@ -45,6 +45,51 @@ const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const bcrypt = require('bcrypt'); // Add bcrypt for password hashing
+const { createClient } = require('redis');
+
+// ─── Redis Client ─────────────────────────────────────────────────────────────
+const REDIS_URL = process.env.REDIS_URL || 'rediss://red-d810359o3t8c73e6ksn0:sQYYRIADT5i8aWb12Ku9zlbDt9LpgcB8@oregon-keyvalue.render.com:6379';
+
+const redisClient = createClient({ url: REDIS_URL });
+redisClient.on('error', (err) => console.error('❌ Redis error:', err.message));
+redisClient.on('connect', () => console.log('✅ Redis connected:', REDIS_URL.split('@').pop() || REDIS_URL));
+redisClient.on('reconnecting', () => console.log('🔄 Redis reconnecting...'));
+redisClient.connect().catch(err => console.error('❌ Redis connect failed:', err.message));
+
+// ─── Redis helpers ────────────────────────────────────────────────────────────
+const CACHE_TTL = {
+    TIMETABLE:  300,   // 5 min  — rarely changes
+    STUDENT:    600,   // 10 min — profile data
+    LIVE_TIMER: 86400, // 24 hr  — live timer state (auto-expires stale entries)
+    PERIODS:    300,   // 5 min
+    SUBJECTS:   600,   // 10 min
+};
+
+async function cacheGet(key) {
+    try {
+        const val = await redisClient.get(key);
+        return val ? JSON.parse(val) : null;
+    } catch { return null; }
+}
+
+async function cacheSet(key, value, ttl) {
+    try {
+        await redisClient.set(key, JSON.stringify(value), { EX: ttl });
+    } catch (e) { console.warn('⚠️  Redis set failed:', e.message); }
+}
+
+async function cacheDel(...keys) {
+    try {
+        if (keys.length) await redisClient.del(keys);
+    } catch (e) { console.warn('⚠️  Redis del failed:', e.message); }
+}
+
+async function cacheDelPattern(pattern) {
+    try {
+        const keys = await redisClient.keys(pattern);
+        if (keys.length) await redisClient.del(keys);
+    } catch (e) { console.warn('⚠️  Redis delPattern failed:', e.message); }
+}
 
 // Face Verification Service
 const faceVerificationService = require('./services/faceVerificationService');
@@ -675,13 +720,22 @@ app.get('/api/timetable/:semester/:branch', async (req, res) => {
         // e.g. /api/timetable/3/AI%2FML → branch = "AI/ML"
         const effectiveBranch = req.query.branch || req.params.branch;
 
+        // ── Redis cache ───────────────────────────────────────────────────────
+        const cacheKey = `timetable:${semester}:${effectiveBranch}`;
+        const cached = await cacheGet(cacheKey);
+        if (cached) {
+            res.set('X-Cache', 'HIT');
+            return res.json({ success: true, timetable: cached });
+        }
+
         if (mongoose.connection.readyState === 1) {
             let timetable = await Timetable.findOne({ semester, branch: effectiveBranch }).lean();
             if (!timetable) {
                 timetable = createDefaultTimetable(semester, effectiveBranch);
             }
-            // Cache for 5 minutes — timetable rarely changes
+            await cacheSet(cacheKey, timetable, CACHE_TTL.TIMETABLE);
             res.set('Cache-Control', 'public, max-age=300');
+            res.set('X-Cache', 'MISS');
             res.json({ success: true, timetable });
         } else {
             const key = `${semester}_${effectiveBranch}`;
@@ -757,6 +811,8 @@ app.post('/api/timetable', async (req, res) => {
                 existingTimetable = new Timetable({ semester, branch, periods, timetable });
                 await existingTimetable.save();
             }
+            // Invalidate timetable cache
+            await cacheDel(`timetable:${semester}:${branch}`);
             res.json({ success: true, timetable: existingTimetable });
         } else {
             const key = `${semester}_${branch}`;
@@ -1403,8 +1459,14 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
         const teacherName = teacher.name;
         console.log(`✅ Found teacher: ${teacherName}`);
 
-        // Find all timetables where this teacher is assigned
-        const timetables = await Timetable.find({});
+        // Find timetables where this teacher is assigned on the current day — filter at DB level
+        const timetables = await Timetable.find({
+            [`timetable.${currentDay}`]: {
+                $elemMatch: {
+                    teacher: { $regex: new RegExp(teacherName, 'i') }
+                }
+            }
+        });
 
         // Find current period
         let currentClass = null;
@@ -1657,10 +1719,39 @@ function createDefaultTimetable(semester, branch) {
 
 // Socket.IO for real-time updates
 // ============================================
-// LIVE TIMER STATE - in-memory, server as source of truth
+// LIVE TIMER STATE - Redis-backed, survives restarts
 // key: enrollmentNo, value: { name, semester, branch, isRunning, timerSeconds, status, lecture, lastSeen }
 // ============================================
-const liveTimerState = new Map();
+const liveTimerState = {
+    _map: new Map(), // in-memory mirror for fast reads within same process
+
+    async set(enrollmentNo, data) {
+        const val = { ...data, lastSeen: Date.now() };
+        this._map.set(enrollmentNo, val);
+        await cacheSet(`live:${enrollmentNo}`, val, CACHE_TTL.LIVE_TIMER);
+    },
+
+    async get(enrollmentNo) {
+        if (this._map.has(enrollmentNo)) return this._map.get(enrollmentNo);
+        const val = await cacheGet(`live:${enrollmentNo}`);
+        if (val) this._map.set(enrollmentNo, val);
+        return val || null;
+    },
+
+    async delete(enrollmentNo) {
+        this._map.delete(enrollmentNo);
+        await cacheDel(`live:${enrollmentNo}`);
+    },
+
+    // Synchronous forEach over in-memory mirror (for socket broadcasts)
+    forEach(cb) {
+        this._map.forEach(cb);
+    },
+
+    has(enrollmentNo) {
+        return this._map.has(enrollmentNo);
+    }
+};
 
 io.on('connection', (socket) => {
     console.log('� Client connected:', socket.id);
@@ -3025,7 +3116,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             };
 
             // Update in-memory live state
-            liveTimerState.set(student.enrollmentNo, {
+            await liveTimerState.set(student.enrollmentNo, {
                 ...broadcastData,
                 lastSeen: Date.now()
             });
@@ -4453,6 +4544,9 @@ app.get('/api/attendance/date/:date', async (req, res) => {
         }
 
         // ── Fallback: AttendanceRecord for students with no PeriodAttendance ──
+        // Track which enrollmentNos actually came from PeriodAttendance (have real lecture data)
+        const hasPeriodData = new Set(Object.keys(studentMap));
+
         const arRecords = await AttendanceRecord.find({
             date: { $gte: startOfDay, $lte: endOfDay },
             $or: [{ semester: sem, branch }, { enrollmentNo: { $in: enrollmentNos } }]
@@ -4460,7 +4554,8 @@ app.get('/api/attendance/date/:date', async (req, res) => {
 
         for (const r of arRecords) {
             const key = r.enrollmentNo || r.studentId;
-            if (!key || studentMap[key]) continue; // skip if already have PeriodAttendance data
+            // Skip only if we already have real PeriodAttendance data for this student
+            if (!key || hasPeriodData.has(key)) continue;
             studentMap[key] = {
                 enrollmentNo: key,
                 name:         r.studentName || nameMap[key] || 'Unknown',
@@ -5635,15 +5730,32 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         let userFound = false;
 
         if (mongoose.connection.readyState === 1) {
-            // Query student and teacher collections in parallel — cuts DB wait in half
-            const [studentUser, teacherUser] = await Promise.all([
-                StudentManagement.findOne({
-                    $or: [{ enrollmentNo: sanitizedId }, { email: sanitizedId }]
-                }).lean(),
-                Teacher.findOne({
-                    $or: [{ employeeId: sanitizedId }, { email: sanitizedId }]
-                }).lean()
-            ]);
+            // ── Redis cache: try student profile first ────────────────────────
+            const studentCacheKey = `student:${sanitizedId}`;
+            let studentUser = await cacheGet(studentCacheKey);
+            let teacherUser = null;
+
+            if (!studentUser) {
+                // Cache miss — query DB in parallel
+                [studentUser, teacherUser] = await Promise.all([
+                    StudentManagement.findOne({
+                        $or: [{ enrollmentNo: sanitizedId }, { email: sanitizedId }]
+                    }).lean(),
+                    Teacher.findOne({
+                        $or: [{ employeeId: sanitizedId }, { email: sanitizedId }]
+                    }).lean()
+                ]);
+                if (studentUser) {
+                    await cacheSet(studentCacheKey, studentUser, CACHE_TTL.STUDENT);
+                }
+            } else {
+                // Cache hit — still need teacher lookup if student not found
+                if (!studentUser) {
+                    teacherUser = await Teacher.findOne({
+                        $or: [{ employeeId: sanitizedId }, { email: sanitizedId }]
+                    }).lean();
+                }
+            }
 
             // Check in StudentManagement collection
             user = studentUser;
@@ -6056,9 +6168,27 @@ app.get('/api/daily-bssid-schedule', async (req, res) => {
                     }
                 }
 
+                // Look up shortName from Subject collection
+                const subjectName = period.subject || period.teacherName || '';
+                let shortName = '';
+                if (subjectName) {
+                    const subjectDoc = await Subject.findOne({
+                        $or: [
+                            { subjectName: { $regex: new RegExp(`^${subjectName}$`, 'i') } },
+                            { subjectCode: period.subjectCode || '' }
+                        ],
+                        semester: student.semester,
+                        branch: student.branch
+                    }).lean();
+                    if (subjectDoc && subjectDoc.shortName) {
+                        shortName = subjectDoc.shortName;
+                    }
+                }
+
                 return {
                     period: period.period,
-                    subject: period.subject || period.teacherName || '',
+                    subject: subjectName,
+                    shortName: shortName,
                     subjectCode: period.subjectCode || '',
                     teacher: period.teacher || period.teacherName || '',
                     room: period.room || '',
@@ -6362,20 +6492,23 @@ app.post('/api/enrollment', async (req, res) => {
             });
         }
 
-        // Update student with face embedding
-        student.faceEmbedding = faceEmbedding;
-        student.faceEnrolledAt = new Date();
-        await student.save();
+        // Update only the face fields — bypass full-document validation so that
+        // legacy documents with out-of-enum status values don't block enrollment.
+        const updated = await StudentManagement.findOneAndUpdate(
+            { enrollmentNo },
+            { $set: { faceEmbedding, faceEnrolledAt: new Date() } },
+            { new: true, runValidators: false }
+        );
 
-        console.log(`✅ Face enrolled for student: ${enrollmentNo} (${student.name})`);
+        console.log(`✅ Face enrolled for student: ${enrollmentNo} (${updated.name})`);
 
         res.status(201).json({ 
             success: true, 
-            message: `Face enrolled successfully for ${student.name}`,
+            message: `Face enrolled successfully for ${updated.name}`,
             data: {
-                enrollmentNo: student.enrollmentNo,
-                name: student.name,
-                faceEnrolledAt: student.faceEnrolledAt
+                enrollmentNo: updated.enrollmentNo,
+                name: updated.name,
+                faceEnrolledAt: updated.faceEnrolledAt
             }
         });
 
@@ -6665,6 +6798,33 @@ app.get('/api/teachers', async (req, res) => {
         }
     } catch (error) {
         console.error('Error fetching teachers:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+// GET /api/teachers/:identifier — fetch single teacher by employeeId, _id, or email
+app.get('/api/teachers/:identifier', async (req, res) => {
+    try {
+        const { identifier } = req.params;
+        if (mongoose.connection.readyState === 1) {
+            const teacher = await Teacher.findOne({
+                $or: [
+                    { employeeId: identifier },
+                    { email: identifier },
+                    ...(identifier.match(/^[a-f\d]{24}$/i) ? [{ _id: identifier }] : [])
+                ]
+            });
+            if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
+            res.json({ success: true, teacher });
+        } else {
+            const teacher = teachersMemory.find(t =>
+                t.employeeId === identifier || t.email === identifier || t._id === identifier
+            );
+            if (!teacher) return res.status(404).json({ success: false, error: 'Teacher not found' });
+            res.json({ success: true, teacher });
+        }
+    } catch (error) {
+        console.error('Error fetching teacher:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -7776,7 +7936,7 @@ async function checkExpiredRandomRings() {
                     const live = liveTimerState.get(s.enrollmentNo);
                     if (live) {
                         const updated = { ...live, status: 'absent', isRunning: false };
-                        liveTimerState.set(s.enrollmentNo, updated);
+                        await liveTimerState.set(s.enrollmentNo, updated);
                         // Broadcast status change to teacher room
                         io.to(classRoom).emit('timer_broadcast', updated);
                     }
@@ -7993,7 +8153,7 @@ app.get('/api/attendance/history/:enrollmentNo', async (req, res) => {
 // Used by: admin-panel showStudentAttendance(), App.js fetchStudentDetails()
 app.get('/api/attendance/records', async (req, res) => {
     try {
-        const { studentId, semester, branch, startDate, endDate } = req.query;
+        const { studentId, semester, branch, startDate, endDate, year, month } = req.query;
 
         if (!studentId && (!semester || !branch)) {
             return res.status(400).json({
@@ -8010,7 +8170,14 @@ app.get('/api/attendance/records', async (req, res) => {
             query = { semester, branch };
         }
 
-        if (startDate || endDate) {
+        // Month-scoped filter (preferred — fast, index-friendly)
+        if (year && month) {
+            const y = parseInt(year), m = parseInt(month) - 1; // month is 1-based from client
+            query.date = {
+                $gte: new Date(y, m, 1),
+                $lt:  new Date(y, m + 1, 1)
+            };
+        } else if (startDate || endDate) {
             query.date = {};
             if (startDate) query.date.$gte = new Date(startDate);
             if (endDate)   query.date.$lte = new Date(endDate);
