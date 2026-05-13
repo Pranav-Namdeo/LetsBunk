@@ -68,8 +68,8 @@ export const APP_NAME = 'LetsBunk';
 // 3. All API calls will automatically use the new URL
 //
 // Current Configuration: PRODUCTION (Render)
-// - App: https://letsbunk-omqs.onrender.com
-// - Admin Panel: https://letsbunk-omqs.onrender.com (or update in Settings)
+// - App: https://letsbunk-uw7g.onrender.com
+// - Admin Panel: https://letsbunk-uw7g.onrender.com (or update in Settings)
 //
 // To switch to local:
 // - Change SERVER_BASE_URL to: http://localhost:3000

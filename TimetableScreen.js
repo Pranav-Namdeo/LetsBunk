@@ -6,6 +6,7 @@ import {
 import { BookIcon, CalendarIcon, CoffeeIcon, LocationIcon } from './Icons';
 import { getServerTime } from './ServerTime';
 
+import { GET_SUBJECTS, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TEACHERS, POST_TIMETABLE } from './constants/apiEndpoints';
 export default function TimetableScreen({ 
   theme, 
   semester, 
@@ -69,15 +70,25 @@ export default function TimetableScreen({
         throw new Error('No teacher identification available');
       }
       
-      // Fetch this teacher's data directly — no need to load all teachers
-      const response = await fetch(`${socketUrl}/api/teachers/${teacherIdentifier}`);
+      // Fetch latest teacher data from server
+      const response = await fetch(GET_TEACHERS);
       const data = await response.json();
-
-      console.log('Teacher data:', data.teacher?.name, '| canEditTimetable:', data.teacher?.canEditTimetable);
-
-      const teacher = data.success ? data.teacher : null;
-
-      if (teacher && teacher.canEditTimetable === true) {
+      
+      console.log('Fetched', data.teachers?.length, 'teachers from server');
+      
+      if (data.success && data.teachers) {
+        // Find this teacher in the list
+        const teacher = data.teachers.find(t => 
+          t.employeeId === teacherIdentifier ||
+          t._id === teacherIdentifier ||
+          t._id?.toString() === teacherIdentifier?.toString() ||
+          t.email === teacherIdentifier ||
+          t.name === teacherIdentifier
+        );
+        
+        console.log('Found teacher:', teacher?.name, '| canEditTimetable:', teacher?.canEditTimetable);
+        
+        if (teacher && teacher.canEditTimetable === true) {
           setEditModeEnabled(true);
           Alert.alert('Edit Mode', 'Edit mode enabled ✅\nYou can now edit the timetable', [{ text: 'OK' }]);
         } else if (teacher) {
@@ -90,6 +101,9 @@ export default function TimetableScreen({
         } else {
           throw new Error('Teacher not found: ' + teacherIdentifier);
         }
+      } else {
+        throw new Error('Failed to fetch teacher data from server');
+      }
     } catch (error) {
       console.error('Error checking permission:', error.message);
       setEditModeEnabled(false);
@@ -109,7 +123,7 @@ export default function TimetableScreen({
     const fetchConfigData = async () => {
       try {
         // Fetch subjects
-        const subjectsResponse = await fetch(`${socketUrl}/api/subjects`);
+        const subjectsResponse = await fetch(GET_SUBJECTS);
         const subjectsData = await subjectsResponse.json();
         if (subjectsData.success && subjectsData.subjects) {
           setSubjects(subjectsData.subjects.map(s => s.name || s.subjectName));
@@ -125,7 +139,7 @@ export default function TimetableScreen({
         ]);
 
         // Fetch teachers
-        const teachersResponse = await fetch(`${socketUrl}/api/teachers`);
+        const teachersResponse = await fetch(GET_TEACHERS);
         const teachersData = await teachersResponse.json();
         if (teachersData.success && teachersData.teachers) {
           setTeachers(teachersData.teachers.map(t => t.name));
@@ -201,7 +215,7 @@ export default function TimetableScreen({
       
       try {
         // First, try to get teacher's current class
-        const currentClassResponse = await fetch(`${socketUrl}/api/teacher/current-class-students/${loginId}`);
+        const currentClassResponse = await fetch(GET_TEACHER_CURRENT_CLASS_STUDENTS(loginId));
         const currentClassData = await currentClassResponse.json();
         
         if (currentClassData.success && currentClassData.hasActiveClass) {
@@ -210,7 +224,7 @@ export default function TimetableScreen({
           
           // Fetch timetable for current class
           const branchParam = encodeURIComponent(currentClass.branch);
-          const url = `${socketUrl}/api/timetable/${currentClass.semester}/${branchParam}?t=${Date.now()}`;
+          const url = POST_TIMETABLE;
           console.log('Fetching current class timetable from:', url);
           
           const response = await fetch(url, {
@@ -233,7 +247,7 @@ export default function TimetableScreen({
         if (semester && branch) {
           console.log('📋 Using manual selection:', semester, branch);
           const branchParam = encodeURIComponent(branch);
-          const url = `${socketUrl}/api/timetable/${semester}/${branchParam}?t=${Date.now()}`;
+          const url = POST_TIMETABLE;
           console.log('Fetching manual timetable from:', url);
           
           const response = await fetch(url, {
@@ -275,7 +289,7 @@ export default function TimetableScreen({
     setLoading(true);
     try {
       const branchParam = encodeURIComponent(branch);
-      const url = `${socketUrl}/api/timetable/${semester}/${branchParam}?t=${Date.now()}`;
+      const url = POST_TIMETABLE;
       console.log('Fetching from:', url);
 
       const response = await fetch(url, {
@@ -322,7 +336,7 @@ export default function TimetableScreen({
     setSaving(true);
     try {
       const branchParam = encodeURIComponent(branch);
-      const response = await fetch(`${socketUrl}/api/timetable/${semester}/${branchParam}`, {
+      const response = await fetch(POST_TIMETABLE, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ timetable: timetable.timetable })
@@ -331,14 +345,14 @@ export default function TimetableScreen({
       const data = await response.json();
       if (data.success) {
         console.log('✅ Timetable saved successfully');
-        Alert.alert('Saved', 'Timetable saved successfully!', [{ text: 'OK' }]);
+        alert('Timetable saved successfully!');
       } else {
         console.log('❌ Failed to save timetable');
-        Alert.alert('Error', 'Failed to save timetable', [{ text: 'OK' }]);
+        alert('Failed to save timetable');
       }
     } catch (error) {
       console.log('Error saving timetable:', error);
-      Alert.alert('Error', 'Error saving timetable', [{ text: 'OK' }]);
+      alert('Error saving timetable');
     } finally {
       setSaving(false);
     }

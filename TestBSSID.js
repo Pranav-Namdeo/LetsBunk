@@ -7,6 +7,7 @@ import BSSIDStorage from './BSSIDStorage';
 import { SERVER_BASE_URL } from './config';
 import { getServerTime } from './ServerTime';
 
+import { GET_DAILY_BSSID_SCHEDULE } from './constants/apiEndpoints';
 const { WifiModule, TimerModule: _TestTimerModule } = NativeModules;
 
 // Boot-elapsed cache for spoof-proof timestamps in test results
@@ -333,7 +334,7 @@ export default function TestBSSID({ theme }) {
 
       // Fetch from server using configured URL
       const response = await fetch(
-        `${SERVER_BASE_URL}/api/daily-bssid-schedule?enrollmentNo=${enrollmentNo}`
+        GET_DAILY_BSSID_SCHEDULE
       );
 
       const data = await response.json();

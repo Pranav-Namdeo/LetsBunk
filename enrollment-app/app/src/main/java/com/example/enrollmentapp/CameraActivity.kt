@@ -20,23 +20,20 @@ class CameraActivity : AppCompatActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var statusText: TextView
     private lateinit var progressText: TextView
-    private lateinit var livenessStatus: TextView
     private lateinit var takeDataButton: Button
 
     private lateinit var cameraExecutor: ExecutorService
     private lateinit var faceDetectionHelper: FaceDetectionHelper
     private lateinit var faceEmbeddingHelper: FaceEmbeddingHelper
-    private lateinit var livenessDetector: LivenessDetector
 
     private val capturedEmbeddings = mutableListOf<FloatArray>()
     private val maxFrames = 10
     private var isProcessing = false
-    private var livenessVerified = false
     private var frameCount = 0
 
     /**
-     * When false the camera preview runs but NO liveness check or embedding
-     * capture happens — the student can freely adjust their face position.
+     * When false the camera preview runs but NO embedding capture happens —
+     * the student can freely adjust their face position.
      * Flips to true only when the student taps "Take Data".
      */
     private var readyToCapture = false
@@ -45,32 +42,28 @@ class CameraActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_camera)
 
-        previewView     = findViewById(R.id.previewView)
-        statusText      = findViewById(R.id.statusText)
-        progressText    = findViewById(R.id.progressText)
-        livenessStatus  = findViewById(R.id.livenessStatus)
-        takeDataButton  = findViewById(R.id.takeDataButton)
+        previewView    = findViewById(R.id.previewView)
+        statusText     = findViewById(R.id.statusText)
+        progressText   = findViewById(R.id.progressText)
+        takeDataButton = findViewById(R.id.takeDataButton)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
 
         faceDetectionHelper = FaceDetectionHelper(
-            context  = this,
+            context   = this,
             onResults = { },
             onError   = { error ->
                 runOnUiThread { Toast.makeText(this, error, Toast.LENGTH_SHORT).show() }
             }
         )
         faceEmbeddingHelper = FaceEmbeddingHelper(this)
-        livenessDetector    = LivenessDetector()
 
         // ── Take Data button ──────────────────────────────────────────────────
         takeDataButton.setOnClickListener {
             readyToCapture = true
-            takeDataButton.visibility = View.GONE          // hide button once tapped
-            livenessDetector.reset()                       // fresh liveness state
-            statusText.text    = "Please move your head slightly to verify liveness"
-            livenessStatus.text = "Liveness check: Starting..."
-            progressText.text  = "Frames: 0/$maxFrames"
+            takeDataButton.visibility = View.GONE
+            statusText.text  = "Capturing facial data... Keep your face steady"
+            progressText.text = "Frames: 0/$maxFrames"
         }
 
         startCamera()
@@ -126,48 +119,25 @@ class CameraActivity : AppCompatActivity() {
         val detectionResult = faceDetectionHelper.detectFace(rotatedBitmap)
 
         if (detectionResult != null && detectionResult.detections().isNotEmpty()) {
-            val detection  = detectionResult.detections()[0]
+            val detection   = detectionResult.detections()[0]
             val boundingBox = detection.boundingBox()
 
-            if (!livenessVerified) {
-                val livenessResult = livenessDetector.analyzeLiveness(detectionResult, rotatedBitmap)
+            val faceBitmap = cropFace(rotatedBitmap, boundingBox)
+            val embedding  = faceEmbeddingHelper.extractEmbedding(faceBitmap)
 
+            if (embedding != null) {
+                capturedEmbeddings.add(embedding)
                 runOnUiThread {
-                    statusText.text    = livenessResult.message
-                    livenessStatus.text = "Liveness: ${livenessDetector.getProgress()}"
-                    livenessStatus.setTextColor(
-                        if (livenessResult.isLive) 0xFF4CAF50.toInt() else 0xFFFFEB3B.toInt()
-                    )
+                    progressText.text = "Frames: ${capturedEmbeddings.size}/$maxFrames"
+                    statusText.text   = "Capturing... Keep your face steady"
                 }
-
-                if (livenessResult.isLive) {
-                    livenessVerified = true
-                    runOnUiThread {
-                        statusText.text    = "Liveness verified! Capturing facial data..."
-                        livenessStatus.text = "Liveness: ✓ Verified"
-                        livenessStatus.setTextColor(0xFF4CAF50.toInt())
-                        progressText.text  = "Frames: 0/$maxFrames"
-                    }
-                }
+                if (capturedEmbeddings.size >= maxFrames) finishCapture()
             } else {
-                val faceBitmap = cropFace(rotatedBitmap, boundingBox)
-                val embedding  = faceEmbeddingHelper.extractEmbedding(faceBitmap)
-
-                if (embedding != null) {
-                    capturedEmbeddings.add(embedding)
-                    runOnUiThread {
-                        progressText.text = "Frames: ${capturedEmbeddings.size}/$maxFrames"
-                        statusText.text   = "Capturing... Keep your face steady"
-                    }
-                    if (capturedEmbeddings.size >= maxFrames) finishCapture()
-                } else {
-                    runOnUiThread { statusText.text = "Processing face..." }
-                }
+                runOnUiThread { statusText.text = "Processing face..." }
             }
         } else {
             runOnUiThread {
                 statusText.text = "No face detected. Position your face in the oval"
-                if (!livenessVerified) livenessStatus.text = "Liveness: Waiting for face..."
             }
         }
 

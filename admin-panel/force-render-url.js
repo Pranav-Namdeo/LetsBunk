@@ -8,7 +8,7 @@ localStorage.removeItem('serverUrl');
 console.log('🗑️ Cleared existing server URL from localStorage');
 
 // Set production URL
-const SERVER_URL = 'https://letsbunk-omqs.onrender.com';
+const SERVER_URL = 'https://letsbunk-uw7g.onrender.com';
 localStorage.setItem('serverUrl', SERVER_URL);
 console.log('✅ Set server URL to:', SERVER_URL);
 

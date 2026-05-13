@@ -288,13 +288,23 @@ function createWindow() {
               cancelId: 0
             }).then(result => {
               if (result.response === 1) {
+                // Bulk delete: iterate all students and delete each by ID
                 mainWindow.webContents.executeJavaScript(`
-                  fetch(SERVER_URL + '/api/students/delete-all', { method: 'DELETE' })
-                    .then(() => {
-                      showNotification('All students deleted', 'success');
+                  (async () => {
+                    try {
+                      const res = await fetch(GET_STUDENTS);
+                      const data = await res.json();
+                      const all = data.students || [];
+                      let count = 0;
+                      for (const s of all) {
+                        const id = s._id || s.enrollmentNo;
+                        await fetch(GET_STUDENTS + '/' + encodeURIComponent(id), { method: 'DELETE' });
+                        count++;
+                      }
+                      showNotification('Deleted ' + count + ' students', 'success');
                       loadStudents();
-                    })
-                    .catch(err => showNotification('Failed to delete students', 'error'));
+                    } catch(err) { showNotification('Failed to delete students: ' + err.message, 'error'); }
+                  })();
                 `);
               }
             });
@@ -313,13 +323,23 @@ function createWindow() {
               cancelId: 0
             }).then(result => {
               if (result.response === 1) {
+                // Bulk delete: iterate all teachers and delete each by ID
                 mainWindow.webContents.executeJavaScript(`
-                  fetch(SERVER_URL + '/api/teachers/delete-all', { method: 'DELETE' })
-                    .then(() => {
-                      showNotification('All teachers deleted', 'success');
+                  (async () => {
+                    try {
+                      const res = await fetch(GET_TEACHERS);
+                      const data = await res.json();
+                      const all = data.teachers || [];
+                      let count = 0;
+                      for (const t of all) {
+                        const id = t._id || t.employeeId;
+                        await fetch(GET_TEACHERS + '/' + encodeURIComponent(id), { method: 'DELETE' });
+                        count++;
+                      }
+                      showNotification('Deleted ' + count + ' teachers', 'success');
                       loadTeachers();
-                    })
-                    .catch(err => showNotification('Failed to delete teachers', 'error'));
+                    } catch(err) { showNotification('Failed to delete teachers: ' + err.message, 'error'); }
+                  })();
                 `);
               }
             });

@@ -1,4 +1,4 @@
-// Deployment trigger - Updated March 20, 2026 - v2.10 - Fix student socket room rejoin after server restart.
+// Deployment trigger - Updated May 12, 2026 - v2.11 - Redis caching for timetables, student profiles, live timer state.
 // Force IST timezone — all period times are stored as IST strings (HH:MM)
 process.env.TZ = 'Asia/Kolkata';
 
@@ -43,7 +43,53 @@ const http = require('http');
 const { Server } = require('socket.io');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
+const { ipKeyGenerator } = rateLimit;
 const bcrypt = require('bcrypt'); // Add bcrypt for password hashing
+const { createClient } = require('redis');
+
+// ─── Redis Client ─────────────────────────────────────────────────────────────
+const REDIS_URL = process.env.REDIS_URL || 'rediss://red-d810359o3t8c73e6ksn0:sQYYRIADT5i8aWb12Ku9zlbDt9LpgcB8@oregon-keyvalue.render.com:6379';
+
+const redisClient = createClient({ url: REDIS_URL });
+redisClient.on('error', (err) => console.error('❌ Redis error:', err.message));
+redisClient.on('connect', () => console.log('✅ Redis connected:', REDIS_URL.split('@').pop() || REDIS_URL));
+redisClient.on('reconnecting', () => console.log('🔄 Redis reconnecting...'));
+redisClient.connect().catch(err => console.error('❌ Redis connect failed:', err.message));
+
+// ─── Redis helpers ────────────────────────────────────────────────────────────
+const CACHE_TTL = {
+    TIMETABLE:  300,   // 5 min  — rarely changes
+    STUDENT:    600,   // 10 min — profile data
+    LIVE_TIMER: 86400, // 24 hr  — live timer state (auto-expires stale entries)
+    PERIODS:    300,   // 5 min
+    SUBJECTS:   600,   // 10 min
+};
+
+async function cacheGet(key) {
+    try {
+        const val = await redisClient.get(key);
+        return val ? JSON.parse(val) : null;
+    } catch { return null; }
+}
+
+async function cacheSet(key, value, ttl) {
+    try {
+        await redisClient.set(key, JSON.stringify(value), { EX: ttl });
+    } catch (e) { console.warn('⚠️  Redis set failed:', e.message); }
+}
+
+async function cacheDel(...keys) {
+    try {
+        if (keys.length) await redisClient.del(keys);
+    } catch (e) { console.warn('⚠️  Redis del failed:', e.message); }
+}
+
+async function cacheDelPattern(pattern) {
+    try {
+        const keys = await redisClient.keys(pattern);
+        if (keys.length) await redisClient.del(keys);
+    } catch (e) { console.warn('⚠️  Redis delPattern failed:', e.message); }
+}
 
 // Face Verification Service
 const faceVerificationService = require('./services/faceVerificationService');
@@ -176,8 +222,8 @@ async function createDatabaseIndexes() {
         console.log('📊 Creating database indexes...');
 
         // StudentManagement indexes
-        await StudentManagement.collection.createIndex({ enrollmentNo: 1 }, { unique: true });
-        await StudentManagement.collection.createIndex({ email: 1 });
+        // Note: enrollmentNo and email are already unique via schema field definition.
+        // Only add compound/non-unique indexes here to avoid duplicate index conflicts.
         await StudentManagement.collection.createIndex({ semester: 1, course: 1 });
         await StudentManagement.collection.createIndex({ isRunning: 1 });
 
@@ -203,8 +249,8 @@ async function createDatabaseIndexes() {
         await Timetable.collection.createIndex({ semester: 1, branch: 1 }, { unique: true });
 
         // Teacher indexes
-        await Teacher.collection.createIndex({ employeeId: 1 }, { unique: true });
-        await Teacher.collection.createIndex({ email: 1 });
+        // Note: employeeId and email are already unique via schema field definition.
+        await Teacher.collection.createIndex({ department: 1 });
 
         // Classroom indexes
         await Classroom.collection.createIndex({ roomNumber: 1 }, { unique: true });
@@ -674,13 +720,22 @@ app.get('/api/timetable/:semester/:branch', async (req, res) => {
         // e.g. /api/timetable/3/AI%2FML → branch = "AI/ML"
         const effectiveBranch = req.query.branch || req.params.branch;
 
+        // ── Redis cache ───────────────────────────────────────────────────────
+        const cacheKey = `timetable:${semester}:${effectiveBranch}`;
+        const cached = await cacheGet(cacheKey);
+        if (cached) {
+            res.set('X-Cache', 'HIT');
+            return res.json({ success: true, timetable: cached });
+        }
+
         if (mongoose.connection.readyState === 1) {
             let timetable = await Timetable.findOne({ semester, branch: effectiveBranch }).lean();
             if (!timetable) {
                 timetable = createDefaultTimetable(semester, effectiveBranch);
             }
-            // Cache for 5 minutes — timetable rarely changes
+            await cacheSet(cacheKey, timetable, CACHE_TTL.TIMETABLE);
             res.set('Cache-Control', 'public, max-age=300');
+            res.set('X-Cache', 'MISS');
             res.json({ success: true, timetable });
         } else {
             const key = `${semester}_${effectiveBranch}`;
@@ -756,6 +811,8 @@ app.post('/api/timetable', async (req, res) => {
                 existingTimetable = new Timetable({ semester, branch, periods, timetable });
                 await existingTimetable.save();
             }
+            // Invalidate timetable cache
+            await cacheDel(`timetable:${semester}:${branch}`);
             res.json({ success: true, timetable: existingTimetable });
         } else {
             const key = `${semester}_${branch}`;
@@ -1662,10 +1719,39 @@ function createDefaultTimetable(semester, branch) {
 
 // Socket.IO for real-time updates
 // ============================================
-// LIVE TIMER STATE - in-memory, server as source of truth
+// LIVE TIMER STATE - Redis-backed, survives restarts
 // key: enrollmentNo, value: { name, semester, branch, isRunning, timerSeconds, status, lecture, lastSeen }
 // ============================================
-const liveTimerState = new Map();
+const liveTimerState = {
+    _map: new Map(), // in-memory mirror for fast reads within same process
+
+    async set(enrollmentNo, data) {
+        const val = { ...data, lastSeen: Date.now() };
+        this._map.set(enrollmentNo, val);
+        await cacheSet(`live:${enrollmentNo}`, val, CACHE_TTL.LIVE_TIMER);
+    },
+
+    async get(enrollmentNo) {
+        if (this._map.has(enrollmentNo)) return this._map.get(enrollmentNo);
+        const val = await cacheGet(`live:${enrollmentNo}`);
+        if (val) this._map.set(enrollmentNo, val);
+        return val || null;
+    },
+
+    async delete(enrollmentNo) {
+        this._map.delete(enrollmentNo);
+        await cacheDel(`live:${enrollmentNo}`);
+    },
+
+    // Synchronous forEach over in-memory mirror (for socket broadcasts)
+    forEach(cb) {
+        this._map.forEach(cb);
+    },
+
+    has(enrollmentNo) {
+        return this._map.has(enrollmentNo);
+    }
+};
 
 io.on('connection', (socket) => {
     console.log('� Client connected:', socket.id);
@@ -2165,7 +2251,7 @@ const checkInLimiter = rateLimit({
             return `enrollment:${enrollmentNo}`;
         }
         // Use the built-in IP key generator for proper IPv6 support
-        return req.ip;
+        return ipKeyGenerator(req.ip);
     },
     message: { success: false, message: 'Too many check-in attempts. Please try again later.' }
 });
@@ -3057,7 +3143,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             };
 
             // Update in-memory live state
-            liveTimerState.set(student.enrollmentNo, {
+            await liveTimerState.set(student.enrollmentNo, {
                 ...broadcastData,
                 lastSeen: Date.now()
             });
@@ -5962,7 +6048,7 @@ const loginLimiter = rateLimit({
             return `user:${userId}`;
         }
         // Fallback to IP if no ID provided
-        return req.ip;
+        return ipKeyGenerator(req.ip);
     },
     // Skip rate limiting for successful logins
     skipSuccessfulRequests: true,
@@ -5989,15 +6075,32 @@ app.post('/api/login', loginLimiter, async (req, res) => {
         let userFound = false;
 
         if (mongoose.connection.readyState === 1) {
-            // Query student and teacher collections in parallel — cuts DB wait in half
-            const [studentUser, teacherUser] = await Promise.all([
-                StudentManagement.findOne({
-                    $or: [{ enrollmentNo: sanitizedId }, { email: sanitizedId }]
-                }).lean(),
-                Teacher.findOne({
-                    $or: [{ employeeId: sanitizedId }, { email: sanitizedId }]
-                }).lean()
-            ]);
+            // ── Redis cache: try student profile first ────────────────────────
+            const studentCacheKey = `student:${sanitizedId}`;
+            let studentUser = await cacheGet(studentCacheKey);
+            let teacherUser = null;
+
+            if (!studentUser) {
+                // Cache miss — query DB in parallel
+                [studentUser, teacherUser] = await Promise.all([
+                    StudentManagement.findOne({
+                        $or: [{ enrollmentNo: sanitizedId }, { email: sanitizedId }]
+                    }).lean(),
+                    Teacher.findOne({
+                        $or: [{ employeeId: sanitizedId }, { email: sanitizedId }]
+                    }).lean()
+                ]);
+                if (studentUser) {
+                    await cacheSet(studentCacheKey, studentUser, CACHE_TTL.STUDENT);
+                }
+            } else {
+                // Cache hit — still need teacher lookup if student not found
+                if (!studentUser) {
+                    teacherUser = await Teacher.findOne({
+                        $or: [{ employeeId: sanitizedId }, { email: sanitizedId }]
+                    }).lean();
+                }
+            }
 
             // Check in StudentManagement collection
             user = studentUser;
@@ -6145,7 +6248,7 @@ const studentManagementSchema = new mongoose.Schema({
     password: { type: String, required: true },
     branch: { type: String, required: true },
     semester: { type: String, required: true },
-    dob: { type: Date, required: true },
+    dob: { type: Date },  // optional — not required for system operation
     phone: String,
     photoUrl: String,
     faceEmbedding: { type: [Number], default: null }, // Face recognition embedding (192 floats)
@@ -6191,8 +6294,7 @@ const studentManagementSchema = new mongoose.Schema({
 });
 
 // Indexes for fast login lookups
-studentManagementSchema.index({ enrollmentNo: 1 });
-studentManagementSchema.index({ email: 1 });
+studentManagementSchema.index({ enrollmentNo: 1 }); // email already indexed via unique:true on field
 
 const StudentManagement = mongoose.model('StudentManagement', studentManagementSchema);
 
@@ -6221,7 +6323,7 @@ app.get('/api/students', async (req, res) => {
 });
 
 // Get distinct branches from students (for admin panel dropdowns)
-app.get('/api/config/branches', async (req, res) => {
+app.get('/api/config/student-branches', async (req, res) => {
     try {
         let branches = [];
         
@@ -6249,7 +6351,7 @@ app.get('/api/config/branches', async (req, res) => {
 });
 
 // Get distinct semesters from students (for admin panel dropdowns)
-app.get('/api/config/semesters', async (req, res) => {
+app.get('/api/config/student-semesters', async (req, res) => {
     try {
         let semesters = [];
         
@@ -6644,7 +6746,15 @@ app.post('/api/students', async (req, res) => {
     try {
         console.log('Received student data:', req.body);
         if (mongoose.connection.readyState === 1) {
-            const student = new StudentManagement(req.body);
+            // Sanitise: remove empty-string fields that have schema defaults or are optional
+            const body = { ...req.body };
+            if (!body.dob || body.dob === '') delete body.dob;  // dob required but may be empty string
+            if (!body.phone) delete body.phone;
+            if (!body.photoUrl) delete body.photoUrl;
+            // branch may come as 'course' from older form versions
+            if (!body.branch && body.course) { body.branch = body.course; delete body.course; }
+
+            const student = new StudentManagement(body);
             await student.save();
             console.log('Student saved to MongoDB:', student);
             res.json({ success: true, student });
@@ -6661,6 +6771,14 @@ app.post('/api/students', async (req, res) => {
         }
     } catch (error) {
         console.error('Error saving student:', error);
+        if (error.name === 'ValidationError') {
+            const details = Object.values(error.errors).map(e => e.message).join('; ');
+            return res.status(400).json({ success: false, error: 'Validation failed', details });
+        }
+        if (error.code === 11000) {
+            const field = Object.keys(error.keyPattern || {})[0] || 'field';
+            return res.status(400).json({ success: false, error: `Duplicate value: ${field} already exists` });
+        }
         res.status(500).json({ success: false, error: error.message });
     }
 });
@@ -7945,7 +8063,7 @@ async function loadAttendanceThreshold() {
 loadAttendanceThreshold();
 
 // GET /api/settings/attendance-threshold
-app.get('/api/settings/attendance-threshold', async (req, res) => {
+app.get('/api/settings/daily-attendance-threshold', async (req, res) => {
     try {
         const setting = await SystemSettings.findOne({ settingKey: 'daily_threshold' });
         res.json({ success: true, threshold: setting ? parseInt(setting.settingValue) : ATTENDANCE_THRESHOLD });
@@ -7955,7 +8073,7 @@ app.get('/api/settings/attendance-threshold', async (req, res) => {
 });
 
 // PUT /api/settings/attendance-threshold
-app.put('/api/settings/attendance-threshold', async (req, res) => {
+app.put('/api/settings/daily-attendance-threshold', async (req, res) => {
     try {
         const { threshold } = req.body;
         const value = parseInt(threshold);
@@ -8163,7 +8281,7 @@ async function checkExpiredRandomRings() {
                     const live = liveTimerState.get(s.enrollmentNo);
                     if (live) {
                         const updated = { ...live, status: 'absent', isRunning: false };
-                        liveTimerState.set(s.enrollmentNo, updated);
+                        await liveTimerState.set(s.enrollmentNo, updated);
                         // Broadcast status change to teacher room
                         io.to(classRoom).emit('timer_broadcast', updated);
                     }
@@ -9485,11 +9603,17 @@ async function gracefulShutdown(signal) {
             console.log('✅ HTTP server closed');
         });
 
-        // Close all socket connections
-        console.log(`🔌 Closing ${activeConnections.size} active socket connections...`);
-        activeConnections.forEach((connection, socketId) => {
-            connection.timers.forEach(timer => clearInterval(timer));
-        });
+        // Close tracked socket timers if a tracker exists. Some builds do not
+        // define activeConnections, so guard this to keep shutdown reliable.
+        const trackedConnections = global.activeConnections;
+        if (trackedConnections && typeof trackedConnections.forEach === 'function') {
+            console.log(`🔌 Closing ${trackedConnections.size || 0} active socket connections...`);
+            trackedConnections.forEach((connection) => {
+                if (connection?.timers && typeof connection.timers.forEach === 'function') {
+                    connection.timers.forEach(timer => clearInterval(timer));
+                }
+            });
+        }
         io.close(() => {
             console.log('✅ Socket.IO server closed');
         });
@@ -9937,7 +10061,7 @@ app.get('/api/departments', async (req, res) => {
 });
 
 // Export attendance data for CSV download
-app.get('/api/attendance/export', async (req, res) => {
+app.get('/api/attendance/history/export', async (req, res) => {
     try {
         const { startDate, endDate, semester, branch, studentId } = req.query;
 

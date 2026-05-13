@@ -2,5 +2,5 @@
 <resources>
     <!-- Server Configuration -->
     <!-- Local LetsBunk Server (Computer IP for Physical Device) -->
-    <string name="server_base_url">https://letsbunk-server.azurewebsites.net/api</string>
+    <string name="server_base_url">https://letsbunk-uw7g.onrender.com/api</string>
 </resources>
