@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Modal,
-    Platform, Dimensions, TextInput,
+    Platform, Dimensions, TextInput, RefreshControl,
 } from 'react-native';
 import { CalendarIcon, ArrowLeftIcon, ArrowRightIcon, CheckIcon, XIcon, RefreshIcon } from './Icons';
 import { getServerTime } from './ServerTime';
@@ -496,7 +496,23 @@ export default function CalendarScreen({
 
     // ── render ────────────────────────────────────────────────────────────────
     return (
-        <ScrollView style={[styles.container, { backgroundColor: theme.background }]}>
+        <ScrollView
+          style={[styles.container, { backgroundColor: theme.background }]}
+          refreshControl={
+            <RefreshControl
+              refreshing={loading}
+              onRefresh={() => {
+                if (isTeacher) {
+                  filterMode === 'subject' ? fetchSubjectDates() : fetchTeacherMonthData(true);
+                } else {
+                  fetchMonthAttendance();
+                }
+              }}
+              colors={[theme?.primary || '#00f5ff']}
+              tintColor={theme?.primary || '#00f5ff'}
+            />
+          }
+        >
             {/* Header */}
             <View style={styles.header}>
                 <View style={styles.titleRow}>
@@ -1300,10 +1316,17 @@ export default function CalendarScreen({
                                                             <Text style={[styles.lectureSubject, { color: theme.text }]}>
                                                                 {lec.subject || 'Class'}
                                                             </Text>
-                                                            <Text style={[styles.lectureStatus,
-                                                                { color: lec.present ? '#10b981' : '#ef4444' }]}>
-                                                                {lec.present ? '✓' : '✗'} {lec.percentage || 0}%
-                                                            </Text>
+                                                            <View style={{ alignItems: 'flex-end' }}>
+                                                                <Text style={[styles.lectureStatus,
+                                                                    { color: lec.present ? '#10b981' : '#ef4444' }]}>
+                                                                    {lec.present ? '✓' : '✗'} {lec.percentage || 0}%
+                                                                </Text>
+                                                                {(lec.total > 0 || lec.attended > 0) && (
+                                                                    <Text style={{ color: theme.textSecondary, fontSize: 10, marginTop: 2 }}>
+                                                                        {Math.floor((lec.attended || 0) / 60)} min / {Math.floor((lec.total || 0) / 60)} min
+                                                                    </Text>
+                                                                )}
+                                                            </View>
                                                         </View>
                                                         {lec.room && (
                                                             <Text style={[styles.lectureRoom, { color: theme.textSecondary }]}>

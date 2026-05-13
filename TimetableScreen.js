@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Modal, Alert
+  View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator, TextInput, Modal, Alert,
+  RefreshControl,
 } from 'react-native';
 import { BookIcon, CalendarIcon, CoffeeIcon, LocationIcon } from './Icons';
 import { getServerTime } from './ServerTime';
@@ -563,7 +564,17 @@ export default function TimetableScreen({
   const currentPeriod = getCurrentPeriod();
 
   return (
-    <ScrollView style={[styles.container, { backgroundColor: theme.background }]}>
+    <ScrollView
+      style={[styles.container, { backgroundColor: theme.background }]}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={async () => { setRefreshing(true); await fetchTimetable(); setRefreshing(false); }}
+          colors={[theme?.primary || '#00f5ff']}
+          tintColor={theme?.primary || '#00f5ff'}
+        />
+      }
+    >
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.titleRow}>

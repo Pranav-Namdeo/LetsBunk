@@ -216,6 +216,16 @@ export default function App() {
     pendingSyncCount: 0
   });
   const [offlineTimerInitialized, setOfflineTimerInitialized] = useState(false);
+  
+  // Segment timer data for CircularTimer (timer data for each period)
+  const [segmentTimerData, setSegmentTimerData] = useState(null);
+  
+  // Current period number (1-based) for CircularTimer highlighting
+  const [currentPeriodNumber, setCurrentPeriodNumber] = useState(null);
+  
+  // Past period viewing mode - when user taps a segment to see past timer data
+  const [viewingPastPeriod, setViewingPastPeriod] = useState(false);
+  const [pastPeriodData, setPastPeriodData] = useState(null);
 
   // Fire party popper when attendance status transitions to 'present'
   useEffect(() => {
@@ -2424,20 +2434,39 @@ export default function App() {
       dayOrder.indexOf(a.toLowerCase()) - dayOrder.indexOf(b.toLowerCase())
     );
 
-    dayKeys.forEach((dayKey) => {
+dayKeys.forEach((dayKey) => {
       const dayName = dayKey.charAt(0).toUpperCase() + dayKey.slice(1);
       console.log(`🔍 Processing day: ${dayKey} → ${dayName}`);
       if (timetable.timetable[dayKey]) {
-        schedule[dayName] = timetable.timetable[dayKey].map(period => ({
-          subject: period.subject,
-          teacher: period.teacher || period.teacherName || '',
-          teacherName: period.teacherName || period.teacher || '',
-          room: period.room,
-          time: timetable.periods && timetable.periods[period.period - 1]
-            ? `${timetable.periods[period.period - 1].startTime}-${timetable.periods[period.period - 1].endTime}`
-            : '',
-          isBreak: period.isBreak
-        }));
+        schedule[dayName] = timetable.timetable[dayKey].map((period, idx) => {
+          // Get period info from the periods array
+          const periodInfo = timetable.periods && timetable.periods[idx];
+          
+          // Construct time: prefer periods array, fallback to period object, then calculate default 45-min periods from 08:00
+          let periodTime = '';
+          if (periodInfo && periodInfo.startTime && periodInfo.endTime) {
+            periodTime = `${periodInfo.startTime}-${periodInfo.endTime}`;
+          } else if (period.startTime && period.endTime) {
+            periodTime = `${period.startTime}-${period.endTime}`;
+          } else {
+            // Generate default 45-min period times starting from 08:00
+            const startHour = 8 + Math.floor((idx * 45) / 60);
+            const startMinute = (idx * 45) % 60;
+            const endHour = 8 + Math.floor(((idx + 1) * 45) / 60);
+            const endMinute = ((idx + 1) * 45) % 60;
+            periodTime = `${String(startHour).padStart(2, '0')}:${String(startMinute).padStart(2, '0')}-${String(endHour).padStart(2, '0')}:${String(endMinute).padStart(2, '0')}`;
+          }
+          
+          return {
+            period: period.period || (idx + 1),
+            subject: period.subject || '',
+            teacher: period.teacher || period.teacherName || '',
+            teacherName: period.teacherName || period.teacher || '',
+            room: period.room || '',
+            time: periodTime,
+            isBreak: period.isBreak
+          };
+        });
         console.log(`✅ ${dayName} schedule created with ${schedule[dayName].length} periods`);
       }
     });
@@ -2998,7 +3027,7 @@ export default function App() {
       console.log(`   Similarity: ${verificationResult.similarityPercentage}%`);
       alert(`✅ Face Verified!\n\nYour identity has been confirmed.\n\nSimilarity: ${verificationResult.similarityPercentage}%`);
 
-    } catch (error) {
+} catch (error) {
       console.error('❌ Face verification error:', error);
 
       if (error.message === 'VERIFICATION_CANCELLED') {
@@ -3007,6 +3036,115 @@ export default function App() {
         alert(`❌ Face Verification Error\n\n${error.message}\n\nPlease try again or contact support if the issue persists.`);
       }
     }
+  };
+
+  // Handle segment press from CircularTimer - Show past timer data or live timer state
+  const handleSegmentPress = async (segment) => {
+    console.log('🎯 Segment pressed:', segment);
+    console.log('   Segment ID:', segment.id);
+    console.log('   Full Label:', segment.fullLabel);
+    console.log('   Time:', segment.time);
+    console.log('   Room:', segment.room);
+
+    // Get current time and date for comparison
+    const now = new Date();
+    const currentTime = now.getHours() * 60 + now.getMinutes();
+    
+    // Parse segment time (format: "HH:MM-HH:MM")
+    let segmentStatus = 'future';
+    let segmentTime = segment.time || '';
+    
+    if (segmentTime && segmentTime.includes('-')) {
+      try {
+        const [startTimeStr, endTimeStr] = segmentTime.split('-');
+        const [startHour, startMin] = startTimeStr.split(':').map(Number);
+        const [endHour, endMin] = endTimeStr.split(':').map(Number);
+        
+        const startMinutes = startHour * 60 + startMin;
+        const endMinutes = endHour * 60 + endMin;
+        
+        if (currentTime > endMinutes) {
+          segmentStatus = 'past';
+        } else if (currentTime >= startMinutes && currentTime <= endMinutes) {
+          segmentStatus = 'current';
+        }
+      } catch (e) {
+        console.warn('Error parsing segment time:', e);
+      }
+    }
+
+    const displaySubject = segment.fullLabel || segment.label || 'Unknown';
+    const displayRoom = segment.room || 'N/A';
+    const displayTime = segmentTime || 'N/A';
+    const displayPeriod = segment.id ? `P${segment.id}` : '';
+
+    // For past periods - fetch attendance data from server and show modal
+    if (segmentStatus === 'past') {
+      try {
+        console.log('📊 Fetching attendance data for past period...');
+        const today = now.toISOString().split('T')[0];
+        const response = await fetch(`${SOCKET_URL}/api/attendance/student/${studentId}/date/${today}`);
+        const data = await response.json();
+        
+        let periodAttendance = null;
+        if (data.success && data.record && data.record.lectures) {
+          periodAttendance = data.record.lectures.find(l => l.period === `P${segment.id}`);
+        }
+        
+        if (periodAttendance) {
+          setPastPeriodData({
+            period: `P${segment.id}`,
+            subject: displaySubject,
+            room: displayRoom,
+            time: displayTime,
+            attended: periodAttendance.attended || 0,
+            total: periodAttendance.total || 0,
+            percentage: periodAttendance.percentage || 0,
+            present: periodAttendance.present || false
+          });
+        } else {
+          setPastPeriodData({
+            period: `P${segment.id}`,
+            subject: displaySubject,
+            room: displayRoom,
+            time: displayTime,
+            attended: 0,
+            total: 0,
+            percentage: 0,
+            present: false,
+            notFound: true
+          });
+        }
+        setViewingPastPeriod(true);
+      } catch (error) {
+        console.error('❌ Error fetching past period data:', error);
+        alert(`❌ Error fetching data\n\nCould not load attendance for ${displayPeriod}. ${displaySubject}`);
+      }
+    } else if (segmentStatus === 'current') {
+      // For current period - go back to live timer
+      setViewingPastPeriod(false);
+      setPastPeriodData(null);
+    } else {
+      // Future period - show info in timer UI format
+      setPastPeriodData({
+        period: displayPeriod,
+        subject: displaySubject,
+        room: displayRoom,
+        time: displayTime,
+        attended: 0,
+        total: 0,
+        percentage: 0,
+        present: false,
+        isFuture: true
+      });
+      setViewingPastPeriod(true);
+    }
+  };
+
+  // Close past period view and return to live timer state
+  const closePastPeriodView = () => {
+    setViewingPastPeriod(false);
+    setPastPeriodData(null);
   };
 
   // Face verify after teacher rejection during random ring
@@ -3447,8 +3585,11 @@ export default function App() {
     setRefreshingTeacher(true);
     setIsOffline(false);
     try {
-      // Test server connection first
-      const healthCheck = await fetch(`${SOCKET_URL}/api/health`, { timeout: 5000 });
+      // Test server connection first (AbortController — fetch has no timeout option in RN)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const healthCheck = await fetch(`${SOCKET_URL}/api/health`, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (!healthCheck.ok) {
         throw new Error('Server not responding');
       }
@@ -3466,31 +3607,36 @@ export default function App() {
     }
   };
 
-  const onRefreshStudent = async () => {
+const onRefreshStudent = async () => {
     setRefreshingStudent(true);
     setIsOffline(false);
 
     try {
       console.log('🔄 Student refresh started - checking connectivity and syncing timer...');
 
-      // Force sync timer data if OfflineTimerService is available
+      // Force sync timer data if OfflineTimerService is available (wrapped in try-catch to not block refresh)
       let syncResult = null;
       if (offlineTimerInitialized) {
         console.log('⏱️ Force syncing timer data...');
-        syncResult = await OfflineTimerService.forceSyncTimerData();
+        try {
+          syncResult = await OfflineTimerService.forceSyncTimerData();
+        } catch (syncError) {
+          console.warn('⚠️ Timer sync error (non-blocking):', syncError.message);
+          syncResult = { success: false, error: syncError.message, isOffline: false };
+        }
 
-        if (syncResult.success) {
+        if (syncResult && syncResult.success) {
           console.log('✅ Timer sync successful');
-        } else {
+        } else if (syncResult && !syncResult.success) {
           console.log('⚠️ Timer sync failed:', syncResult.error);
-          if (syncResult.isOffline) {
-            setIsOffline(true);
-          }
         }
       }
 
-      // Test server connection
-      const healthCheck = await fetch(`${SOCKET_URL}/api/health`, { timeout: 5000 });
+      // Test server connection (AbortController — fetch has no timeout option in RN)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const healthCheck = await fetch(`${SOCKET_URL}/api/health`, { signal: controller.signal });
+      clearTimeout(timeoutId);
       if (!healthCheck.ok) {
         throw new Error('Server not responding');
       }
@@ -3506,15 +3652,7 @@ export default function App() {
       }
 
       // Show success message with sync info
-      if (syncResult && syncResult.success) {
-        showToast('✅ Refreshed successfully', 'success');
-      } else if (syncResult && !syncResult.success && !syncResult.isOffline) {
-        if (!offlineTimerState.isRunning) {
-          showToast(`⚠️ Sync failed: ${syncResult.error || 'Unknown error'}`, 'warning');
-        } else {
-          console.warn('⚠️ Timer sync failed during refresh (timer running — suppressing):', syncResult.error);
-        }
-      }
+      showToast('✅ Refreshed successfully', 'success');
 
       setIsOffline(false);
     } catch (error) {
@@ -5156,7 +5294,7 @@ export default function App() {
     );
   }
 
-  // Home Screen (Timer) - STUDENTS ONLY
+// Home Screen (Timer) - STUDENTS ONLY
   if (selectedRole === 'student' && activeTab === 'home') {
     return (
       <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -5166,6 +5304,12 @@ export default function App() {
           contentContainerStyle={{ paddingTop: 20, paddingBottom: 110, paddingHorizontal: 20, alignItems: 'center' }}
           showsVerticalScrollIndicator={false}
           style={{ flex: 1 }}
+          onTouchStart={(e) => {
+            // Close past period view if user taps anywhere (except on the modal itself)
+            if (viewingPastPeriod) {
+              closePastPeriodView();
+            }
+          }}
           refreshControl={
             <RefreshControl
               refreshing={refreshingStudent}
@@ -5310,12 +5454,14 @@ export default function App() {
             );
           })() : null}
 
-          {/* Circular Timer - Visual timetable display */}
+{/* Circular Timer - Visual timetable display */}
           <CircularTimer
             theme={theme}
             timetable={timetable}
             currentDay={currentDay}
-            onLongPressCenter={handleFaceVerification}
+            currentPeriodNumber={currentPeriodNumber}
+            onSegmentPress={handleSegmentPress}
+            segmentTimerData={segmentTimerData}
           />
 
           {/* Show current period information */}
@@ -5521,12 +5667,120 @@ export default function App() {
                 >
                   <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 14 }}>📸 Verify Face</Text>
                 </TouchableOpacity>
-              )}
+)}
             </View>
           )}
 
+          {/* Past Period Detail Modal - Shown when user taps a past segment */}
+          {viewingPastPeriod && pastPeriodData && (
+            <TouchableOpacity 
+              activeOpacity={1} 
+              onPress={closePastPeriodView}
+              style={{ width: '100%', alignItems: 'center' }}
+            >
+              <View style={{
+                width: '100%',
+                maxWidth: 400,
+                backgroundColor: theme.cardBackground,
+                borderRadius: 12,
+                padding: 20,
+                borderWidth: 2,
+                borderColor: pastPeriodData.present ? '#22c55e' : (pastPeriodData.isFuture ? theme.border : '#ef4444'),
+                marginTop: 15,
+              }}>
+                {/* Timer Header */}
+                <Text style={{
+                  fontSize: 16,
+                  fontWeight: 'bold',
+                  color: theme.primary,
+                  textAlign: 'center',
+                  marginBottom: 15,
+                }}>
+                  🕐 {pastPeriodData.period} • {pastPeriodData.subject}
+                </Text>
+
+                <Text style={{ fontSize: 12, color: theme.textSecondary, textAlign: 'center', marginBottom: 15 }}>
+                  📍 {pastPeriodData.room} • 🕐 {pastPeriodData.time}
+                </Text>
+
+                {/* Timer Display */}
+                <View style={{
+                  backgroundColor: theme.background,
+                  borderRadius: 15,
+                  padding: 20,
+                  marginBottom: 15,
+                  alignItems: 'center',
+                  borderWidth: 2,
+                  borderColor: pastPeriodData.present ? '#22c55e' : (pastPeriodData.isFuture ? theme.border : '#ef4444'),
+                }}>
+                  <Text style={{
+                    fontSize: 48,
+                    fontWeight: 'bold',
+                    fontFamily: 'monospace',
+                    color: pastPeriodData.present ? '#22c55e' : (pastPeriodData.isFuture ? theme.text : '#ef4444'),
+                    textAlign: 'center',
+                  }}>
+                    {Math.floor((pastPeriodData.attended || 0) / 3600).toString().padStart(2, '0')}:
+                    {Math.floor(((pastPeriodData.attended || 0) % 3600) / 60).toString().padStart(2, '0')}:
+                    {((pastPeriodData.attended || 0) % 60).toString().padStart(2, '0')}
+                  </Text>
+                  <Text style={{
+                    fontSize: 12,
+                    color: theme.textSecondary,
+                    textAlign: 'center',
+                    marginTop: 5,
+                  }}>
+                    {pastPeriodData.isFuture ? 'Period has not started yet' : `${Math.floor((pastPeriodData.attended || 0) / 60)} minutes attended`}
+                  </Text>
+                </View>
+
+                {/* Attendance Stats */}
+                {!pastPeriodData.isFuture && !pastPeriodData.notFound && (
+                  <View style={{ backgroundColor: theme.background, borderRadius: 8, padding: 15 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 }}>
+                      <Text style={{ fontSize: 20, fontWeight: 'bold', color: pastPeriodData.present ? '#22c55e' : '#ef4444' }}>
+                        {pastPeriodData.present ? '✅ Present' : '❌ Absent'}
+                      </Text>
+                      <Text style={{ fontSize: 20, fontWeight: 'bold', color: theme.text }}>
+                        {pastPeriodData.percentage}%
+                      </Text>
+                    </View>
+                    
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                      <View>
+                        <Text style={{ fontSize: 11, color: theme.textSecondary }}>Attended</Text>
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: theme.text }}>
+                          {Math.floor(pastPeriodData.attended / 60)}m {pastPeriodData.attended % 60}s
+                        </Text>
+                      </View>
+                      <View style={{ alignItems: 'center' }}>
+                        <Text style={{ fontSize: 11, color: theme.textSecondary }}>Total Period</Text>
+                        <Text style={{ fontSize: 14, fontWeight: '600', color: theme.text }}>
+                          {Math.floor(pastPeriodData.total / 60)}m {pastPeriodData.total % 60}s
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                )}
+                
+                {pastPeriodData.notFound && (
+                  <View style={{ backgroundColor: theme.background, borderRadius: 8, padding: 15, alignItems: 'center' }}>
+                    <Text style={{ fontSize: 14, color: theme.textSecondary }}>
+                      ⚠️ No attendance data recorded for this period
+                    </Text>
+                  </View>
+                )}
+
+                {/* Tip */}
+                <Text style={{ fontSize: 11, color: theme.textSecondary, marginTop: 15, textAlign: 'center' }}>
+                  💡 Tap anywhere to return to live timer
+                </Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
           {/* Offline Timer Controls - NEW TIMER SYSTEM */}
-          {offlineTimerInitialized && !currentClassInfo && (
+          {offlineTimerInitialized && !currentClassInfo && !viewingPastPeriod && (
             <View style={{
               width: '100%',
               maxWidth: 400,
@@ -5547,7 +5801,7 @@ export default function App() {
               </Text>
             </View>
           )}
-          {currentClassInfo && offlineTimerInitialized && (
+          {currentClassInfo && offlineTimerInitialized && !viewingPastPeriod && (
             <View style={{
               width: '100%',
               maxWidth: 400,
@@ -5579,25 +5833,45 @@ export default function App() {
                 borderWidth: 2,
                 borderColor: offlineTimerState.isRunning ? '#22c55e' : theme.border,
               }}>
-                <Text style={{
-                  fontSize: 48,
-                  fontWeight: 'bold',
-                  fontFamily: 'monospace',
-                  color: offlineTimerState.isRunning ? '#22c55e' : theme.text,
-                  textAlign: 'center',
-                }}>
-                  {Math.floor(offlineTimerState.timerSeconds / 3600).toString().padStart(2, '0')}:
-                  {Math.floor((offlineTimerState.timerSeconds % 3600) / 60).toString().padStart(2, '0')}:
-                  {(offlineTimerState.timerSeconds % 60).toString().padStart(2, '0')}
-                </Text>
-                <Text style={{
-                  fontSize: 12,
-                  color: theme.textSecondary,
-                  textAlign: 'center',
-                  marginTop: 5,
-                }}>
-                  {offlineTimerState.timerSeconds > 0 ? `${Math.floor(offlineTimerState.timerSeconds / 60)} minutes attended` : 'Ready to start'}
-                </Text>
+                {(() => {
+                  // Cap displayed seconds to the lecture duration so timer never shows > period length
+                  const periodSrcDisplay = offlinePeriod || offlineTimerState.currentLecture;
+                  const maxSecs = (() => {
+                    if (periodSrcDisplay?.startTime && periodSrcDisplay?.endTime) {
+                      const [sh, sm] = periodSrcDisplay.startTime.split(':').map(Number);
+                      const [eh, em] = periodSrcDisplay.endTime.split(':').map(Number);
+                      const dur = ((eh * 60 + em) - (sh * 60 + sm)) * 60;
+                      if (dur > 0) return dur;
+                    }
+                    return null; // no cap if no period info
+                  })();
+                  const displaySecs = maxSecs !== null
+                    ? Math.min(offlineTimerState.timerSeconds || 0, maxSecs)
+                    : (offlineTimerState.timerSeconds || 0);
+                  return (
+                    <>
+                      <Text style={{
+                        fontSize: 48,
+                        fontWeight: 'bold',
+                        fontFamily: 'monospace',
+                        color: offlineTimerState.isRunning ? '#22c55e' : theme.text,
+                        textAlign: 'center',
+                      }}>
+                        {Math.floor(displaySecs / 3600).toString().padStart(2, '0')}:
+                        {Math.floor((displaySecs % 3600) / 60).toString().padStart(2, '0')}:
+                        {(displaySecs % 60).toString().padStart(2, '0')}
+                      </Text>
+                      <Text style={{
+                        fontSize: 12,
+                        color: theme.textSecondary,
+                        textAlign: 'center',
+                        marginTop: 5,
+                      }}>
+                        {displaySecs > 0 ? `${Math.floor(displaySecs / 60)} minutes attended` : 'Ready to start'}
+                      </Text>
+                    </>
+                  );
+                })()}
               </View>
 
               {/* Attendance Threshold Progress */}
@@ -5908,7 +6182,7 @@ export default function App() {
                 </Text>
               </View>
 
-              {/* Per Lecture Breakdown */}
+{/* Per Lecture Breakdown */}
               <Text style={{ color: theme.text, fontSize: 12, fontWeight: '600', marginBottom: 8 }}>
                 Lectures:
               </Text>
@@ -5923,7 +6197,7 @@ export default function App() {
                 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
                     <Text style={{ color: theme.text, fontSize: 12, fontWeight: '600', flex: 1 }}>
-                      {lecture.subject}
+                      {lecture.period || `P${index + 1}`}. {lecture.subject}
                     </Text>
                     <Text style={{
                       color: lecture.present ? '#22c55e' : '#ef4444',

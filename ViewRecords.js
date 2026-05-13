@@ -7,6 +7,8 @@ import {
   ScrollView,
   Image,
   ActivityIndicator,
+  RefreshControl,
+  Modal,
 } from 'react-native';
 import { Picker } from '@react-native-picker/picker';
 import { SOCKET_URL } from './config';
@@ -138,7 +140,6 @@ const ViewRecords = ({ onBack, theme }) => {
 
   const handleStudentClick = (student) => {
     setSelectedStudent(student);
-    // TODO: Open student profile dialog
   };
 
   return (
@@ -193,7 +194,18 @@ const ViewRecords = ({ onBack, theme }) => {
       </View>
 
       {/* Student List */}
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl
+            refreshing={loading}
+            onRefresh={() => { if (selectedSemester && selectedBranch) fetchStudents(); }}
+            colors={[theme?.primary || '#00f5ff']}
+            tintColor={theme?.primary || '#00f5ff'}
+          />
+        }
+      >
         {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color={theme.primary} />
@@ -269,6 +281,31 @@ const ViewRecords = ({ onBack, theme }) => {
           </View>
         )}
       </ScrollView>
+
+      {/* Student Profile Modal */}
+      {selectedStudent && (
+        <Modal transparent animationType="slide" onRequestClose={() => setSelectedStudent(null)}>
+          <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'flex-end' }}>
+            <View style={{ backgroundColor: theme.cardBackground, borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 40 }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <Text style={{ fontSize: 18, fontWeight: 'bold', color: theme.text }}>{selectedStudent.name}</Text>
+                <TouchableOpacity onPress={() => setSelectedStudent(null)}>
+                  <Text style={{ fontSize: 22, color: theme.textSecondary }}>✕</Text>
+                </TouchableOpacity>
+              </View>
+              <Text style={{ color: theme.textSecondary, marginBottom: 6 }}>Enrollment: {selectedStudent.enrollmentNo || 'N/A'}</Text>
+              <Text style={{ color: theme.textSecondary, marginBottom: 6 }}>Branch: {selectedStudent.branch || selectedBranch}</Text>
+              <Text style={{ color: theme.textSecondary, marginBottom: 6 }}>Semester: {selectedStudent.semester || selectedSemester}</Text>
+              <Text style={{ color: theme.primary, fontSize: 16, fontWeight: 'bold', marginTop: 8 }}>
+                Attendance: {selectedStudent.attendancePercentage || 0}%
+              </Text>
+              <Text style={{ color: theme.textSecondary, marginTop: 4 }}>
+                {selectedStudent.presentDays || 0} present / {selectedStudent.totalDays || 0} total days
+              </Text>
+            </View>
+          </View>
+        </Modal>
+      )}
     </View>
   );
 };

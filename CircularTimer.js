@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -43,6 +43,7 @@ const DEFAULT_SEGMENTS = [
 export default function CircularTimer({
   theme = {},
   onLongPressCenter = () => { },
+  onSegmentPress = () => { },
   timetable = null,
   currentDay = null,
   currentPeriodNumber = null, // pass the active period number (1-based) from parent
@@ -358,14 +359,19 @@ export default function CircularTimer({
         }
       },
 
-      onPanResponderRelease: () => {
+      onPanResponderRelease: (e) => {
         setIsDragging(false);
         scaleAnim.setValue(1);
+        const angle = getAngle(e.nativeEvent.locationX, e.nativeEvent.locationY);
+        const seg = findSegment(angle);
         Animated.timing(circleScale, {
           toValue: 0,
           duration: 300,
           useNativeDriver: false,
         }).start(() => {
+          if (seg) {
+            onSegmentPress(seg);
+          }
           setActiveSegment(null);
         });
       },

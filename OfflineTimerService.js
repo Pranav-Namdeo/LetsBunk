@@ -302,6 +302,28 @@ class OfflineTimerService {
           this.thresholdSeconds = null;
         }
 
+        // NEW LOGIC: Fetch existing attendance from server if timer is 0 or it's a new lecture
+        if (!isSameLecture || this.timerSeconds === 0) {
+          try {
+            console.log('📡 Fetching existing attendance from server for initial state...');
+            const todayStr = new Date().toISOString().split('T')[0];
+            const response = await fetch(`${this.serverUrl}/api/attendance/student/${this.studentId}/date/${todayStr}`);
+            if (response.ok) {
+              const data = await response.json();
+              if (data.success && data.record && data.record.lectures) {
+                const periodId = lectureInfo.period ? `P${lectureInfo.period}` : (lectureInfo.periodNumber ? `P${lectureInfo.periodNumber}` : 'P1');
+                const existingLecture = data.record.lectures.find(l => l.period === periodId);
+                if (existingLecture && existingLecture.attended > 0) {
+                  this.timerSeconds = existingLecture.attended;
+                  console.log(`✅ Recovered ${this.timerSeconds} seconds from server for ${periodId}`);
+                }
+              }
+            }
+          } catch (err) {
+            console.log('⚠️ Failed to fetch existing attendance:', err.message);
+          }
+        }
+
         // Step 3: Set lecture context and start timer
         this.currentLecture = lectureInfo;
         this.lectureStartTime = _getBootMs() || Date.now();

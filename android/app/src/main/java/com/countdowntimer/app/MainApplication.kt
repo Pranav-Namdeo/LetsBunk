@@ -54,6 +54,9 @@ class MainApplication : Application(), ReactApplication {
       load()
     }
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
+    
+    // Initialize SecureTimerStorage for persistent timer data
+    TimerModule.secureStorage = SecureTimerStorage(this)
   }
 
   override fun onConfigurationChanged(newConfig: Configuration) {

@@ -12,6 +12,32 @@ import com.facebook.react.bridge.WritableNativeMap
 class TimerModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
 
+    companion object {
+        // Singleton instance for TimerService to access
+        var secureStorage: SecureTimerStorage? = null
+        
+        fun saveTimerSecurely(timerSeconds: Long, studentId: String, lectureInfo: String, periodId: String, isRunning: Boolean) {
+            secureStorage?.saveTimerValue(timerSeconds, studentId, lectureInfo, periodId, isRunning)
+        }
+        
+        fun updateTimerSecurely(timerSeconds: Long, isRunning: Boolean) {
+            secureStorage?.updateTimerValue(timerSeconds, isRunning)
+        }
+        
+        fun getStoredTimer(): Pair<Long, Boolean>? {
+            return secureStorage?.getTimerValue()
+        }
+        
+        fun confirmSyncAndClear() {
+            secureStorage?.markSyncConfirmed()
+            secureStorage?.clearAllData()
+        }
+        
+        fun hasPendingSync(): Boolean {
+            return secureStorage?.hasPendingData() ?: false
+        }
+    }
+
     override fun getName() = "TimerModule"
 
     /**
@@ -161,6 +187,105 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
             }
         } catch (e: Exception) {
             promise.reject("ERROR", e.message)
+        }
+    }
+    
+    /**
+     * Save timer value to secure storage (encrypted, survives app kill/restart)
+     */
+    @ReactMethod
+    fun saveSecureTimer(timerSeconds: Double, studentId: String, lectureInfo: String, periodId: String, isRunning: Boolean, promise: Promise) {
+        try {
+            secureStorage?.saveTimerValue(
+                timerSeconds.toLong(),
+                studentId,
+                lectureInfo,
+                periodId,
+                isRunning
+            )
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SAVE_ERROR", e.message)
+        }
+    }
+    
+    /**
+     * Update timer value in secure storage (frequent updates)
+     */
+    @ReactMethod
+    fun updateSecureTimer(timerSeconds: Double, isRunning: Boolean, promise: Promise) {
+        try {
+            secureStorage?.updateTimerValue(timerSeconds.toLong(), isRunning)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("UPDATE_ERROR", e.message)
+        }
+    }
+    
+    /**
+     * Get stored timer from secure storage
+     */
+    @ReactMethod
+    fun getSecureTimer(promise: Promise) {
+        try {
+            val result = WritableNativeMap()
+            val stored = secureStorage?.getTimerValue()
+            if (stored != null) {
+                result.putDouble("timerSeconds", stored.first.toDouble())
+                result.putBoolean("isRunning", stored.second)
+                result.putBoolean("hasData", true)
+            } else {
+                result.putBoolean("hasData", false)
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("GET_ERROR", e.message)
+        }
+    }
+    
+    /**
+     * Check if there's pending data to sync
+     */
+    @ReactMethod
+    fun hasPendingSecureData(promise: Promise) {
+        promise.resolve(secureStorage?.hasPendingData() ?: false)
+    }
+    
+    /**
+     * Confirm sync and clear secure storage (called after server confirms MongoDB write)
+     */
+    @ReactMethod
+    fun confirmSyncAndClear(promise: Promise) {
+        try {
+            secureStorage?.markSyncConfirmed()
+            secureStorage?.clearAllData()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("CLEAR_ERROR", e.message)
+        }
+    }
+    
+    /**
+     * Get all secure timer data for debugging
+     */
+    @ReactMethod
+    fun getSecureTimerData(promise: Promise) {
+        try {
+            val data = secureStorage?.getAllData()
+            val result = WritableNativeMap()
+            if (data != null) {
+                result.putDouble("timerSeconds", (data["timerSeconds"] as? Long ?: 0).toDouble())
+                result.putBoolean("isRunning", data["isRunning"] as? Boolean ?: false)
+                result.putString("studentId", data["studentId"] as? String ?: "")
+                result.putString("lectureInfo", data["lectureInfo"] as? String ?: "")
+                result.putString("periodId", data["periodId"] as? String ?: "")
+                result.putBoolean("syncConfirmed", data["syncConfirmed"] as? Boolean ?: false)
+                result.putBoolean("hasPendingData", data["hasPendingData"] as? Boolean ?: false)
+                result.putDouble("lastSyncTime", (data["lastSyncTime"] as? Long ?: 0).toDouble())
+            }
+            promise.resolve(result)
+        } catch (e: Exception) {
+            promise.reject("GET_DATA_ERROR", e.message)
         }
     }
 }

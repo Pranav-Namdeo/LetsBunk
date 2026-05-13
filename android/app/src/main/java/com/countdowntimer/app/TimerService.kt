@@ -70,6 +70,13 @@ class TimerService : Service() {
     // Lecture end time (wall clock minutes since midnight, e.g. 04:54 = 294)
     private var lectureEndMinutes: Int = -1  // -1 = no end time set
 
+    // Consecutive ticks where BSSID was null/fake/disconnected.
+    // We require 3 consecutive bad reads (~3 seconds) before stopping the timer.
+    // This prevents a single transient API glitch from falsely stopping the timer,
+    // while still catching a student who leaves the classroom (sustained null).
+    private var nullBssidStreak: Int = 0
+    private val NULL_BSSID_STOP_THRESHOLD = 10
+
     inner class LocalBinder : Binder() {
         fun getService(): TimerService = this@TimerService
     }
@@ -111,6 +118,7 @@ class TimerService : Service() {
         serverUrl               = surl
         stoppedDueToWifiInvalid = false
         syncTickCounter         = 0
+        nullBssidStreak         = 0
 
         // Parse lecture end time "HH:MM" → minutes since midnight
         lectureEndMinutes = parseEndTime(endTime)
@@ -280,20 +288,43 @@ class TimerService : Service() {
             @Suppress("DEPRECATION")
             val currentBSSID = wm.connectionInfo?.bssid
 
-            if (currentBSSID == null ||
+            // ── 5. Treat null/fake BSSID as "not connected to authorized WiFi" ─
+            // Previously these were skipped to work around OEM screen-off behaviour
+            // where Android returns "02:00:00:00:00:00" instead of the real BSSID.
+            // That loophole allowed students to leave the classroom with the screen
+            // off and keep the timer running.
+            //
+            // Fix: a null/fake BSSID means we cannot confirm the student is still
+            // on the authorized network, so we treat it as unauthorized.
+            // We use a consecutive-null streak counter (NULL_BSSID_STOP_THRESHOLD)
+            // to absorb a single transient API glitch without falsely stopping the
+            // timer, while still catching sustained disconnection (student left).
+            val isBssidInvalid = currentBSSID == null ||
                 currentBSSID == "02:00:00:00:00:00" ||
-                currentBSSID == "null") {
-                Log.w(TAG, "BSSID check: null/fake — skipping (OEM screen-off limitation)")
+                currentBSSID.equals("null", ignoreCase = true) ||
+                currentBSSID.isBlank()
+
+            if (isBssidInvalid) {
+                nullBssidStreak++
+                Log.w(TAG, "BSSID check: null/fake/disconnected (streak=$nullBssidStreak/$NULL_BSSID_STOP_THRESHOLD) — current='$currentBSSID'")
+                if (nullBssidStreak >= NULL_BSSID_STOP_THRESHOLD) {
+                    Log.w(TAG, "BSSID null streak reached threshold — student disconnected from authorized WiFi, stopping timer")
+                    stoppedDueToWifiInvalid = true
+                    stopTimer()
+                }
                 return
             }
 
-            // ── 5. Compare against authorized list ────────────────────────────
-            val normalizedCurrent = currentBSSID.lowercase().trim()
+            // Valid BSSID received — reset the streak counter
+            nullBssidStreak = 0
+
+            // ── 6. Compare against authorized list ────────────────────────────
+            val normalizedCurrent = currentBSSID!!.lowercase().trim()
             val authorizedList = authorizedBSSID.lowercase()
                 .split(",").map { it.trim() }.filter { it.isNotBlank() }
 
             if (!authorizedList.any { it == normalizedCurrent }) {
-                Log.w(TAG, "BSSID MISMATCH — student left classroom. current=$normalizedCurrent")
+                Log.w(TAG, "BSSID MISMATCH — student left classroom. current=$normalizedCurrent authorized=$authorizedList")
                 stoppedDueToWifiInvalid = true
                 stopTimer()
             }

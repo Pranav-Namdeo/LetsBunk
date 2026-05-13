@@ -2983,21 +2983,48 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     computedStatus = 'active';
                 }
             } else {
-                // No active period on server right now.
-                // If the student's timer is still running (they haven't stopped yet),
-                // keep them as 'active' so the teacher can still see and ring them.
-                // Only force 'absent' if the timer is not running.
+                // No active period on server right now — this is a queued/late sync
+                // arriving after class ended. Don't blindly set 'absent'.
+                // Check if the student already has a 'present' PeriodAttendance record
+                // for today (written by the final sync that fired when the timer stopped).
                 if (Boolean(isRunning)) {
                     computedStatus = 'active';
                 } else {
-                    computedStatus = 'absent';
+                    // Look for any 'present' period record today — if one exists, preserve it
+                    const syncDate2 = new Date(timestamp);
+                    const todayStart2 = new Date(syncDate2);
+                    todayStart2.setHours(0, 0, 0, 0);
+                    const todayEnd2 = new Date(todayStart2);
+                    todayEnd2.setDate(todayEnd2.getDate() + 1);
+
+                    const alreadyPresent = await PeriodAttendance.exists({
+                        enrollmentNo: studentId,
+                        date: { $gte: todayStart2, $lt: todayEnd2 },
+                        status: 'present'
+                    });
+                    computedStatus = alreadyPresent ? 'present' : 'absent';
                 }
             }
         } catch (statusErr) {
             console.warn('⚠️ Could not compute status:', statusErr.message);
             // On error, preserve running state — don't silently mark absent
             if (Boolean(isRunning)) computedStatus = 'active';
-            else computedStatus = 'absent';
+            else {
+                // Same guard as above — don't overwrite an existing 'present'
+                try {
+                    const syncDateE = new Date(timestamp);
+                    const todayStartE = new Date(syncDateE);
+                    todayStartE.setHours(0, 0, 0, 0);
+                    const todayEndE = new Date(todayStartE);
+                    todayEndE.setDate(todayEndE.getDate() + 1);
+                    const alreadyPresentE = await PeriodAttendance.exists({
+                        enrollmentNo: studentId,
+                        date: { $gte: todayStartE, $lt: todayEndE },
+                        status: 'present'
+                    });
+                    computedStatus = alreadyPresentE ? 'present' : 'absent';
+                } catch (_) { computedStatus = 'absent'; }
+            }
         }
 
         // Update status in DB — both top-level status and attendanceSession.status
@@ -3095,10 +3122,11 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                         period: periodId
                     },
                     {
+                        $max: {
+                            timerSeconds: Math.floor(timerSeconds)
+                        },
                         $set: {
-                            timerSeconds:  Math.floor(timerSeconds),
-                            status:        computedStatus === 'present' ? 'present' : 'absent',
-                            updatedAt:     new Date()
+                            updatedAt: new Date()
                         },
                         $setOnInsert: {
                             studentName:      student.name,
@@ -3118,17 +3146,39 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     { upsert: true }
                 );
 
-                // After upsert, ensure timerSeconds is the maximum seen so far
-                // (handles out-of-order queued syncs)
-                await PeriodAttendance.updateOne(
-                    {
-                        enrollmentNo: student.enrollmentNo,
-                        date: today,
-                        period: periodId,
-                        timerSeconds: { $lt: Math.floor(timerSeconds) }
-                    },
-                    { $set: { timerSeconds: Math.floor(timerSeconds), updatedAt: new Date() } }
-                );
+                // After upsert, compute status from the actual stored timerSeconds
+                // (the $max above may have kept a higher value than what arrived in this sync)
+                const storedRecord = await PeriodAttendance.findOne({
+                    enrollmentNo: student.enrollmentNo,
+                    date: today,
+                    period: periodId
+                }).lean();
+
+                if (storedRecord) {
+                    const storedSeconds = storedRecord.timerSeconds || 0;
+                    // Recompute status using stored (max) timerSeconds so a late queued sync
+                    // with a lower value never downgrades a student who already hit threshold
+                    let periodStatus = 'absent';
+                    try {
+                        const lectureInfoForStatus = await getCurrentLectureInfo(student.semester, student.branch);
+                        const pStart = lectureInfoForStatus?.startTime || storedRecord.startTime;
+                        const pEnd   = lectureInfoForStatus?.endTime   || storedRecord.endTime;
+                        if (pStart && pEnd) {
+                            const durMin = timeToMinutes(pEnd) - timeToMinutes(pStart);
+                            if (durMin > 0 && (storedSeconds / (durMin * 60)) * 100 >= ATTENDANCE_THRESHOLD) {
+                                periodStatus = 'present';
+                            }
+                        } else if (storedSeconds >= Math.floor(timerSeconds) && computedStatus === 'present') {
+                            // No period info available but a previous sync already marked present — keep it
+                            periodStatus = 'present';
+                        }
+                    } catch (_) {}
+
+                    await PeriodAttendance.updateOne(
+                        { enrollmentNo: student.enrollmentNo, date: today, period: periodId },
+                        { $set: { status: periodStatus, updatedAt: new Date() } }
+                    );
+                }
 
                 console.log(`📊 [OFFLINE-SYNC] Upserted PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Timer: ${Math.floor(timerSeconds)}s`);
             }
@@ -3248,6 +3298,301 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             error: 'Failed to sync timer data',
             details: error.message,
             duration: duration
+});
+    }
+});
+
+// POST /api/attendance/sync-offline - Sync offline timer data (legacy format from App.js)
+// This endpoint handles the format sent by App.js when reconnecting after offline period
+app.post('/api/attendance/sync-offline', async (req, res) => {
+    const startTime = Date.now();
+    const { studentId, offlineStartTime, offlineEndTime, offlineDuration, lastKnownSeconds, lectureSubject } = req.body;
+    
+    console.log(`🔄 [SYNC-OFFLINE] Sync request - Student: ${studentId}, Duration: ${offlineDuration}s, IP: ${req.ip}`);
+    
+    try {
+        // 1. Validate required fields
+        if (!studentId || offlineDuration === undefined) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: studentId, offlineDuration'
+            });
+        }
+
+        // 2. Find student
+        const student = await StudentManagement.findOne({ enrollmentNo: studentId });
+        if (!student) {
+            console.log(`❌ [SYNC-OFFLINE] Student not found: ${studentId}`);
+            return res.status(404).json({
+                success: false,
+                error: 'Student not found'
+            });
+        }
+
+        // 3. Get today's date
+        const syncDate = offlineEndTime ? new Date(offlineEndTime) : new Date();
+        const todayStart = new Date(syncDate);
+        todayStart.setHours(0, 0, 0, 0);
+        const todayEnd = new Date(todayStart);
+        todayEnd.setDate(todayEnd.getDate() + 1);
+
+        // 4. Check for missed random rings
+        let missedRandomRing = null;
+        let ringId = null;
+        try {
+            const now = new Date();
+            const activeRings = await RandomRing.find({
+                'selectedStudents.enrollmentNo': studentId,
+                status: 'active',
+                expiresAt: { $gt: now }
+            }).sort({ createdAt: -1 }).limit(1);
+
+            if (activeRings.length > 0) {
+                const ring = activeRings[0];
+                const ringStart = ring.createdAt.getTime();
+                const offlineStart = offlineStartTime || (now.getTime() - offlineDuration * 1000);
+                const offlineEnd = offlineEndTime || now.getTime();
+
+                if (ringStart >= offlineStart && ringStart <= offlineEnd) {
+                    missedRandomRing = true;
+                    ringId = ring._id.toString();
+                    
+                    await RandomRing.updateOne(
+                        { _id: ring._id, 'selectedStudents.enrollmentNo': studentId },
+                        { $set: { 'selectedStudents.$.status': 'missed' } }
+                    );
+                    
+                    console.log(`⚠️ [SYNC-OFFLINE] Random ring missed during offline - Ring: ${ringId}, Student: ${studentId}`);
+                }
+            }
+        } catch (ringErr) {
+            console.warn(`⚠️ [SYNC-OFFLINE] Error checking random rings:`, ringErr.message);
+        }
+
+        // 5. Get current lecture info for the period
+        let currentLectureInfo = null;
+        try {
+            currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
+        } catch (_) {}
+
+        // 6. Calculate attendance status based on offline duration
+        let computedStatus = 'active';
+        const ATTENDANCE_THRESHOLD = 75;
+        
+        // Calculate threshold based on current or recent period
+        if (currentLectureInfo && currentLectureInfo.startTime && currentLectureInfo.endTime) {
+            const durationMin = timeToMinutes(currentLectureInfo.endTime) - timeToMinutes(currentLectureInfo.startTime);
+            const thresholdSeconds = Math.ceil(durationMin * 60 * ATTENDANCE_THRESHOLD / 100);
+            
+            if (offlineDuration >= thresholdSeconds) {
+                computedStatus = 'present';
+            } else if (offlineDuration < 60) {
+                computedStatus = 'absent';
+            }
+        } else if (offlineDuration < 60) {
+            computedStatus = 'absent';
+        }
+
+        // 7. Check if teacher accepted during offline
+        let teacherAccepted = false;
+        try {
+            const acceptRecords = await StudentManagement.findOne({
+                enrollmentNo: studentId,
+                'acceptedOfflineSessions.startTime': { $lte: offlineEndTime || Date.now() },
+                'acceptedOfflineSessions.endTime': { $gte: offlineStartTime || (Date.now() - offlineDuration * 1000) }
+            });
+            if (acceptRecords) {
+                teacherAccepted = true;
+                computedStatus = 'present';
+            }
+        } catch (_) {}
+
+        // 8. Calculate capped minutes if random ring was missed
+        let cappedMinutes = Math.floor(offlineDuration / 60);
+        if (missedRandomRing && currentLectureInfo) {
+            const durationMin = timeToMinutes(currentLectureInfo.endTime) - timeToMinutes(currentLectureInfo.startTime);
+            cappedMinutes = Math.min(cappedMinutes, Math.floor(durationMin * 0.5));
+        }
+
+        // 9. Update student's attendance session
+        await StudentManagement.updateOne(
+            { enrollmentNo: studentId },
+            {
+                $set: {
+                    status: computedStatus,
+                    'attendanceSession.totalAttendedSeconds': Math.max(0, Math.floor(offlineDuration)),
+                    'attendanceSession.lastSyncTime': new Date(),
+                    'attendanceSession.isRunning': false,
+                    'attendanceSession.isPaused': false,
+                    'attendanceSession.lastActivity': new Date()
+                }
+            }
+        );
+
+        // 10. Update PeriodAttendance for the relevant period
+        try {
+            // Find the period that was active during offline
+            let periodId = 'P1';
+            if (currentLectureInfo && currentLectureInfo.period) {
+                periodId = currentLectureInfo.period;
+            }
+
+            await PeriodAttendance.updateOne(
+                {
+                    enrollmentNo: student.enrollmentNo,
+                    date: todayStart,
+                    period: periodId
+                },
+                {
+                    $set: {
+                        timerSeconds: Math.max(0, offlineDuration),
+                        status: computedStatus === 'present' ? 'present' : 
+                               offlineDuration >= 60 ? 'active' : 'absent',
+                        offlineSync: true,
+                        syncedAt: new Date(),
+                        updatedAt: new Date()
+                    },
+                    $setOnInsert: {
+                        enrollmentNo: student.enrollmentNo,
+                        studentName: student.name,
+                        semester: student.semester,
+                        branch: student.branch,
+                        date: todayStart,
+                        period: periodId,
+                        subject: lectureSubject || currentLectureInfo?.subject || 'Unknown',
+                        teacher: currentLectureInfo?.teacher || 'Unknown',
+                        room: currentLectureInfo?.room || 'Unknown',
+                        startTime: currentLectureInfo?.startTime || '',
+                        endTime: currentLectureInfo?.endTime || '',
+                        faceVerified: false,
+                        checkInTime: new Date(),
+                        createdAt: new Date()
+                    }
+                },
+                { upsert: true }
+            );
+
+            console.log(`📊 [SYNC-OFFLINE] Upserted PeriodAttendance - Student: ${studentId}, Duration: ${offlineDuration}s`);
+        } catch (periodError) {
+            console.error(`❌ [SYNC-OFFLINE] Error updating PeriodAttendance:`, periodError);
+        }
+
+        // 11. Sync AttendanceRecord
+        try {
+            const attendedMinutes = Math.floor(offlineDuration / 60);
+            
+            let attendanceRecord = await AttendanceRecord.findOne({
+                $or: [{ enrollmentNo: student.enrollmentNo }, { studentId: student.enrollmentNo }],
+                date: todayStart
+            });
+
+            if (attendanceRecord) {
+                // Update existing record
+                const existingAttended = attendanceRecord.totalAttended || 0;
+                await AttendanceRecord.updateOne(
+                    { _id: attendanceRecord._id },
+                    {
+                        $set: {
+                            status: computedStatus,
+                            totalAttended: Math.max(existingAttended, attendedMinutes),
+                            timerValue: Math.max(attendanceRecord.timerValue || 0, offlineDuration),
+                            updatedAt: new Date()
+                        }
+                    }
+                );
+            } else {
+                // Create new record
+                const classMinutes = 240; // Default 4 hours
+                const newRecord = new AttendanceRecord({
+                    studentId: student.enrollmentNo,
+                    enrollmentNo: student.enrollmentNo,
+                    studentName: student.name,
+                    semester: student.semester?.toString() || '',
+                    branch: student.branch || '',
+                    date: todayStart,
+                    status: computedStatus,
+                    lectures: [],
+                    totalAttended: attendedMinutes,
+                    totalClassTime: classMinutes,
+                    dayPercentage: classMinutes > 0 ? Math.round((attendedMinutes / classMinutes) * 100) : 0,
+                    timerValue: offlineDuration,
+                    createdAt: new Date(),
+                    updatedAt: new Date()
+                });
+                await newRecord.save();
+            }
+
+            console.log(`📊 [SYNC-OFFLINE] Synced AttendanceRecord - Student: ${studentId}`);
+        } catch (recordError) {
+            console.error(`❌ [SYNC-OFFLINE] Error updating AttendanceRecord:`, recordError);
+        }
+
+        // 12. Update live timer state and broadcast
+        try {
+            liveTimerState.set(student.enrollmentNo, {
+                studentId: student.enrollmentNo,
+                enrollmentNo: student.enrollmentNo,
+                name: student.name,
+                semester: student.semester,
+                branch: student.branch,
+                attendedSeconds: offlineDuration,
+                timerValue: offlineDuration,
+                isRunning: false,
+                lectureSubject: lectureSubject || currentLectureInfo?.subject || '',
+                lastSyncTime: new Date().toISOString(),
+                lastSeen: Date.now(),
+                status: computedStatus
+            });
+
+            const room = `class:${student.semester}:${student.branch}`;
+            io.to(room).emit('timer_broadcast', {
+                studentId: student.enrollmentNo,
+                enrollmentNo: student.enrollmentNo,
+                name: student.name,
+                semester: student.semester,
+                branch: student.branch,
+                attendedSeconds: offlineDuration,
+                timerValue: offlineDuration,
+                isRunning: false,
+                lectureSubject: lectureSubject || '',
+                lastSyncTime: new Date().toISOString(),
+                status: computedStatus
+            });
+
+            // Notify admin panel
+            io.emit('student_timer_sync', {
+                enrollmentNo: studentId,
+                timerSeconds: offlineDuration,
+                isRunning: false,
+                status: computedStatus,
+                date: todayStart.toISOString().split('T')[0]
+            });
+        } catch (broadcastError) {
+            console.error(`❌ [SYNC-OFFLINE] Error broadcasting:`, broadcastError);
+        }
+
+        const duration = Date.now() - startTime;
+        console.log(`✅ [SYNC-OFFLINE] Sync successful - Student: ${studentId}, Duration: ${offlineDuration}s, Status: ${computedStatus}, Duration: ${duration}ms`);
+
+        res.json({
+            success: true,
+            message: 'Offline session synced successfully',
+            syncedMinutes: Math.floor(offlineDuration / 60),
+            offlineDuration: offlineDuration,
+            status: computedStatus,
+            missedRandomRing: missedRandomRing,
+            ringId: ringId,
+            teacherAccepted: teacherAccepted,
+            cappedMinutes: missedRandomRing ? cappedMinutes : null,
+            serverTime: new Date().toISOString()
+        });
+
+    } catch (error) {
+        console.error(`❌ [SYNC-OFFLINE] Error:`, error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error',
+            message: error.message
         });
     }
 });
@@ -8069,6 +8414,96 @@ app.get('/api/attendance/records', async (req, res) => {
             const records = await AttendanceRecord.find(query)
                 .sort({ date: -1 })
                 .lean();
+
+            // --- INJECT SYNTHETIC ABSENT RECORDS FOR MISSED DAYS ---
+            if (studentId) {
+                try {
+                    const student = await StudentManagement.findOne(
+                        { $or: [{ _id: studentId }, { enrollmentNo: studentId }] }
+                    ).lean();
+                    
+                    if (student && student.semester && student.branch) {
+                        const tt = await Timetable.findOne({ 
+                            semester: student.semester.toString(), 
+                            branch: student.branch 
+                        }).lean();
+
+                        if (tt && tt.timetable) {
+                            const recordsByDate = {};
+                            records.forEach(r => {
+                                const d = new Date(r.date);
+                                const dStr = d.getFullYear() + '-' + (d.getMonth() + 1).toString().padStart(2, '0') + '-' + d.getDate().toString().padStart(2, '0');
+                                recordsByDate[dStr] = true;
+                            });
+
+                            const today = new Date();
+                            today.setHours(0, 0, 0, 0);
+
+                            let start = query.date && query.date.$gte ? new Date(query.date.$gte) : new Date(today.getFullYear(), today.getMonth(), 1);
+                            let end = query.date && query.date.$lt ? new Date(query.date.$lt) : new Date(today.getFullYear(), today.getMonth() + 1, 1);
+                            
+                            if (end > today) end = today;
+
+                            const daysOfWeek = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+
+                            for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
+                                const dStr = d.getFullYear() + '-' + (d.getMonth() + 1).toString().padStart(2, '0') + '-' + d.getDate().toString().padStart(2, '0');
+                                const dayName = daysOfWeek[d.getDay()];
+                                
+                                const daySchedule = tt.timetable[dayName] || [];
+                                const hasClasses = daySchedule.some(p => p.subject && !p.isBreak);
+
+                                if (hasClasses && !recordsByDate[dStr]) {
+                                    const synthLectures = daySchedule
+                                        .filter(p => p.subject && !p.isBreak)
+                                        .map(p => {
+                                            const pInfo = (tt.periods || []).find(px => px.number === p.period);
+                                            let durationSec = 3600;
+                                            if (pInfo && pInfo.startTime && pInfo.endTime) {
+                                                const startM = pInfo.startTime.split(':').map(Number);
+                                                const endM = pInfo.endTime.split(':').map(Number);
+                                                durationSec = ((endM[0] * 60 + endM[1]) - (startM[0] * 60 + startM[1])) * 60;
+                                            }
+                                            return {
+                                                period: p.period || 'P?',
+                                                subject: p.subject,
+                                                teacher: p.teacher || '',
+                                                teacherName: p.teacherName || p.teacher || '',
+                                                room: p.room || '',
+                                                startTime: pInfo ? pInfo.startTime : '',
+                                                endTime: pInfo ? pInfo.endTime : '',
+                                                attended: 0,
+                                                total: durationSec,
+                                                percentage: 0,
+                                                present: false,
+                                                verifications: []
+                                            };
+                                        });
+
+                                    records.push({
+                                        studentId: student._id.toString(),
+                                        enrollmentNo: student.enrollmentNo,
+                                        studentName: student.name || student.enrollmentNo,
+                                        date: new Date(d),
+                                        semester: student.semester.toString(),
+                                        branch: student.branch,
+                                        status: 'absent',
+                                        dayPercentage: 0,
+                                        totalAttended: 0,
+                                        totalClassTime: synthLectures.reduce((sum, l) => sum + Math.floor(l.total / 60), 0),
+                                        timerValue: 0,
+                                        lectures: synthLectures,
+                                        isSynthetic: true
+                                    });
+                                }
+                            }
+                            records.sort((a, b) => new Date(b.date) - new Date(a.date));
+                        }
+                    }
+                } catch (err) {
+                    console.error('❌ Error generating synthetic records:', err);
+                }
+            }
 
             res.json({ success: true, records });
         } else {
