@@ -165,7 +165,7 @@ if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') 
     localStorage.removeItem('serverUrl');
 }
 
-const DEFAULT_SERVER_URL = 'https://letsbunk-omqs.onrender.com';
+const DEFAULT_SERVER_URL = 'https://letsbunk-uw7g.onrender.com';
 let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
 console.log(' Admin Panel Server URL:', SERVER_URL);
