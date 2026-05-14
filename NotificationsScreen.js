@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,17 @@ export default function NotificationsScreen({ theme, userData, socketUrl }) {
   const [refreshing, setRefreshing] = useState(false);
   const [todaySchedule, setTodaySchedule] = useState([]);
   const [inAppNotification, setInAppNotification] = useState(null);
-  const [slideAnim] = useState(new Animated.Value(-100));
+  const slideAnim = useRef(new Animated.Value(-100)).current;
+  const mountedRef = useRef(true);
+  const hideTimerRef = useRef(null);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+      slideAnim.stopAnimation();
+    };
+  }, []);
 
   useEffect(() => {
     if (userData?.role === 'teacher') {
@@ -69,9 +79,11 @@ export default function NotificationsScreen({ theme, userData, socketUrl }) {
   };
 
   const showInAppNotification = (content) => {
+    if (!mountedRef.current) return;
     setInAppNotification(content);
     
     // Slide in
+    slideAnim.stopAnimation();
     Animated.spring(slideAnim, {
       toValue: 0,
       useNativeDriver: true,
@@ -80,18 +92,21 @@ export default function NotificationsScreen({ theme, userData, socketUrl }) {
     }).start();
     
     // Auto hide after 5 seconds
-    setTimeout(() => {
+    if (hideTimerRef.current) clearTimeout(hideTimerRef.current);
+    hideTimerRef.current = setTimeout(() => {
       hideInAppNotification();
     }, 5000);
   };
 
   const hideInAppNotification = () => {
+    if (!mountedRef.current) return;
+    slideAnim.stopAnimation();
     Animated.timing(slideAnim, {
       toValue: -100,
       duration: 300,
       useNativeDriver: true,
     }).start(() => {
-      setInAppNotification(null);
+      if (mountedRef.current) setInAppNotification(null);
     });
   };
 

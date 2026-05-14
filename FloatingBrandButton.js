@@ -11,7 +11,7 @@ const FloatingBrandButton = ({ theme, studentId, socketUrl }) => {
 
   useEffect(() => {
     // Smooth floating animation
-    Animated.loop(
+    const floatLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(floatAnim, {
           toValue: -12,
@@ -24,10 +24,11 @@ const FloatingBrandButton = ({ theme, studentId, socketUrl }) => {
           useNativeDriver: true,
         }),
       ])
-    ).start();
+    );
+    floatLoop.start();
 
     // Subtle pulse animation
-    Animated.loop(
+    const pulseLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, {
           toValue: 1.1,
@@ -40,7 +41,8 @@ const FloatingBrandButton = ({ theme, studentId, socketUrl }) => {
           useNativeDriver: true,
         }),
       ])
-    ).start();
+    );
+    pulseLoop.start();
 
     // Auto-hide after 8 seconds
     const hideTimer = setTimeout(() => {
@@ -51,7 +53,12 @@ const FloatingBrandButton = ({ theme, studentId, socketUrl }) => {
       }).start(() => setIsVisible(false));
     }, 8000);
 
-    return () => clearTimeout(hideTimer);
+    return () => {
+      clearTimeout(hideTimer);
+      floatLoop.stop();
+      pulseLoop.stop();
+      opacityAnim.stopAnimation();
+    };
   }, []);
 
   const handlePress = useCallback(() => {

@@ -61,11 +61,21 @@ export default function CircularTimer({
   const [activeSegment, setActiveSegment] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isLongPressing, setIsLongPressing] = useState(false);
-  const [circleScale, setCircleScale] = useState(new Animated.Value(0));
+  const circleScaleRef = useRef(new Animated.Value(0));
+  const circleScale = circleScaleRef.current;
 
   // Simplified animations
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const longPressAnim = useRef(new Animated.Value(0)).current;
+
+  // Cleanup animations on unmount
+  useEffect(() => {
+    return () => {
+      circleScale.stopAnimation();
+      scaleAnim.stopAnimation();
+      longPressAnim.stopAnimation();
+    };
+  }, []);
 
   // Generate segments from timetable
   useEffect(() => {
@@ -333,6 +343,7 @@ export default function CircularTimer({
         const seg = findSegment(angle);
         if (seg) {
           setActiveSegment(seg.id);
+          circleScale.stopAnimation();
           Animated.spring(circleScale, {
             toValue: 1,
             tension: 200,
@@ -348,6 +359,7 @@ export default function CircularTimer({
         const seg = findSegment(angle);
         if (seg && seg.id !== activeSegment) {
           setActiveSegment(seg.id);
+          circleScale.stopAnimation();
           circleScale.setValue(0);
           Animated.spring(circleScale, {
             toValue: 1,
@@ -364,6 +376,7 @@ export default function CircularTimer({
         scaleAnim.setValue(1);
         const angle = getAngle(e.nativeEvent.locationX, e.nativeEvent.locationY);
         const seg = findSegment(angle);
+        circleScale.stopAnimation();
         Animated.timing(circleScale, {
           toValue: 0,
           duration: 300,

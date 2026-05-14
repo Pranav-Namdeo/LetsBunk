@@ -4,6 +4,7 @@ import {
   Animated, TextInput, ScrollView, FlatList, AppState, useColorScheme, Image, Modal, RefreshControl, PermissionsAndroid, Platform, Alert, NativeModules, Vibration
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { Audio } from 'expo-av';
 import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import io from 'socket.io-client';
@@ -402,32 +403,38 @@ export default function App() {
   const profileScaleAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 800,
-      useNativeDriver: true,
-    }).start();
-  }, []);
+    if (splashDone) {
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 800,
+        useNativeDriver: false,
+      }).start();
+    }
+  }, [splashDone]);
 
   useEffect(() => {
-    // Only animate glow in dark theme
-    if (isDarkTheme) {
-      Animated.loop(
+    // Only animate glow in dark theme and after splash is done
+    if (isDarkTheme && splashDone) {
+      const anim = Animated.loop(
         Animated.sequence([
           Animated.timing(glowAnim, {
             toValue: 1,
             duration: 2000,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
           Animated.timing(glowAnim, {
             toValue: 0,
             duration: 2000,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
         ])
-      ).start();
+      );
+      anim.start();
+      return () => anim.stop();
+    } else {
+      glowAnim.stopAnimation();
     }
-  }, [isDarkTheme]);
+  }, [isDarkTheme, splashDone]);
 
   useEffect(() => {
     // Animate modal when it opens
@@ -952,11 +959,37 @@ export default function App() {
 
   useEffect(() => {
     // Request all required permissions on first launch
-    requestStartupPermissions().then(({ allGranted }) => {
+    requestStartupPermissions().then(async ({ allGranted }) => {
       if (!allGranted) {
         console.warn('⚠️ Some permissions were not granted at startup');
       } else {
         console.log('✅ All startup permissions granted');
+      }
+
+      // Android 11+ (API 30) background location mandatory choice UI
+      if (Platform.OS === 'android' && Platform.Version >= 29) {
+        try {
+          const bgGranted = await PermissionsAndroid.check(PermissionsAndroid.PERMISSIONS.ACCESS_BACKGROUND_LOCATION);
+          if (!bgGranted) {
+            Alert.alert(
+              "📍 Background Timer",
+              "To keep the attendance timer running while your phone is locked or in your pocket, you MUST select:\n\n\"Allow all the time\"\n\n⚠️ If you select \"Allow only while using the app\", the timer will PAUSE the moment you exit the app!",
+              [
+                { 
+                  text: "I Understand -> Let's Set It Up", 
+                  onPress: () => {
+                    try {
+                      PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.ACCESS_BACKGROUND_LOCATION);
+                    } catch(e) {}
+                  }
+                }
+              ],
+              { cancelable: false }
+            );
+          }
+        } catch (e) {
+          console.log('Failed to check background location', e);
+        }
       }
     });
 
@@ -1113,6 +1146,17 @@ export default function App() {
                   // Alert if stopped because student left classroom while screen was off
                   if (event.reason === 'wifi_left_classroom_background') {
                     showToast('📶 Left classroom WiFi — timer stopped', 'warning');
+                    // Play alert sound to notify student
+                    const playAlert = async () => {
+                      try {
+                        const { sound } = await Audio.Sound.createAsync(
+                          { uri: 'https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3' }
+                        );
+                        await sound.playAsync();
+                      } catch (e) { console.log('Sound error', e); }
+                    };
+                    playAlert();
+                    Vibration.vibrate([0, 500, 200, 500]);
                   }
                   break;
 
@@ -2662,21 +2706,24 @@ dayKeys.forEach((dayKey) => {
 
   useEffect(() => {
     if (isRunning) {
-      Animated.loop(
+      const anim = Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
             toValue: 1.05,
             duration: 500,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
           Animated.timing(pulseAnim, {
             toValue: 1,
             duration: 500,
-            useNativeDriver: true,
+            useNativeDriver: false,
           }),
         ])
-      ).start();
+      );
+      anim.start();
+      return () => anim.stop();
     } else {
+      pulseAnim.stopAnimation();
       pulseAnim.setValue(1);
     }
   }, [isRunning]);
@@ -3626,6 +3673,12 @@ const onRefreshStudent = async () => {
       if (currentSem && currentBranch) {
         await fetchTimetable(currentSem, currentBranch);
       }
+      
+      const targetStudentId = updatedUser?.enrollmentNo || studentId;
+      if (targetStudentId) {
+        console.log(`🔄 Refreshing BSSID schedule for ${targetStudentId}...`);
+        await fetchDailyBSSIDSchedule(targetStudentId, true);
+      }
 
       // Show success message with sync info
       showToast('✅ Refreshed successfully', 'success');
@@ -4273,18 +4326,6 @@ const onRefreshStudent = async () => {
           </View>
         )}
 
-        <ScrollView
-          style={{ flex: 1 }}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshingTeacher}
-              onRefresh={onRefreshTeacher}
-              colors={[theme.primary]}
-              tintColor={theme.primary}
-            />
-          }
-        >
-          <StudentSearch theme={theme} students={students} />
           <StudentList
             theme={theme}
             students={students}
@@ -4294,8 +4335,16 @@ const onRefreshStudent = async () => {
             }}
             activeRandomRing={activeRandomRing}
             onTeacherAction={handleTeacherAction}
+            ListHeaderComponent={<StudentSearch theme={theme} students={students} />}
+            refreshControl={
+              <RefreshControl
+                refreshing={refreshingTeacher}
+                onRefresh={onRefreshTeacher}
+                colors={[theme.primary]}
+                tintColor={theme.primary}
+              />
+            }
           />
-        </ScrollView>
         {/* Theme Picker Modal */}
         <Modal
           visible={showThemePicker}
@@ -6485,12 +6534,17 @@ function PartyPopper() {
   ).current;
 
   useEffect(() => {
-    Animated.stagger(30, particles.map(p =>
+    const anim = Animated.stagger(30, particles.map(p =>
       Animated.sequence([
         Animated.timing(p.anim, { toValue: 1, duration: 700, useNativeDriver: true }),
         Animated.timing(p.anim, { toValue: 0, duration: 600, delay: 800, useNativeDriver: true }),
       ])
-    )).start();
+    ));
+    anim.start();
+    return () => {
+      anim.stop();
+      particles.forEach(p => p.anim.stopAnimation());
+    };
   }, []);
 
   return (

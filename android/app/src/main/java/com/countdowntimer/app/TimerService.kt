@@ -146,9 +146,26 @@ class TimerService : Service() {
         return cal.get(java.util.Calendar.HOUR_OF_DAY) * 60 + cal.get(java.util.Calendar.MINUTE)
     }
 
+    private fun playAlertSound() {
+        try {
+            val uri = android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION)
+            val ringtone = android.media.RingtoneManager.getRingtone(applicationContext, uri)
+            ringtone?.play()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error playing alert sound: ${e.message}")
+        }
+    }
+
     fun stopTimer() {
+        if (!isRunning) return
         isRunning = false
         handler.removeCallbacks(tickRunnable)
+        
+        // Play an alert sound if it stopped because of WiFi mismatch/background timeout
+        if (stoppedDueToWifiInvalid) {
+            playAlertSound()
+        }
+
         // Final sync before stopping
         if (studentId.isNotBlank() && serverUrl.isNotBlank()) {
             syncToServer(isFinalSync = true)

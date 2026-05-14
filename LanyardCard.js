@@ -32,6 +32,7 @@ export default function LanyardCard({
   useEffect(() => {
     if (visible) {
       // Drop down animation
+      slideAnim.stopAnimation();
       Animated.spring(slideAnim, {
         toValue: 0,
         tension: 20,
@@ -43,6 +44,7 @@ export default function LanyardCard({
       _subscribe();
     } else {
       // Pull up animation
+      slideAnim.stopAnimation();
       Animated.spring(slideAnim, {
         toValue: -300,
         tension: 50,
@@ -56,6 +58,10 @@ export default function LanyardCard({
 
     return () => {
       _unsubscribe();
+      slideAnim.stopAnimation();
+      swingX.stopAnimation();
+      swingY.stopAnimation();
+      rotateZ.stopAnimation();
     };
   }, [visible]);
 

@@ -24,7 +24,7 @@ export default function SplashScreenView({ onDone }) {
 
   useEffect(() => {
     // Logo pops in, text fades in, then whole screen fades out
-    Animated.sequence([
+    const anim = Animated.sequence([
       // Logo scale up
       Animated.spring(logoScale, {
         toValue: 1,
@@ -46,7 +46,14 @@ export default function SplashScreenView({ onDone }) {
         duration: 350,
         useNativeDriver: true,
       }),
-    ]).start(() => onDone && onDone());
+    ]);
+    anim.start(() => onDone && onDone());
+    return () => {
+      anim.stop();
+      fadeAnim.stopAnimation();
+      logoScale.stopAnimation();
+      textFade.stopAnimation();
+    };
   }, []);
 
   const logoSize = width * 0.38;

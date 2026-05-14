@@ -2,8 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Animated } from 'react-native';
 import FilterButtons from './FilterButtons';
 
-const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = null, onTeacherAction }) => {
+const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = null, onTeacherAction, ListHeaderComponent, refreshControl }) => {
   const [selectedFilter, setSelectedFilter] = useState('all');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 50;
 
   // status values: 'present' | 'active' | 'absent' | 'offline' (disconnected, timer frozen)
   const filteredStudents = students.filter((student) => {
@@ -25,22 +27,33 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
 
   // Build sorted list: ring-selected students float to top, verified ones return to natural order
   const sortedStudents = (() => {
-    if (!activeRandomRing?.selectedStudents?.length) return filteredStudents;
-
-    const ringMap = new Map(
-      activeRandomRing.selectedStudents.map(s => [s.enrollmentNo, s])
-    );
-
-    // A student is "floating" if they are selected AND not yet resolved (pending action)
-    const isFloating = (s) => {
-      const rs = ringMap.get(s.enrollmentNo);
-      return rs && rs.teacherAction === 'pending' && !rs.verified;
-    };
-
-    const floating = filteredStudents.filter(isFloating);
-    const rest     = filteredStudents.filter(s => !isFloating(s));
-    return [...floating, ...rest];
+    let list = filteredStudents;
+    if (activeRandomRing?.selectedStudents?.length) {
+      const ringMap = new Map(
+        activeRandomRing.selectedStudents.map(s => [s.enrollmentNo, s])
+      );
+      const isFloating = (s) => {
+        const rs = ringMap.get(s.enrollmentNo);
+        return rs && rs.teacherAction === 'pending' && !rs.verified;
+      };
+      const floating = list.filter(isFloating);
+      const rest     = list.filter(s => !isFloating(s));
+      list = [...floating, ...rest];
+    }
+    return list;
   })();
+
+  // Pagination Logic
+  const paginatedStudents = sortedStudents.slice(0, currentPage * pageSize);
+  const currentRangeLabel = `1-${Math.min(currentPage * pageSize, sortedStudents.length)}`;
+
+  const loadMore = () => {
+    if (currentPage * pageSize < sortedStudents.length) {
+      setCurrentPage(prev => prev + 1);
+    }
+  };
+
+  const scrollY = useRef(new Animated.Value(0)).current;
 
   const renderStudentItem = ({ item: student, index }) => {
     const randomRingStudent = activeRandomRing?.selectedStudents?.find(s =>
@@ -54,6 +67,8 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
       <StudentItem
         student={student}
         theme={theme}
+        index={index}
+        scrollY={scrollY}
         onPress={() => onStudentPress && onStudentPress(student)}
         randomRingStudent={randomRingStudent}
         onTeacherAction={onTeacherAction || (() => {})}
@@ -63,38 +78,68 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
     );
   };
 
-  return (
-    <View style={[styles.container, { backgroundColor: theme.background }]}>
+  const ListHeader = () => (
+    <>
+      {/* Existing App.js Header passed as prop */}
+      {ListHeaderComponent}
+
       <View style={styles.header}>
-        <Text style={[styles.headerTitle, { color: theme.text }]}>Class Attendance</Text>
+        <View>
+          <Text style={[styles.headerTitle, { color: theme.text }]}>Class Attendance</Text>
+          <Text style={[styles.paginationInfo, { color: theme.primary }]}>
+            Showing {currentRangeLabel} of {sortedStudents.length}
+          </Text>
+        </View>
         <Text style={[styles.headerSubtitle, { color: theme.textSecondary }]}>
           {presentCount} / {students.length} Present
         </Text>
       </View>
       <FilterButtons
         selectedFilter={selectedFilter}
-        onFilterChange={setSelectedFilter}
+        onFilterChange={(f) => {
+          setSelectedFilter(f);
+          setCurrentPage(1); // Reset pagination on filter change
+        }}
         counts={filterCounts}
         theme={theme}
+        paginationLabel={selectedFilter === 'all' ? currentRangeLabel : null}
       />
-      {sortedStudents.length === 0 ? (
+      {paginatedStudents.length === 0 && (
         <View style={[styles.emptyContainer, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
           <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
             {selectedFilter === 'all' ? 'No students enrolled in this class yet.' : `No students with status: ${selectedFilter}`}
           </Text>
         </View>
-      ) : (
-        <FlatList
-          data={sortedStudents}
-          renderItem={renderStudentItem}
-          keyExtractor={(item) => item._id || item.id || item.enrollmentNo}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-        />
       )}
+    </>
+  );
+
+  return (
+    <View style={[styles.container, { backgroundColor: theme.background }]}>
+      <Animated.FlatList
+        data={paginatedStudents}
+        renderItem={renderStudentItem}
+        keyExtractor={(item) => item._id || item.id || item.enrollmentNo}
+        contentContainerStyle={styles.listContent}
+        showsVerticalScrollIndicator={false}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.5}
+        initialNumToRender={10}
+        maxToRenderPerBatch={10}
+        windowSize={5}
+        ListHeaderComponent={ListHeader}
+        refreshControl={refreshControl}
+        onScroll={Animated.event(
+          [{ nativeEvent: { contentOffset: { y: scrollY } } }],
+          { useNativeDriver: false }
+        )}
+        scrollEventThrottle={16}
+      />
     </View>
   );
 };
+
+const ITEM_HEIGHT = 100; // Approximate height of student card + margin
 
 const fmt = (secs) => {
   const m = Math.floor(secs / 60);
@@ -102,7 +147,7 @@ const fmt = (secs) => {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 };
 
-const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherAction, randomRingId, isFloating }) => {
+const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStudent, onTeacherAction, randomRingId, isFloating }) => {
   const [displaySecs, setDisplaySecs] = useState(student.timerValue || 0);
   const [actionLoading, setActionLoading] = useState(false);
   const intervalRef = useRef(null);
@@ -116,18 +161,24 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
   useEffect(() => {
     if (isFloating) {
       // Slide in from top + pulse glow
-      Animated.parallel([
-        Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 8, useNativeDriver: true }),
+      const anim = Animated.parallel([
+        Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 8, useNativeDriver: false }),
         Animated.loop(
           Animated.sequence([
             Animated.timing(glowAnim, { toValue: 1, duration: 700, useNativeDriver: false }),
             Animated.timing(glowAnim, { toValue: 0, duration: 700, useNativeDriver: false }),
           ])
         ),
-      ]).start();
+      ]);
+      anim.start();
+      return () => {
+        anim.stop();
+        glowAnim.stopAnimation();
+        slideAnim.stopAnimation();
+      };
     } else {
       // Slide back to natural position
-      Animated.spring(slideAnim, { toValue: 0, tension: 60, friction: 10, useNativeDriver: true }).start();
+      Animated.spring(slideAnim, { toValue: 0, tension: 60, friction: 10, useNativeDriver: false }).start();
       glowAnim.stopAnimation();
       glowAnim.setValue(0);
     }
@@ -202,8 +253,18 @@ const StudentItem = ({ student, theme, onPress, randomRingStudent, onTeacherActi
 
   const statusStyle = getStatusStyle(student.status);
 
+  const opacity = scrollY.interpolate({
+    inputRange: [
+      (index - 1) * ITEM_HEIGHT,
+      index * ITEM_HEIGHT,
+      (index + 0.7) * ITEM_HEIGHT,
+    ],
+    outputRange: [1, 1, 0],
+    extrapolate: 'clamp',
+  });
+
   return (
-    <Animated.View style={{ transform: [{ translateY: slideAnim }] }}>
+    <Animated.View style={{ transform: [{ translateY: slideAnim }], opacity }}>
       <Animated.View style={[
         styles.studentCard,
         { backgroundColor: theme.cardBackground, borderColor: isFloating ? glowBorder : theme.border },
@@ -292,6 +353,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
   headerTitle: { fontSize: 18, fontWeight: '600' },
   headerSubtitle: { fontSize: 14 },
+  paginationInfo: { fontSize: 12, fontWeight: '600', marginTop: 2 },
   listContent: { paddingBottom: 16 },
   studentCard: { borderRadius: 8, padding: 16, marginBottom: 16, borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
   floatingCard: { borderWidth: 2, elevation: 6, shadowOpacity: 0.18, shadowRadius: 6 },

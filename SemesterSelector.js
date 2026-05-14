@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView, ActivityIndicator, Animated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SOCKET_URL } from './config';
@@ -21,13 +21,20 @@ const SemesterSelector = ({
   const [branches, setBranches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [slideAnim] = useState(new Animated.Value(0));
+  const slideAnim = useRef(new Animated.Value(0)).current;
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Fetch semesters and branches from API with caching
   useEffect(() => {
     if (visible) {
       loadData();
       // Animate modal entrance
+      slideAnim.stopAnimation();
+      slideAnim.setValue(0);
       Animated.spring(slideAnim, {
         toValue: 1,
         tension: 50,
@@ -35,6 +42,7 @@ const SemesterSelector = ({
         useNativeDriver: true,
       }).start();
     } else {
+      slideAnim.stopAnimation();
       slideAnim.setValue(0);
     }
   }, [visible]);
@@ -159,11 +167,12 @@ const SemesterSelector = ({
   const displayBranches = useMemo(() => branches, [branches]);
 
   const handleClose = () => {
+    slideAnim.stopAnimation();
     Animated.timing(slideAnim, {
       toValue: 0,
       duration: 200,
       useNativeDriver: true,
-    }).start(() => onClose());
+    }).start(() => { if (mountedRef.current) onClose(); });
   };
 
   const modalTranslateY = slideAnim.interpolate({

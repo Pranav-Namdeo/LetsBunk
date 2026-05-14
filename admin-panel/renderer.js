@@ -674,6 +674,7 @@ function switchSection(sectionName) {
         case 'settings': loadAttendanceThresholdSetting(); break;
         case 'attendance': initAttendanceHistory(); break;
         case 'attendance-showcase': initAttendanceShowcase(); break;
+        case 'timetable': autoLoadTimetable(); break;
     }
 }
 
@@ -2151,7 +2152,7 @@ async function loadTimetable() {
     try {
         // Load timetable and classrooms in parallel
         const [timetableRes, classroomsRes, teachersRes] = await Promise.all([
-            fetch(POST_TIMETABLE),
+            fetch(api(`/api/timetable/${semester}/${encodeURIComponent(course)}`)),
             fetch(GET_CLASSROOMS),
             fetch(GET_TEACHERS)
         ]);

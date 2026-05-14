@@ -28,24 +28,35 @@ const COLORS = {
 function ToastItem({ toast, onDone }) {
   const translateY = useRef(new Animated.Value(80)).current;
   const opacity    = useRef(new Animated.Value(0)).current;
+  const mountedRef = useRef(true);
+  const animRef    = useRef(null);
 
   useEffect(() => {
     // Slide up + fade in
-    Animated.parallel([
+    animRef.current = Animated.parallel([
       Animated.spring(translateY, { toValue: 0, tension: 80, friction: 10, useNativeDriver: true }),
       Animated.timing(opacity,    { toValue: 1, duration: 200, useNativeDriver: true }),
-    ]).start();
+    ]);
+    animRef.current.start();
 
     // Auto-dismiss
     const timer = setTimeout(() => dismiss(), toast.duration);
-    return () => clearTimeout(timer);
+    return () => {
+      mountedRef.current = false;
+      clearTimeout(timer);
+      translateY.stopAnimation();
+      opacity.stopAnimation();
+    };
   }, []);
 
   const dismiss = () => {
+    if (!mountedRef.current) return;
+    translateY.stopAnimation();
+    opacity.stopAnimation();
     Animated.parallel([
       Animated.timing(translateY, { toValue: 80, duration: 250, useNativeDriver: true }),
       Animated.timing(opacity,    { toValue: 0,  duration: 250, useNativeDriver: true }),
-    ]).start(() => onDone(toast.id));
+    ]).start(() => { if (mountedRef.current) onDone(toast.id); });
   };
 
   const c = COLORS[toast.type] || COLORS.info;

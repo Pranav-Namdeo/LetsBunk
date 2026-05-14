@@ -1,9 +1,9 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 
-const FilterButtons = ({ selectedFilter, onFilterChange, counts, theme }) => {
+const FilterButtons = ({ selectedFilter, onFilterChange, counts, theme, paginationLabel }) => {
   const filters = [
-    { id: 'all', label: 'All', icon: '📋', count: counts.all },
+    { id: 'all', label: paginationLabel ? `All (${paginationLabel})` : 'All', icon: '📋', count: counts.all },
     { id: 'active', label: 'Active', icon: '🟢', count: counts.active },
     { id: 'present', label: 'Present', icon: '✅', count: counts.present },
     { id: 'absent', label: 'Absent', icon: '❌', count: counts.absent },
