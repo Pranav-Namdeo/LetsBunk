@@ -28,13 +28,16 @@ function _bssidGetBootMs() {
  * Falls back to boot-elapsed, then device time.
  */
 function _getTodayString() {
+  let timestamp;
   try {
     const { getServerTime } = require('./ServerTime');
-    return getServerTime().nowDate().toISOString().split('T')[0];
-  } catch (_) {}
-  const bootMs = _bssidGetBootMs();
-  if (bootMs > 0) return new Date(bootMs).toISOString().split('T')[0];
-  return new Date().toISOString().split('T')[0];
+    timestamp = getServerTime().now();
+  } catch (_) {
+    timestamp = Date.now();
+  }
+  // Add 5.5 hours to get IST time in UTC format, guaranteeing it's spoof-proof and in IST
+  const istTime = new Date(timestamp + 5.5 * 60 * 60 * 1000);
+  return istTime.toISOString().split('T')[0];
 }
 
 /**

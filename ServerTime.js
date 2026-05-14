@@ -323,16 +323,24 @@ class ServerTime {
   }
 
   /**
-   * Format server time
+   * Get an IST shifted Date object. 
+   * IMPORTANT: You MUST use getUTC* methods on this object, because it's shifted!
+   */
+  getISTDate() {
+    return new Date(this.now() + 5.5 * 60 * 60 * 1000);
+  }
+
+  /**
+   * Format server time (in IST)
    */
   format(format = 'HH:mm:ss') {
-    const date = this.nowDate();
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const year = date.getFullYear();
+    const ist = this.getISTDate();
+    const hours = String(ist.getUTCHours()).padStart(2, '0');
+    const minutes = String(ist.getUTCMinutes()).padStart(2, '0');
+    const seconds = String(ist.getUTCSeconds()).padStart(2, '0');
+    const day = String(ist.getUTCDate()).padStart(2, '0');
+    const month = String(ist.getUTCMonth() + 1).padStart(2, '0');
+    const year = ist.getUTCFullYear();
 
     return format
       .replace('HH', hours)
@@ -344,19 +352,19 @@ class ServerTime {
   }
 
   /**
-   * Get current day of week (server time)
+   * Get current day of week (server time, IST)
    */
   getCurrentDay() {
     const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    return days[this.nowDate().getDay()];
+    return days[this.getISTDate().getUTCDay()];
   }
 
   /**
-   * Get current time in minutes since midnight (server time)
+   * Get current time in minutes since midnight (server time, IST)
    */
   getCurrentTimeInMinutes() {
-    const date = this.nowDate();
-    return date.getHours() * 60 + date.getMinutes();
+    const ist = this.getISTDate();
+    return ist.getUTCHours() * 60 + ist.getUTCMinutes();
   }
 
   /**

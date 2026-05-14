@@ -119,6 +119,18 @@ class OfflineTimerService {
     this.backgroundStartTime = null;
   }
 
+  _getISTDateString() {
+    let timestamp;
+    try {
+      const { getServerTime } = require('./ServerTime');
+      timestamp = getServerTime().now();
+    } catch (_) {
+      timestamp = Date.now();
+    }
+    const ist = new Date(timestamp + 5.5 * 60 * 60 * 1000);
+    return ist.toISOString().split('T')[0];
+  }
+
   /**
    * Initialize offline timer service
    */
@@ -242,7 +254,7 @@ class OfflineTimerService {
         const isSameLectureContinuation = isSameLecture && this.timerSeconds > 0;
 
         // Already verified today (period transition) — skip face verify
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = this._getISTDateString();
         const isAlreadyVerifiedToday = this.verifiedToday && this.verifiedTodayDate === todayStr;
 
         // Face verify only needed for: new lecture OR first start of the day (no lastVerifiedLecture)
@@ -281,7 +293,7 @@ class OfflineTimerService {
           this.lastFaceVerificationTime = _getBootMs() || Date.now();
           this.lastVerifiedLecture = { ...lectureInfo };
           this.verifiedToday = true;
-          this.verifiedTodayDate = new Date().toISOString().split('T')[0];
+          this.verifiedTodayDate = this._getISTDateString();
 
           // Reset timer only for new lecture
           if (!isSameLecture) {
@@ -304,7 +316,7 @@ class OfflineTimerService {
         if (!isSameLecture || this.timerSeconds === 0) {
           try {
             console.log('📡 Fetching existing attendance from server for initial state...');
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = this._getISTDateString();
             const response = await fetch(`${this.serverUrl}/api/attendance/student/${this.studentId}/date/${todayStr}`);
             if (response.ok) {
               const data = await response.json();
@@ -456,7 +468,7 @@ class OfflineTimerService {
    */
   async getStudentFaceData() {
     try {
-      const todayStr = new Date().toISOString().split('T')[0];
+      const todayStr = this._getISTDateString();
 
       // Return cached embedding if it's less than 7 days old
       if (this._cachedFaceEmbedding && this._cachedFaceEmbeddingDate) {
@@ -1776,22 +1788,22 @@ class OfflineTimerService {
   async saveState() {
     try {
       const state = {
+        timerSeconds: this.timerSeconds,
         isRunning: this.isRunning,
         isPaused: this.isPaused,
-        timerSeconds: this.timerSeconds,
         currentLecture: this.currentLecture,
         lectureStartTime: this.lectureStartTime,
         authorizedBSSID: this.authorizedBSSID,
         lastSyncTime: this.lastSyncTime,
-        attendanceStatus: this.attendanceStatus || 'absent',
-        thresholdSeconds: this.thresholdSeconds || null,
-        // Disconnection tracking
+        attendanceStatus: this.attendanceStatus,
+        thresholdSeconds: this.thresholdSeconds,
         wasRunningBeforeDisconnect: this.wasRunningBeforeDisconnect,
         disconnectionTime: this.disconnectionTime,
         pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
         previousLectureData: this.previousLectureData,
         timestamp: _getBootMs() || Date.now(),
-        bootMs: _getBootMs()  // spoof-proof anchor for age check on restore
+        bootMs: _getBootMs(),  // spoof-proof anchor for age check on restore
+        date: this._getISTDateString() // Add date to discard across midnight
       };
       
       await AsyncStorage.setItem(OFFLINE_TIMER_KEY, JSON.stringify(state));
@@ -1811,6 +1823,14 @@ class OfflineTimerService {
       
       if (savedState) {
         const state = JSON.parse(savedState);
+        
+        const todayStr = this._getISTDateString();
+        // Discard cache completely if the date changed or if it's from an old version (no date field)
+        if (!state.date || state.date !== todayStr) {
+            console.log('🔄 Date changed or old cache detected. Discarding offline timer cache.');
+            await AsyncStorage.removeItem(OFFLINE_TIMER_KEY);
+            return;
+        }
         
         // Check if state is recent (within 1 hour)
         let stateAge;

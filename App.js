@@ -455,22 +455,26 @@ export default function App() {
     }
   }, [showProfile]);
 
-  // Update current day at midnight and reset verification (using server time)
+  // Update current day at midnight and reset verification (using server time in IST)
   useEffect(() => {
+    const getISTDateStr = (timestamp) => {
+        const ist = new Date(timestamp + 5.5 * 60 * 60 * 1000);
+        return ist.toISOString().split('T')[0];
+    };
+    
     let lastDate = (() => {
       try {
         const serverTime = getServerTime();
-        return serverTime.nowDate().toDateString();
+        return getISTDateStr(serverTime.now());
       } catch {
-        return new Date(_appGetBootMs()).toDateString();
+        return getISTDateStr(new Date(_appGetBootMs() || Date.now()).getTime());
       }
     })();
 
     const updateCurrentDay = () => {
       try {
         const serverTime = getServerTime();
-        const now = serverTime.nowDate();
-        const currentDate = now.toDateString();
+        const currentDate = getISTDateStr(serverTime.now());
 
         // Update current day using server time
         setCurrentDay(serverTime.getCurrentDay());
@@ -482,16 +486,21 @@ export default function App() {
           // Timer removed - period-based attendance
           lastDate = currentDate;
 
-          // Clear saved verification state
+          // Clear saved verification state and offline timer
           AsyncStorage.removeItem(DAILY_VERIFICATION_KEY).catch(err =>
             console.log('Error clearing verification:', err)
           );
+          if (typeof OfflineTimerService !== 'undefined') {
+              OfflineTimerService.clearState?.();
+              AsyncStorage.removeItem('@offline_timer_state');
+          }
         }
       } catch (error) {
         console.warn('⚠️ Server time not available, using boot-anchored time');
-        const now = new Date(_appGetBootMs());
-        const currentDate = now.toDateString();
-        const dayIndex = now.getDay();
+        const timestamp = _appGetBootMs() || Date.now();
+        const currentDate = getISTDateStr(timestamp);
+        const istDate = new Date(timestamp + 5.5 * 60 * 60 * 1000);
+        const dayIndex = istDate.getUTCDay();
         const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
         setCurrentDay(days[dayIndex]);
 
@@ -501,10 +510,14 @@ export default function App() {
           // Timer removed - period-based attendance
           lastDate = currentDate;
 
-          // Clear saved verification state
+          // Clear saved verification state and offline timer
           AsyncStorage.removeItem(DAILY_VERIFICATION_KEY).catch(err =>
             console.log('Error clearing verification:', err)
           );
+          if (typeof OfflineTimerService !== 'undefined') {
+              OfflineTimerService.clearState?.();
+              AsyncStorage.removeItem('@offline_timer_state');
+          }
         }
       }
     };
@@ -3045,7 +3058,7 @@ dayKeys.forEach((dayKey) => {
     if (segmentStatus === 'past') {
       try {
         console.log('📊 Fetching attendance data for past period...');
-        const today = now.toISOString().split('T')[0];
+        const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
         const response = await fetch(`${SOCKET_URL}/api/attendance/student/${studentId}/date/${today}`);
         const data = await response.json();
         

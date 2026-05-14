@@ -334,7 +334,7 @@ export default function TestBSSID({ theme }) {
 
       // Fetch from server using configured URL
       const response = await fetch(
-        GET_DAILY_BSSID_SCHEDULE
+        `${GET_DAILY_BSSID_SCHEDULE}?enrollmentNo=${encodeURIComponent(enrollmentNo)}`
       );
 
       const data = await response.json();
