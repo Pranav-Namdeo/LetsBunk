@@ -2937,7 +2937,7 @@ app.get('/api/students/:studentId/face-data', async (req, res) => {
 // POST /api/attendance/offline-sync - Sync offline timer data
 app.post('/api/attendance/offline-sync', async (req, res) => {
     const startTime = Date.now();
-    const { studentId, timerSeconds, lecture, timestamp, isRunning, isPaused, periodId: clientPeriodId, isQueuedSync } = req.body;
+    const { studentId, timerSeconds, lecture, timestamp, isRunning, isPaused, periodId: clientPeriodId } = req.body;
     
     console.log(`🔄 [OFFLINE-SYNC] Sync request - Student: ${studentId}, Timer: ${timerSeconds}s, IP: ${req.ip}`);
     
@@ -3165,17 +3165,11 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         // 7. Upsert timer progress into the current period's PeriodAttendance record FIRST
         // so syncAttendanceRecord (step 7b) reads fresh data.
         try {
-            // Use the date from the record, NOT the current server time
-            // to ensure late syncs update the correct day's records.
-            const today = new Date(syncDate);
+            const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            // Try server clock only if the sync is for today
-            const isToday = today.getTime() === todayStart.getTime();
-            let currentLectureInfo = null;
-            if (isToday) {
-                currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
-            }
+            // Try server clock first (period still active)
+            const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
 
             let periodId = null;
             let periodSubject = lecture?.subject || '';
@@ -3289,7 +3283,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 7b. Sync AttendanceRecord from PeriodAttendance (now up-to-date from step 7)
         try {
-            const today = new Date(syncDate);
+            const today = new Date();
             today.setHours(0, 0, 0, 0);
             const attendedMinutes = Math.floor(timerSeconds / 60);
 
@@ -3399,9 +3393,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             success: false,
             error: 'Failed to sync timer data',
             details: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined,
             duration: duration
-        });
+});
     }
 });
 
