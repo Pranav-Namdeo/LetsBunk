@@ -1458,7 +1458,9 @@ class OfflineTimerService {
             failedCount++;
           }
         } else {
-          console.warn(`⚠️ [OFFLINE SYNC] Server error for ${queueItem.periodId}: Status ${queueResponse.status}`);
+          const errData = await queueResponse.json().catch(() => ({}));
+          const serverMsg = errData.details || errData.error || errData.message || `HTTP ${queueResponse.status}`;
+          console.warn(`⚠️ [OFFLINE SYNC] Server error for ${queueItem.periodId}: ${serverMsg}`);
           failedCount++;
         }
       } catch (error) {
