@@ -45,51 +45,22 @@ const axios = require('axios');
 const rateLimit = require('express-rate-limit');
 const { ipKeyGenerator } = rateLimit;
 const bcrypt = require('bcrypt'); // Add bcrypt for password hashing
-const { createClient } = require('redis');
 
-// ─── Redis Client ─────────────────────────────────────────────────────────────
-const REDIS_URL = process.env.REDIS_URL || 'rediss://red-d810359o3t8c73e6ksn0:sQYYRIADT5i8aWb12Ku9zlbDt9LpgcB8@oregon-keyvalue.render.com:6379';
-
-const redisClient = createClient({ url: REDIS_URL });
-redisClient.on('error', (err) => console.error('❌ Redis error:', err.message));
-redisClient.on('connect', () => console.log('✅ Redis connected:', REDIS_URL.split('@').pop() || REDIS_URL));
-redisClient.on('reconnecting', () => console.log('🔄 Redis reconnecting...'));
-redisClient.connect().catch(err => console.error('❌ Redis connect failed:', err.message));
-
-// ─── Redis helpers ────────────────────────────────────────────────────────────
+// ─── Cache Helpers (Redis Removed) ──────────────────────────────────────────
+// Redis was removed due to networking/IP allowlist issues. 
+// Fallback logic in the app automatically uses MongoDB when cache returns null.
 const CACHE_TTL = {
-    TIMETABLE:  300,   // 5 min  — rarely changes
-    STUDENT:    600,   // 10 min — profile data
-    LIVE_TIMER: 86400, // 24 hr  — live timer state (auto-expires stale entries)
-    PERIODS:    300,   // 5 min
-    SUBJECTS:   600,   // 10 min
+    TIMETABLE:  300,
+    STUDENT:    600,
+    LIVE_TIMER: 86400,
+    PERIODS:    300,
+    SUBJECTS:   600,
 };
 
-async function cacheGet(key) {
-    try {
-        const val = await redisClient.get(key);
-        return val ? JSON.parse(val) : null;
-    } catch { return null; }
-}
-
-async function cacheSet(key, value, ttl) {
-    try {
-        await redisClient.set(key, JSON.stringify(value), { EX: ttl });
-    } catch (e) { console.warn('⚠️  Redis set failed:', e.message); }
-}
-
-async function cacheDel(...keys) {
-    try {
-        if (keys.length) await redisClient.del(keys);
-    } catch (e) { console.warn('⚠️  Redis del failed:', e.message); }
-}
-
-async function cacheDelPattern(pattern) {
-    try {
-        const keys = await redisClient.keys(pattern);
-        if (keys.length) await redisClient.del(keys);
-    } catch (e) { console.warn('⚠️  Redis delPattern failed:', e.message); }
-}
+async function cacheGet(key) { return null; }
+async function cacheSet(key, value, ttl) { return; }
+async function cacheDel(...keys) { return; }
+async function cacheDelPattern(pattern) { return; }
 
 // Face Verification Service
 const faceVerificationService = require('./services/faceVerificationService');
@@ -1729,19 +1700,14 @@ const liveTimerState = {
     async set(enrollmentNo, data) {
         const val = { ...data, lastSeen: Date.now() };
         this._map.set(enrollmentNo, val);
-        await cacheSet(`live:${enrollmentNo}`, val, CACHE_TTL.LIVE_TIMER);
     },
 
     async get(enrollmentNo) {
-        if (this._map.has(enrollmentNo)) return this._map.get(enrollmentNo);
-        const val = await cacheGet(`live:${enrollmentNo}`);
-        if (val) this._map.set(enrollmentNo, val);
-        return val || null;
+        return this._map.get(enrollmentNo) || null;
     },
 
     async delete(enrollmentNo) {
         this._map.delete(enrollmentNo);
-        await cacheDel(`live:${enrollmentNo}`);
     },
 
     // Synchronous forEach over in-memory mirror (for socket broadcasts)
