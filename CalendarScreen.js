@@ -372,8 +372,8 @@ export default function CalendarScreen({
     };
 
     // student: fetch specific date details
-    const fetchStudentDateDetails = async (date, specificEnrollmentNo = null) => {
-        const targetEnrollment = specificEnrollmentNo || studentId;
+    const fetchStudentDateDetails = async (date, specificStudent = null) => {
+        const targetEnrollment = specificStudent ? specificStudent.enrollmentNo : studentId;
         if (!targetEnrollment) return;
         setLoadingStudents(true);
         try {
@@ -390,8 +390,8 @@ export default function CalendarScreen({
 
             if (recordData.success && recordData.record) {
                 const holiday = holidays[date.toDateString()];
-                if (specificEnrollmentNo) {
-                    setDrillStudent({ ...recordData.record, holiday });
+                if (specificStudent) {
+                    setDrillStudent({ ...specificStudent, ...recordData.record, holiday });
                 } else {
                     setSelectedDateDetails({ ...recordData.record, holiday });
                 }
@@ -406,7 +406,9 @@ export default function CalendarScreen({
             const key = date.toDateString();
             const record = attendanceRecords[key];
             const holiday = holidays[key];
-            if (record || holiday) {
+            if (specificStudent) {
+                setDrillStudent({ ...specificStudent, ...(record || {}), holiday });
+            } else if (record || holiday) {
                 setSelectedDateDetails({ ...record, holiday });
             }
         } finally {
@@ -1036,7 +1038,7 @@ export default function CalendarScreen({
 
                                             return (
                                                 <TouchableOpacity key={i} activeOpacity={0.7} onPress={() => {
-                                                    fetchStudentDateDetails(selectedDate, student.enrollmentNo);
+                                                    fetchStudentDateDetails(selectedDate, student);
                                                 }}>
                                                     <View style={[styles.studentCard, {
                                                         backgroundColor: isPresent ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)',

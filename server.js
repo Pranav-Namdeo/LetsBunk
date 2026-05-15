@@ -369,6 +369,7 @@ const attendanceRecordSchema = new mongoose.Schema({
         total:       { type: Number, default: 0 },   // total period seconds
         percentage:  { type: Number, default: 0 },   // 0-100
         present:     { type: Boolean, default: false },
+        status:      { type: String, default: 'absent' },
         verifications: [{
             time:    Date,
             type:    { type: String, enum: ['face', 'random_ring', 'manual'] },
@@ -4888,7 +4889,9 @@ app.get('/api/attendance/date/:date', async (req, res) => {
                 room:             p.room || '',
                 status:           p.status,
                 verificationType: p.verificationType || '',
-                checkInTime:      p.checkInTime || null
+                checkInTime:      p.checkInTime || null,
+                attended:         p.timerSeconds || 0,
+                total:            60 * 60 // fallback to 60m
             });
             if (p.status === 'present') studentMap[key].status = 'present';
         }
@@ -4915,9 +4918,11 @@ app.get('/api/attendance/date/:date', async (req, res) => {
                     subject: l.subject || '',
                     teacher: l.teacherName || l.teacher || '',
                     room:    l.room || '',
-                    status:  l.present ? 'present' : 'absent',
+                    status:  l.status || (l.present || (l.total > 0 && (l.attended / l.total) * 100 >= 75) ? 'present' : 'absent'),
                     verificationType: '',
-                    checkInTime: null
+                    checkInTime: l.studentCheckIn || null,
+                    attended: l.attended || 0,
+                    total: l.total || 0
                 }))
             };
         }
@@ -7551,8 +7556,9 @@ app.get('/api/attendance/student/:enrollmentNo/date/:date', async (req, res) => 
                     endTime: l.endTime,
                     attended: l.attended || 0,
                     total: l.total || 0,
-                    percentage: l.percentage || (l.present ? 100 : 0),
-                    present: l.present || false,
+                    percentage: l.percentage || (l.total > 0 ? Math.round((l.attended / l.total) * 100) : (l.present ? 100 : 0)),
+                    present: l.present || (l.total > 0 && (l.attended / l.total) * 100 >= 75),
+                    status: l.status || (l.present || (l.total > 0 && (l.attended / l.total) * 100 >= 75) ? 'present' : 'absent'),
                     attendedFormatted: formatSecondsToTimeStr(l.attended || 0),
                     totalFormatted: formatSecondsToTimeStr(l.total || 0)
                 }))
