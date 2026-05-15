@@ -3142,16 +3142,27 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             // Try server clock first (period still active)
             const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
 
-            if (currentLectureInfo) {
-                // Period is currently active — use server clock
+            if (clientPeriodId) {
+                // Client explicitly sent the period ID (queued sync) — use it directly
+                periodId = clientPeriodId;
+                console.log(`📊 [OFFLINE-SYNC] Using client-provided periodId: ${periodId}`);
+                
+                // If it's a queued sync, also try to fetch subject/teacher from that period if missing
+                if (lecture?.subject) {
+                    periodSubject = lecture.subject;
+                    periodTeacher = lecture.teacher || '';
+                    periodRoom    = lecture.room    || '';
+                } else if (currentLectureInfo && `P${currentLectureInfo.period}` === clientPeriodId) {
+                    periodSubject = currentLectureInfo.subject || '';
+                    periodTeacher = currentLectureInfo.teacher || '';
+                    periodRoom    = currentLectureInfo.room    || '';
+                }
+            } else if (currentLectureInfo) {
+                // Period is currently active and no client ID provided — use server clock
                 periodId      = `P${currentLectureInfo.period}`;
                 periodSubject = lecture?.subject || currentLectureInfo.subject || '';
                 periodTeacher = lecture?.teacher || currentLectureInfo.teacher || '';
                 periodRoom    = lecture?.room    || currentLectureInfo.room    || '';
-            } else if (clientPeriodId) {
-                // Client explicitly sent the period ID (queued sync) — use it directly
-                periodId = clientPeriodId;
-                console.log(`📊 [OFFLINE-SYNC] Using client-provided periodId: ${periodId}`);
             } else if (lecture?.subject) {
                 // Period has ended — find the existing PeriodAttendance record for this lecture
                 // by matching subject + today's date (most recent one for this student today)
