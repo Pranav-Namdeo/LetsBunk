@@ -9,6 +9,7 @@ const KEYS = {
   // Invalidated on logout, app data clear, or when the server reports a newer enrolledAt.
   CACHED_SERVER_EMBEDDING:        '@letsbunk_cached_server_embedding',
   CACHED_SERVER_EMBEDDING_ENROLLED_AT: '@letsbunk_cached_server_embedding_enrolled_at',
+  SYNC_QUEUE: '__pending_sync',
 };
 
 class SecureStorage {
@@ -24,9 +25,24 @@ class SecureStorage {
         return false;
       }
 
-      // Convert array to comma-separated string for storage
+      // Convert array to comma-separated string
       const embeddingString = embedding.join(',');
-      await AsyncStorage.setItem(KEYS.FACE_EMBEDDING, embeddingString);
+      const { NativeModules } = require('react-native');
+      const { TimerModule } = NativeModules;
+      
+      let dataToSave = embeddingString;
+      
+      if (TimerModule && TimerModule.encryptString) {
+        try {
+          const encrypted = await TimerModule.encryptString(embeddingString);
+          dataToSave = `__ENCRYPTED__:${encrypted}`;
+          console.log('🔒 Face embedding encrypted via Android Keystore');
+        } catch (e) {
+          console.warn('⚠️ Keystore encryption failed for face data:', e.message);
+        }
+      }
+
+      await AsyncStorage.setItem(KEYS.FACE_EMBEDDING, dataToSave);
       
       // Save timestamp
       await AsyncStorage.setItem(KEYS.FACE_ENROLLED_AT, new Date().toISOString());
@@ -45,10 +61,28 @@ class SecureStorage {
    */
   static async getFaceEmbedding() {
     try {
-      const embeddingString = await AsyncStorage.getItem(KEYS.FACE_EMBEDDING);
+      const savedData = await AsyncStorage.getItem(KEYS.FACE_EMBEDDING);
       
-      if (!embeddingString) {
+      if (!savedData) {
         return null;
+      }
+
+      let embeddingString = savedData;
+      
+      if (savedData.startsWith('__ENCRYPTED__:')) {
+        const encryptedBase64 = savedData.replace('__ENCRYPTED__:', '');
+        const { NativeModules } = require('react-native');
+        const { TimerModule } = NativeModules;
+        
+        if (TimerModule && TimerModule.decryptString) {
+          try {
+            embeddingString = await TimerModule.decryptString(encryptedBase64);
+            console.log('🔓 Face embedding decrypted via Android Keystore');
+          } catch (e) {
+            console.error('❌ Keystore decryption failed for face data:', e.message);
+            return null;
+          }
+        }
       }
 
       // Convert comma-separated string back to float array
@@ -141,14 +175,30 @@ class SecureStorage {
         return false;
       }
       const embeddingStr = embedding.join(',');
-      await AsyncStorage.setItem(KEYS.CACHED_SERVER_EMBEDDING, embeddingStr);
+      const { NativeModules } = require('react-native');
+      const { TimerModule } = NativeModules;
+      
+      let dataToSave = embeddingStr;
+      
+      if (TimerModule && TimerModule.encryptString) {
+        try {
+          const encrypted = await TimerModule.encryptString(embeddingStr);
+          dataToSave = `__ENCRYPTED__:${encrypted}`;
+          console.log('🔒 Server embedding cache encrypted via Keystore');
+        } catch (e) {
+          console.warn('⚠️ Keystore encryption failed for server cache:', e.message);
+        }
+      }
+
+      await AsyncStorage.setItem(KEYS.CACHED_SERVER_EMBEDDING, dataToSave);
       await AsyncStorage.setItem(
         KEYS.CACHED_SERVER_EMBEDDING_ENROLLED_AT,
         serverEnrolledAt || new Date().toISOString()
       );
-      // Also keep FACE_EMBEDDING in sync so registerCheckIn (which reads
-      // FACE_EMBEDDING) always has a valid embedding to send to the server.
-      await AsyncStorage.setItem(KEYS.FACE_EMBEDDING, embeddingStr);
+      
+      // Also keep FACE_EMBEDDING in sync (will also be encrypted by saveFaceEmbedding if called)
+      await this.saveFaceEmbedding(embedding);
+      
       console.log(`✅ Server embedding cached persistently (enrolledAt: ${serverEnrolledAt})`);
       return true;
     } catch (error) {
@@ -159,16 +209,32 @@ class SecureStorage {
 
   /**
    * Load the persistent server-fetched embedding cache.
-   * @returns {Promise<{embedding: Array<number>, enrolledAt: string}|null>}
-   *   null if no cache exists.
    */
   static async getCachedServerEmbedding() {
     try {
-      const embeddingStr = await AsyncStorage.getItem(KEYS.CACHED_SERVER_EMBEDDING);
-      const enrolledAt   = await AsyncStorage.getItem(KEYS.CACHED_SERVER_EMBEDDING_ENROLLED_AT);
-      if (!embeddingStr) return null;
+      const savedData = await AsyncStorage.getItem(KEYS.CACHED_SERVER_EMBEDDING);
+      const enrolledAt = await AsyncStorage.getItem(KEYS.CACHED_SERVER_EMBEDDING_ENROLLED_AT);
+      if (!savedData) return null;
+      
+      let embeddingStr = savedData;
+      
+      if (savedData.startsWith('__ENCRYPTED__:')) {
+        const encryptedBase64 = savedData.replace('__ENCRYPTED__:', '');
+        const { NativeModules } = require('react-native');
+        const { TimerModule } = NativeModules;
+        
+        if (TimerModule && TimerModule.decryptString) {
+          try {
+            embeddingStr = await TimerModule.decryptString(encryptedBase64);
+            console.log('🔓 Server embedding cache decrypted via Keystore');
+          } catch (e) {
+            console.error('❌ Decryption failed for server cache:', e.message);
+            return null;
+          }
+        }
+      }
+      
       const embedding = embeddingStr.split(',').map(parseFloat);
-      console.log(`📦 Persistent server embedding loaded (enrolledAt: ${enrolledAt})`);
       return { embedding, enrolledAt: enrolledAt || null };
     } catch (error) {
       console.error('❌ Error loading cached server embedding:', error);
@@ -244,6 +310,82 @@ class SecureStorage {
         enrollmentNo: 'Error',
         enrolledAt: 'Error',
       };
+    }
+  }
+  
+  /**
+   * Save the offline sync queue to storage (Encrypted via Android Keystore)
+   * @param {Array<object>} queue - The sync queue to save
+   * @returns {Promise<boolean>} Success status
+   */
+  static async saveSyncQueue(queue) {
+    try {
+      if (!queue || !Array.isArray(queue)) {
+        return false;
+      }
+      
+      const jsonString = JSON.stringify(queue);
+      const { NativeModules } = require('react-native');
+      const { TimerModule } = NativeModules;
+      
+      let dataToSave = jsonString;
+      
+      // Attempt hardware encryption via Android Keystore
+      if (TimerModule && TimerModule.encryptString) {
+        try {
+          const encrypted = await TimerModule.encryptString(jsonString);
+          dataToSave = `__ENCRYPTED__:${encrypted}`;
+          console.log('🔒 Sync queue encrypted via Android Keystore');
+        } catch (encryptError) {
+          console.warn('⚠️ Keystore encryption failed, falling back to plaintext:', encryptError.message);
+        }
+      }
+
+      await AsyncStorage.setItem(KEYS.SYNC_QUEUE, dataToSave);
+      return true;
+    } catch (error) {
+      console.error('❌ Error saving sync queue:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Load the offline sync queue from storage (Decrypts via Android Keystore if needed)
+   * @returns {Promise<Array<object>>} The loaded sync queue or empty array
+   */
+  static async loadSyncQueue() {
+    try {
+      const savedData = await AsyncStorage.getItem(KEYS.SYNC_QUEUE);
+      if (!savedData) return [];
+      
+      let jsonString = savedData;
+      
+      // Check if data is encrypted
+      if (savedData.startsWith('__ENCRYPTED__:')) {
+        const encryptedBase64 = savedData.replace('__ENCRYPTED__:', '');
+        const { NativeModules } = require('react-native');
+        const { TimerModule } = NativeModules;
+        
+        if (TimerModule && TimerModule.decryptString) {
+          try {
+            jsonString = await TimerModule.decryptString(encryptedBase64);
+            console.log('🔓 Sync queue decrypted via Android Keystore');
+          } catch (decryptError) {
+            console.error('❌ Keystore decryption failed:', decryptError.message);
+            // If decryption fails, we can't read the data. 
+            // Return empty to avoid crash, but this is a data loss scenario.
+            return [];
+          }
+        } else {
+          console.warn('⚠️ Data is encrypted but TimerModule.decryptString is unavailable');
+          return [];
+        }
+      }
+      
+      return JSON.parse(jsonString);
+    } catch (error) {
+      console.error('❌ Error loading sync queue:', error);
+      return [];
     }
   }
 }

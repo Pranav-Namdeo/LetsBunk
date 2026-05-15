@@ -9,6 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, NativeModules } from 'react-native';
 import WiFiManager from './WiFiManager';
 import BSSIDStorage from './BSSIDStorage';
+import SecureStorage from './SecureStorage';
 import { getServerTime } from './ServerTime';
 
 import { GET_HEALTH, GET_STUDENT_FACE_DATA, POST_ATTENDANCE_CHECK_IN, POST_ATTENDANCE_OFFLINE_SYNC } from './constants/apiEndpoints';
@@ -114,6 +115,11 @@ class OfflineTimerService {
     this.lastSyncAttempt = null;
     this.internetCheckInterval = null;
     this.pendingSyncCount = 0;
+    
+    // Sync retry tracking
+    this.syncRetryCount = 0;
+    this.RETRY_LIMIT = 5;
+    this.needsUserIntervention = false;
     
     // Background timer tracking
     this.backgroundStartTime = null;
@@ -1267,8 +1273,16 @@ class OfflineTimerService {
    */
   setupSyncInterval() {
     this.syncInterval = setInterval(async () => {
+      // 1. If timer is running, perform regular heartbeat sync
       if (this.isRunning) {
         await this.syncToServer();
+      }
+      
+      // 2. If we have pending offline data and are online, attempt to flush the queue
+      // This ensures data is synced even during breaks or after periods end.
+      if (this.hasInternetConnection && this.syncQueue.length > 0 && !this.needsUserIntervention) {
+        console.log('🔄 Periodically checking sync queue for non-active period sync...');
+        await this.syncPendingData();
       }
     }, 30000); // 30 seconds — responsive live updates
   }
@@ -1367,10 +1381,11 @@ class OfflineTimerService {
           isOnline: this.isOnline,
           hasInternet: this.hasInternetConnection,
           hasAuthorizedWiFi: this.isConnectedToAuthorizedWiFi,
-          pendingSyncs: this.pendingSyncCount
+          pendingSyncs: this.pendingSyncCount,
+          __pending_sync: this.pendingSyncCount
         });
       }
-      
+
       // Auto-sync when internet comes back online
       if (!wasOnline && this.hasInternetConnection && this.syncQueue.length > 0) {
         console.log('🔄 Internet restored - auto-syncing pending data');
@@ -1392,7 +1407,13 @@ class OfflineTimerService {
       return;
     }
 
-    console.log(`🔄 Syncing ${this.syncQueue.length} pending items...`);
+    // If retry limit reached, don't auto-sync unless user manually triggers it
+    if (this.needsUserIntervention) {
+      console.log('⚠️ Sync paused - awaiting user intervention (retry limit exceeded)');
+      return;
+    }
+
+    console.log(`🔄 Syncing ${this.syncQueue.length} pending items... (Attempt ${this.syncRetryCount + 1}/${this.RETRY_LIMIT})`);
 
     // Try to sync current timer state first (if running)
     if (this.isRunning) {
@@ -1402,11 +1423,14 @@ class OfflineTimerService {
     // Process ALL queued items — don't stop on failure, try each one
     const queueCopy = [...this.syncQueue];
     let successCount = 0;
+    let failedCount = 0;
 
     for (const queueItem of queueCopy) {
       try {
         const queueController = new AbortController();
         const queueTimeoutId = setTimeout(() => queueController.abort(), 10000);
+        const periodDisplay = queueItem.periodId || 'Unknown Period';
+        console.log(`📤 [OFFLINE SYNC] Syncing ${periodDisplay}: ${queueItem.timerSeconds}s (${queueItem.attendedMinutes}m)`);
         let queueResponse;
         try {
           queueResponse = await fetch(POST_ATTENDANCE_OFFLINE_SYNC, {
@@ -1426,13 +1450,20 @@ class OfflineTimerService {
         if (queueResponse.ok) {
           const result = await queueResponse.json();
           if (result.success) {
+            console.log(`✅ [OFFLINE SYNC] Success for ${queueItem.periodId}`);
             successCount++;
             this.syncQueue = this.syncQueue.filter(item => item.timestamp !== queueItem.timestamp);
+          } else {
+            console.warn(`⚠️ [OFFLINE SYNC] Server rejected item ${queueItem.periodId}:`, result.error || 'Unknown error');
+            failedCount++;
           }
+        } else {
+          console.warn(`⚠️ [OFFLINE SYNC] Server error for ${queueItem.periodId}: Status ${queueResponse.status}`);
+          failedCount++;
         }
       } catch (error) {
         console.warn(`⚠️ Failed to sync queued item (timestamp=${queueItem.timestamp}):`, error.message);
-        // Continue processing remaining items — don't break
+        failedCount++;
       }
     }
 
@@ -1440,12 +1471,50 @@ class OfflineTimerService {
       console.log(`✅ Successfully synced ${successCount}/${queueCopy.length} pending items`);
       await this.saveSyncQueue();
       this.pendingSyncCount = this.syncQueue.length;
+      
+      // Reset retry count on any success
+      this.syncRetryCount = 0;
+      this.needsUserIntervention = false;
 
       this.notifyListeners({
         type: 'pending_syncs_completed',
         syncedCount: successCount,
-        remainingCount: this.pendingSyncCount
+        remainingCount: this.pendingSyncCount,
+        __pending_sync: this.pendingSyncCount
       });
+    }
+
+    if (failedCount > 0) {
+      this.syncRetryCount++;
+      console.log(`⚠️ Sync failed for ${failedCount} items. Retry count: ${this.syncRetryCount}/${this.RETRY_LIMIT}`);
+      
+      if (this.syncRetryCount >= this.RETRY_LIMIT) {
+        this.needsUserIntervention = true;
+        console.error('🚨 Sync retry limit exceeded! Prompting user for manual retry.');
+        this.notifyListeners({
+          type: 'sync_retry_limit_exceeded',
+          pendingCount: this.syncQueue.length,
+          __pending_sync: this.syncQueue.length
+        });
+      }
+    }
+  }
+
+  /**
+   * Manually retry syncing the batch of pending data (called by user prompt)
+   */
+  async retrySyncBatch() {
+    console.log('🔄 User triggered manual sync retry...');
+    this.syncRetryCount = 0;
+    this.needsUserIntervention = false;
+    
+    // Check internet connectivity first
+    await this.checkInternetConnectivity();
+    
+    if (this.hasInternetConnection) {
+      return await this.syncPendingData();
+    } else {
+      return { success: false, error: 'Still no internet connection' };
     }
   }
 
@@ -1470,6 +1539,10 @@ class OfflineTimerService {
 
     // NOTE: Sync works on any internet connection (WiFi, mobile data, etc.)
     // Only the TIMER requires authorized WiFi — sync is just an HTTP POST.
+
+    // Reset retry state on manual force sync to allow retrying stuck queues
+    this.syncRetryCount = 0;
+    this.needsUserIntervention = false;
 
     // Sync current timer state
     const syncResult = await this.syncToServer();
@@ -1636,25 +1709,33 @@ class OfflineTimerService {
       }
       
     } catch (error) {
-      console.warn('⚠️ Sync failed, queuing for later:', error.message);
+      const periodId = this._finalSyncPeriodId || (this.currentLecture?.period 
+            ? `P${this.currentLecture.period}` 
+            : (this.currentLecture?.periodId || 'Unknown'));
+      console.warn(`⚠️ Sync failed for ${periodId} (${this.timerSeconds}s), queuing for later:`, error.message);
       
       this.hasInternetConnection = false;
       this.isOnline = false;
       
       // Add to sync queue — capture full lecture context including period ID
-      this.syncQueue.push({
+      const existingIndex = this.syncQueue.findIndex(item => item.periodId === periodId);
+      const queueItem = {
         timerSeconds: this.timerSeconds,
         lecture: this.currentLecture,
-        // Explicitly store period ID so server can update the right PeriodAttendance record
-        // even after the period has ended and getCurrentLectureInfo() returns null
-        periodId: this._finalSyncPeriodId || (this.currentLecture?.period
-            ? `P${this.currentLecture.period}`
-            : (this.currentLecture?.periodId || null)),
+        periodId: periodId,
         timestamp: _getBootMs() || Date.now(),
         isRunning: this.isRunning,
         isPaused: this.isPaused,
         attendedMinutes: Math.floor(this.timerSeconds / 60)
-      });
+      };
+
+      if (existingIndex !== -1) {
+        // Update existing entry with latest timer value
+        this.syncQueue[existingIndex] = queueItem;
+      } else {
+        // New period or first time syncing this period offline
+        this.syncQueue.push(queueItem);
+      }
       
       await this.saveSyncQueue();
       this.pendingSyncCount = this.syncQueue.length;
@@ -1672,7 +1753,8 @@ class OfflineTimerService {
         isOnline: this.isOnline,
         hasInternet: this.hasInternetConnection,
         hasAuthorizedWiFi: this.isConnectedToAuthorizedWiFi,
-        pendingSyncs: this.pendingSyncCount
+        pendingSyncs: this.pendingSyncCount,
+        __pending_sync: this.pendingSyncCount
       });
       
       return { success: false, error: error.message };
@@ -1893,7 +1975,11 @@ class OfflineTimerService {
    */
   async saveSyncQueue() {
     try {
-      await AsyncStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(this.syncQueue));
+      const success = await SecureStorage.saveSyncQueue(this.syncQueue);
+      if (!success) {
+        // Fallback to AsyncStorage if SecureStorage fails for some reason
+        await AsyncStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(this.syncQueue));
+      }
     } catch (error) {
       console.error('❌ Failed to save sync queue:', error);
     }
@@ -1904,16 +1990,23 @@ class OfflineTimerService {
    */
   async loadSyncQueue() {
     try {
-      const savedQueue = await AsyncStorage.getItem(SYNC_QUEUE_KEY);
+      // Try SecureStorage first
+      let queue = await SecureStorage.loadSyncQueue();
       
-      if (savedQueue) {
-        this.syncQueue = JSON.parse(savedQueue);
-        this.pendingSyncCount = this.syncQueue.length; // Update pending sync count
-        console.log(`📦 Loaded ${this.syncQueue.length} queued syncs`);
-      } else {
-        this.syncQueue = [];
-        this.pendingSyncCount = 0;
+      // Fallback/Migration: If SecureStorage empty, try old AsyncStorage key
+      if (!queue || queue.length === 0) {
+        const savedQueue = await AsyncStorage.getItem(SYNC_QUEUE_KEY);
+        if (savedQueue) {
+          queue = JSON.parse(savedQueue);
+          // Migrate to SecureStorage
+          await SecureStorage.saveSyncQueue(queue);
+          await AsyncStorage.removeItem(SYNC_QUEUE_KEY);
+        }
       }
+      
+      this.syncQueue = queue || [];
+      this.pendingSyncCount = this.syncQueue.length;
+      console.log(`📦 Loaded ${this.syncQueue.length} queued syncs`);
     } catch (error) {
       console.error('❌ Failed to load sync queue:', error);
       this.syncQueue = [];
@@ -1936,6 +2029,7 @@ class OfflineTimerService {
       lastSyncTime: this.lastSyncTime,
       queuedSyncs: this.syncQueue.length,
       pendingSyncCount: this.pendingSyncCount,
+      __pending_sync: this.pendingSyncCount,
       // Attendance status from server
       attendanceStatus: this.attendanceStatus || 'absent',
       thresholdSeconds: this.thresholdSeconds || null,

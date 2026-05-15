@@ -215,7 +215,8 @@ export default function App() {
     isConnectedToAuthorizedWiFi: false,
     lastSyncTime: null,
     queuedSyncs: 0,
-    pendingSyncCount: 0
+    pendingSyncCount: 0,
+    __pending_sync: 0
   });
   const [offlineTimerInitialized, setOfflineTimerInitialized] = useState(false);
   
@@ -1221,7 +1222,8 @@ export default function App() {
                     isOnline: event.isOnline,
                     hasInternetConnection: event.hasInternet,
                     isConnectedToAuthorizedWiFi: event.hasAuthorizedWiFi,
-                    pendingSyncCount: event.pendingSyncs
+                    pendingSyncCount: event.pendingSyncs,
+                    __pending_sync: event.__pending_sync
                   }));
 
                   // Show connectivity status changes to user
@@ -1284,6 +1286,26 @@ export default function App() {
                     attendanceStatus: 'absent',
                     thresholdSeconds: null
                   }));
+                  break;
+
+                case 'sync_retry_limit_exceeded':
+                  // Reconnection limit passed — ask user to try again
+                  Alert.alert(
+                    "🔄 Sync Pending",
+                    `You have ${event.pendingCount} attendance records waiting to be synced. The automatic retry limit has been reached.\n\nPlease ensure you have a stable internet connection and try again to update your batch of sync.`,
+                    [
+                      { 
+                        text: "Try Again Now", 
+                        onPress: () => {
+                          OfflineTimerService.retrySyncBatch();
+                        }
+                      },
+                      {
+                        text: "Later",
+                        style: "cancel"
+                      }
+                    ]
+                  );
                   break;
               }
 
@@ -6072,9 +6094,9 @@ const onRefreshStudent = async () => {
                       {offlineTimerState.hasInternetConnection && offlineTimerState.isConnectedToAuthorizedWiFi
                         ? '🌐 Online' : offlineTimerState.isConnectedToAuthorizedWiFi ? '📱 Offline' : '❌ No WiFi'}
                     </Text>
-                    {offlineTimerState.pendingSyncCount > 0 && (
+                    {offlineTimerState.__pending_sync > 0 && (
                       <Text style={{ fontSize: 10, color: '#f59e0b', marginTop: 2 }}>
-                        {offlineTimerState.pendingSyncCount} pending sync{offlineTimerState.pendingSyncCount > 1 ? 's' : ''}
+                        {offlineTimerState.__pending_sync} pending sync{offlineTimerState.__pending_sync > 1 ? 's' : ''}
                       </Text>
                     )}
                   </View>

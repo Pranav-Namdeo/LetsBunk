@@ -288,4 +288,34 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
             promise.reject("GET_DATA_ERROR", e.message)
         }
     }
+    /**
+     * Encrypt a string using Android Keystore
+     */
+    @ReactMethod
+    fun encryptString(plainText: String, promise: Promise) {
+        try {
+            val encrypted = TimerModule.secureStorage?.encrypt(plainText)
+            if (encrypted != null) {
+                promise.resolve(android.util.Base64.encodeToString(encrypted, android.util.Base64.NO_WRAP))
+            } else {
+                promise.reject("ENCRYPT_ERROR", "Encryption failed")
+            }
+        } catch (e: Exception) {
+            promise.reject("ENCRYPT_ERROR", e.message)
+        }
+    }
+
+    /**
+     * Decrypt a string using Android Keystore
+     */
+    @ReactMethod
+    fun decryptString(encryptedBase64: String, promise: Promise) {
+        try {
+            val encryptedData = android.util.Base64.decode(encryptedBase64, android.util.Base64.NO_WRAP)
+            val decrypted = TimerModule.secureStorage?.decrypt(encryptedData)
+            promise.resolve(decrypted)
+        } catch (e: Exception) {
+            promise.reject("DECRYPT_ERROR", e.message)
+        }
+    }
 }

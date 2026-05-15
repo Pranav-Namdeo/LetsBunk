@@ -1,11 +1,10 @@
-// Prevent production UI hangs: default all admin fetches to a bounded timeout.
-// Calls that already pass a signal, such as long migrations, keep their own timeout.
 const ADMIN_FETCH_TIMEOUT_MS = 30000;
 const PHOTO_UPLOAD_TIMEOUT_MS = 120000; // 2 minutes for large base64 photos
+let lastRequestTime = Date.now();
 const nativeFetch = window.fetch.bind(window);
 window.fetch = async (input, init = {}) => {
+    lastRequestTime = Date.now();
     if (init.signal) return nativeFetch(input, init);
-    // Use longer timeout for photo uploads (large base64 payloads)
     const isPhotoUpload = typeof input === 'string' && input.includes('/api/upload-photo');
     const timeoutMs = isPhotoUpload ? PHOTO_UPLOAD_TIMEOUT_MS : ADMIN_FETCH_TIMEOUT_MS;
     const controller = new AbortController();
@@ -17,6 +16,99 @@ window.fetch = async (input, init = {}) => {
     }
 };
 
+let _globalConfig = null;
+let _configFetching = null;
+
+async function ensureConfigLoaded(force = false) {
+    if (_globalConfig && !force) return _globalConfig;
+    if (_configFetching) return _configFetching;
+
+    _configFetching = (async () => {
+        try {
+            console.log(' [Config] Fetching global configuration...');
+            const [brRes, semRes, deptRes] = await Promise.all([
+                fetch(GET_CONFIG_BRANCHES),
+                fetch(GET_CONFIG_SEMESTERS),
+                fetch(GET_CONFIG_DEPARTMENTS)
+            ]);
+            
+            const [br, sem, dept] = await Promise.all([
+                brRes.json(),
+                semRes.json(),
+                deptRes.json()
+            ]);
+
+            _globalConfig = {
+                branches: br.success ? br.branches : [],
+                semesters: sem.success ? sem.semesters : [],
+                departments: dept.success ? dept.departments : []
+            };
+            console.log(' [Config] Global configuration loaded.');
+            return _globalConfig;
+        } catch (error) {
+            console.error(' [Config] Failed to load global configuration:', error);
+            return { branches: [], semesters: [], departments: [] };
+        } finally {
+            _configFetching = null;
+        }
+    })();
+
+    return _configFetching;
+}
+
+/**
+ * Main Application Entry Point
+ * Consolidates all DOMContentLoaded listeners into a single sequence
+ */
+async function initApp() {
+    console.log(' [App] Initializing Admin Panel...');
+    
+    // 1. Auth check
+    if (!isLoggedIn()) {
+        hideApp();
+        return;
+    }
+    
+    showApp();
+    checkServerConnection(); // Starts polling (optimized to 30s)
+    
+    // 2. Load layout and theme
+    const savedLayout = localStorage.getItem('adminLayout') || 'default';
+    if (typeof applyLayout === 'function') {
+        const valid = ['default', 'compact'];
+        applyLayout(valid.includes(savedLayout) ? savedLayout : 'default');
+    }
+    
+    // 3. Concurrent initialization of components
+    // We use Promise.all to fetch data in parallel, significantly faster than serial calls
+    try {
+        await Promise.all([
+            ensureConfigLoaded(),
+            loadDashboardData(),
+            typeof setupAttendanceHistoryListeners === 'function' ? setupAttendanceHistoryListeners() : Promise.resolve(),
+            typeof setupConfigListeners === 'function' ? setupConfigListeners() : Promise.resolve(),
+            typeof setupPeriodAttendanceListeners === 'function' ? setupPeriodAttendanceListeners() : Promise.resolve(),
+            typeof attachSubjectViewListeners === 'function' ? attachSubjectViewListeners() : Promise.resolve()
+        ]);
+    } catch (err) {
+        console.warn(' [App] Some initialization steps failed:', err);
+    }
+    
+    // 4. Background / Delayed tasks
+    setTimeout(() => {
+        if (typeof attachBulkEditListener === 'function') attachBulkEditListener();
+        if (typeof initializeAttendanceManagement === 'function') initializeAttendanceManagement();
+    }, 500);
+
+    setTimeout(() => {
+        if (isLoggedIn() && typeof startWalkthrough === 'function') startWalkthrough(false);
+    }, 1200);
+
+    console.log(' [App] Admin Panel Ready.');
+}
+
+// Global initialization
+document.addEventListener('DOMContentLoaded', initApp);
 //  ADMIN AUTH 
 // Credentials are stored as SHA-256 hashes  never plaintext in source.
 // email:    adityarajsir162@gmail.com   hashed below
@@ -170,7 +262,14 @@ function togglePasswordVisibility() {
     const input = document.getElementById('loginPassword');
     input.type = input.type === 'password' ? 'text' : 'password';
 }
-// 
+function showToast(message, type = 'info') {
+    if (typeof showNotification === 'function') {
+        showNotification(message, type);
+    } else {
+        console.log(`[Toast] ${type}: ${message}`);
+        // Fallback if UI is not ready
+    }
+}
 
 // Configuration
 // Server URL - can be changed in Settings
@@ -257,8 +356,6 @@ let dynamicData = {
 };
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
-    // Auth gate  show login or app depending on session
     if (isLoggedIn()) {
         showApp();
     } else {
@@ -276,7 +373,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Load departments filter on page load
     loadDepartmentsFilter();
-});
+
 
 // Load dynamic dropdown data from server
 async function loadDynamicDropdownData() {
@@ -1291,10 +1388,10 @@ function renderTeachers(teachersToRender) {
 // Load departments for teacher filter
 async function loadDepartmentsFilter() {
     try {
-        const response = await fetch(GET_CONFIG_DEPARTMENTS);
-        const data = await response.json();
+        const config = await ensureConfigLoaded();
+        const departments = config.departments || [];
 
-        if (data.success && data.departments) {
+        if (departments) {
             const departmentFilter = document.getElementById('departmentFilter');
             if (departmentFilter) {
                 // Keep the current selection
@@ -1304,7 +1401,7 @@ async function loadDepartmentsFilter() {
                 departmentFilter.innerHTML = '<option value="">All Departments</option>';
 
                 // Add dynamic departments
-                data.departments.forEach(dept => {
+                departments.forEach(dept => {
                     const option = document.createElement('option');
                     option.value = dept.code;
                     option.textContent = dept.name;
@@ -1314,7 +1411,7 @@ async function loadDepartmentsFilter() {
                     departmentFilter.appendChild(option);
                 });
 
-                console.log(' Loaded departments for filter:', data.departments.length);
+                console.log(' Loaded departments for filter:', departments.length);
             }
         }
     } catch (error) {
@@ -4348,17 +4445,17 @@ async function showStudentAttendance(studentId, studentName) {
 
     // Trigger an immediate server-side sync for this student so data is fresh
     // (fire-and-forget — don't wait, modal will refresh via student_timer_sync event)
-    fetch(GET_ATTENDANCE_RECORDS)
+    fetch(GET_ATTENDANCE_RECORDS + '?studentId=' + studentId)
         .catch(() => {});
 
     try {
         // Fetch student details
-        const studentRes = await fetch(GET_STUDENT_MANAGEMENT);
+        const studentRes = await fetch(GET_STUDENT_MANAGEMENT + '?enrollmentNo=' + studentId);
         const studentData = await studentRes.json();
         const student = studentData.student;
 
         // Fetch attendance records
-        const attendanceRes = await fetch(GET_ATTENDANCE_RECORDS);
+        const attendanceRes = await fetch(GET_ATTENDANCE_RECORDS + '?studentId=' + studentId);
         const attendanceData = await attendanceRes.json();
         const records = attendanceData.records || [];
 
@@ -5904,10 +6001,12 @@ async function loadCalendarFilterDropdowns() {
     const brEl  = document.getElementById('calBranchFilter');
     if (!semEl || !brEl) return;
 
+    const config = await ensureConfigLoaded();
+
     semEl.innerHTML = '<option value="">All Semesters</option>' +
-        (dynamicData.semesters || []).map(s => `<option value="${s}">Semester ${s}</option>`).join('');
+        (config.semesters || []).map(s => `<option value="${s}">Semester ${s}</option>`).join('');
     brEl.innerHTML  = '<option value="">All Branches</option>' +
-        (dynamicData.branches  || []).map(b => `<option value="${b.value}">${b.label}</option>`).join('');
+        (config.branches  || []).map(b => `<option value="${b.value}">${b.label}</option>`).join('');
 }
 
 // Load subject list for the selected semester+branch
@@ -5983,7 +6082,7 @@ async function fetchCalendarDayData() {
     calDayData = {};
     if (!calFilterSemester || !calFilterBranch) return;
     try {
-        const data = await calApiFetch(GET_ATTENDANCE_RECORDS);
+        const data = await calApiFetch(GET_ATTENDANCE_RECORDS + `?semester=${calFilterSemester}&branch=${calFilterBranch}`);
         if (data.success && data.records) {
             data.records.forEach(r => {
                 const key = new Date(r.date).toDateString();
@@ -7461,7 +7560,7 @@ async function loadAttendanceDateRange() {
 async function loadAttendanceDateRangeAlternative() {
     try {
         // Get all students
-        const studentsResponse = await fetch(GET_STUDENT_MANAGEMENT);
+        const studentsResponse = await fetch(GET_STUDENTS);
         const studentsData = await studentsResponse.json();
 
         if (!studentsData.success || !studentsData.students || studentsData.students.length === 0) {
@@ -8710,9 +8809,6 @@ function debounce(func, wait) {
 }
 
 // Initialize attendance history when section is shown
-document.addEventListener('DOMContentLoaded', () => {
-    setupAttendanceHistoryListeners();
-
     // Show instruction message when attendance section is clicked
     const attendanceNavBtn = document.querySelector('[data-section="attendance"]');
     if (attendanceNavBtn) {
@@ -8741,7 +8837,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }, 100);
         });
     }
-});
+
 
 
 // ========================================
@@ -10415,9 +10511,7 @@ function attachBulkEditListener() {
 }
 
 // Call this when the page loads
-document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(attachBulkEditListener, 1000);
-});
+
 // ===== ATTENDANCE MANAGEMENT FUNCTIONALITY =====
 
 let attendanceRecords = [];
@@ -10893,9 +10987,7 @@ function setupBulkAttendanceCheckboxes() {
 }
 
 // Initialize when DOM is loaded
-document.addEventListener('DOMContentLoaded', () => {
-    setTimeout(initializeAttendanceManagement, 1000);
-});
+
 
 
 // ==================== CONFIGURATION MANAGEMENT ====================
@@ -10903,17 +10995,18 @@ document.addEventListener('DOMContentLoaded', () => {
 // Load branches configuration
 async function loadBranchesConfig() {
     try {
-        const response = await fetch(GET_CONFIG_BRANCHES);
-        const data = await response.json();
+        const config = await ensureConfigLoaded();
+        const branches = config.branches || [];
 
         const container = document.getElementById('branchesListContainer');
+        if (!container) return;
 
-        if (!data.success || data.branches.length === 0) {
+        if (branches.length === 0) {
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No branches configured</div>';
             return;
         }
 
-        container.innerHTML = data.branches.map(branch => `
+        container.innerHTML = branches.map(branch => `
             <div class="config-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--border-color);">
                 <div>
                     <div style="font-weight: 500; color: var(--text-primary);">${branch.displayName}</div>
@@ -10924,25 +11017,25 @@ async function loadBranchesConfig() {
         `).join('');
 
     } catch (error) {
-        console.error('Error loading branches:', error);
-        showNotification('Failed to load branches', 'error');
+        console.error('Error loading branches config:', error);
     }
 }
 
 // Load semesters configuration
 async function loadSemestersConfig() {
     try {
-        const response = await fetch(GET_CONFIG_SEMESTERS);
-        const data = await response.json();
+        const config = await ensureConfigLoaded();
+        const semesters = config.semesters || [];
 
         const container = document.getElementById('semestersListContainer');
+        if (!container) return;
 
-        if (!data.success || data.semesters.length === 0) {
+        if (semesters.length === 0) {
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No semesters configured</div>';
             return;
         }
 
-        container.innerHTML = data.semesters.map(semester => `
+        container.innerHTML = semesters.map(semester => `
             <div class="config-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--border-color);">
                 <div style="font-weight: 500; color: var(--text-primary);">Semester ${semester}</div>
                 <button class="btn btn-danger btn-sm" onclick="deleteSemester('${semester}')"></button>
@@ -10950,8 +11043,7 @@ async function loadSemestersConfig() {
         `).join('');
 
     } catch (error) {
-        console.error('Error loading semesters:', error);
-        showNotification('Failed to load semesters', 'error');
+        console.error('Error loading semesters config:', error);
     }
 }
 
@@ -11112,17 +11204,18 @@ async function deleteSemester(semesterValue) {
 // Load departments configuration
 async function loadDepartmentsConfig() {
     try {
-        const response = await fetch(GET_CONFIG_DEPARTMENTS);
-        const data = await response.json();
+        const config = await ensureConfigLoaded();
+        const departments = config.departments || [];
 
         const container = document.getElementById('departmentsListContainer');
+        if (!container) return;
 
-        if (!data.success || data.departments.length === 0) {
+        if (departments.length === 0) {
             container.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--text-secondary);">No departments configured</div>';
             return;
         }
 
-        container.innerHTML = data.departments.map(dept => `
+        container.innerHTML = departments.map(dept => `
             <div class="config-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid var(--border-color);">
                 <div>
                     <div style="font-weight: 500; color: var(--text-primary);">${dept.name}</div>
@@ -11133,8 +11226,7 @@ async function loadDepartmentsConfig() {
         `).join('');
 
     } catch (error) {
-        console.error('Error loading departments:', error);
-        showNotification('Failed to load departments', 'error');
+        console.error('Error loading departments config:', error);
     }
 }
 
@@ -11238,8 +11330,6 @@ function setupConfigListeners() {
 }
 
 // Load config when config section is opened
-document.addEventListener('DOMContentLoaded', () => {
-    setupConfigListeners();
 
     // Load config when Settings section becomes active
     const observer = new MutationObserver((mutations) => {
@@ -11256,7 +11346,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (settingsSection) {
         observer.observe(settingsSection, { attributes: true, attributeFilter: ['class'] });
     }
-});
 
 
 // ============================================
@@ -11754,9 +11843,7 @@ function populateManualMarkingFilters() {
 }
 
 // Initialize period-based attendance listeners when DOM is ready
-document.addEventListener('DOMContentLoaded', () => {
-    setupPeriodAttendanceListeners();
-});
+
 
 // Update switchSection to handle new sections
 const originalSwitchSection = switchSection;
@@ -11971,10 +12058,7 @@ switchSection = function(sectionName) {
 };
 
 // Init layout after DOM is ready  safe, no TDZ risk
-document.addEventListener('DOMContentLoaded', function() {
-    var saved = localStorage.getItem('adminLayout') || 'default';
-    applyLayout(VALID_LAYOUTS.indexOf(saved) !== -1 ? saved : 'default');
-});
+
 
 
 //  WALKTHROUGH 
@@ -12204,12 +12288,7 @@ function walkthroughFinish() {
 }
 
 // Auto-start on first login (after app loads)
-document.addEventListener('DOMContentLoaded', () => {
-    // Delay slightly so the app initialises first
-    setTimeout(() => {
-        if (isLoggedIn()) startWalkthrough(false);
-    }, 800);
-});
+
 
 // ============================================================
 // ATTENDANCE HISTORY SECTION
@@ -12524,9 +12603,11 @@ let showcaseData = {
 
 async function initAttendanceShowcase() {
     console.log('Initializing Attendance Showcase...');
-    await loadShowcaseBranches();
-    await loadShowcaseSemesters();
-    await loadShowcaseTeachers();
+    await Promise.all([
+        loadShowcaseBranches(),
+        loadShowcaseSemesters(),
+        loadShowcaseTeachers()
+    ]);
     setupShowcaseViewSwitcher();
     restoreShowcaseSelections();
     attachSubjectViewListeners();
@@ -12571,26 +12652,25 @@ function restoreShowcaseSelections() {
 
 async function loadShowcaseBranches() {
     try {
-        const response = await fetch(GET_CONFIG_BRANCHES);
-        const data = await response.json();
-        if (data.success) {
-            showcaseData.branches = data.branches;
-            const branchSelects = ['showcaseBranch', 'subjectViewBranch', 'teacherViewBranch'];
-            branchSelects.forEach(selectId => {
-                const select = document.getElementById(selectId);
-                if (select) {
-                    select.innerHTML = selectId === 'teacherViewBranch'
-                        ? '<option value="">All Branches</option>'
-                        : '<option value="">Select Branch</option>';
-                    data.branches.forEach(branch => {
-                        const option = document.createElement('option');
-                        option.value = branch.name || branch;
-                        option.textContent = branch.displayName || branch.name || branch;
-                        select.appendChild(option);
-                    });
-                }
-            });
-        }
+        const config = await ensureConfigLoaded();
+        const branches = config.branches || [];
+
+        showcaseData.branches = branches;
+        const branchSelects = ['showcaseBranch', 'subjectViewBranch', 'teacherViewBranch'];
+        branchSelects.forEach(selectId => {
+            const select = document.getElementById(selectId);
+            if (select) {
+                select.innerHTML = selectId === 'teacherViewBranch'
+                    ? '<option value="">All Branches</option>'
+                    : '<option value="">Select Branch</option>';
+                branches.forEach(branch => {
+                    const option = document.createElement('option');
+                    option.value = branch.name || branch;
+                    option.textContent = branch.displayName || branch.name || branch;
+                    select.appendChild(option);
+                });
+            }
+        });
     } catch (error) {
         console.error('Error loading branches:', error);
     }
@@ -12598,26 +12678,25 @@ async function loadShowcaseBranches() {
 
 async function loadShowcaseSemesters() {
     try {
-        const response = await fetch(GET_CONFIG_SEMESTERS);
-        const data = await response.json();
-        if (data.success) {
-            showcaseData.semesters = data.semesters;
-            const semesterSelects = ['showcaseSemester', 'subjectViewSemester', 'teacherViewSemester'];
-            semesterSelects.forEach(selectId => {
-                const select = document.getElementById(selectId);
-                if (select) {
-                    select.innerHTML = selectId === 'teacherViewSemester'
-                        ? '<option value="">All Semesters</option>'
-                        : '<option value="">Select Semester</option>';
-                    data.semesters.forEach(semester => {
-                        const option = document.createElement('option');
-                        option.value = semester;
-                        option.textContent = `Semester ${semester}`;
-                        select.appendChild(option);
-                    });
-                }
-            });
-        }
+        const config = await ensureConfigLoaded();
+        const semesters = config.semesters || [];
+
+        showcaseData.semesters = semesters;
+        const semesterSelects = ['showcaseSemester', 'subjectViewSemester', 'teacherViewSemester'];
+        semesterSelects.forEach(selectId => {
+            const select = document.getElementById(selectId);
+            if (select) {
+                select.innerHTML = selectId === 'teacherViewSemester'
+                    ? '<option value="">All Semesters</option>'
+                    : '<option value="">Select Semester</option>';
+                semesters.forEach(semester => {
+                    const option = document.createElement('option');
+                    option.value = semester;
+                    option.textContent = `Semester ${semester}`;
+                    select.appendChild(option);
+                });
+            }
+        });
     } catch (error) {
         console.error('Error loading semesters:', error);
     }
@@ -13443,10 +13522,7 @@ function closeTeacherClassModal() {
 }
 
 // ========== INITIALIZATION ==========
-document.addEventListener('DOMContentLoaded', () => {
-    // Attach subject view change listeners (also re-attached in initAttendanceShowcase)
-    attachSubjectViewListeners();
-});
+
 
 function attachSubjectViewListeners() {
     const subjectViewBranch = document.getElementById('subjectViewBranch');

@@ -95,7 +95,7 @@ class SecureTimerStorage(private val context: Context) {
     /**
      * Encrypt data using AES-GCM with Android Keystore
      */
-    private fun encrypt(plainText: String): ByteArray {
+    fun encrypt(plainText: String): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, keystoreKey)
         val iv = cipher.iv
@@ -108,7 +108,7 @@ class SecureTimerStorage(private val context: Context) {
     /**
      * Decrypt data using AES-GCM with Android Keystore
      */
-    private fun decrypt(encryptedData: ByteArray): String {
+    fun decrypt(encryptedData: ByteArray): String {
         val iv = encryptedData.copyOfRange(0, IV_SIZE)
         val cipherText = encryptedData.copyOfRange(IV_SIZE, encryptedData.size)
         

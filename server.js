@@ -2980,13 +2980,17 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             verificationType: 'initial'
         });
 
-        if (!hasCheckedIn) {
+        if (!hasCheckedIn && !isQueuedSync) {
             console.log(`❌ [OFFLINE-SYNC] No verified check-in for today - Student: ${studentId}`);
             return res.status(403).json({
                 success: false,
                 error: 'No verified check-in found for today. Please check in first.',
                 requiresCheckIn: true
             });
+        }
+        
+        if (!hasCheckedIn && isQueuedSync) {
+            console.log(`ℹ️ [OFFLINE-SYNC] Allowing queued sync without initial check-in for student: ${studentId}`);
         }
 
         // 3. Update student's timer data
