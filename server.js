@@ -3130,17 +3130,17 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 7. Upsert timer progress into the current period's PeriodAttendance record FIRST
         // so syncAttendanceRecord (step 7b) reads fresh data.
+        let periodId = null;
+        let periodSubject = lecture?.subject || '';
+        let periodTeacher = lecture?.teacher || '';
+        let periodRoom    = lecture?.room    || '';
+
         try {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
             // Try server clock first (period still active)
             const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
-
-            let periodId = null;
-            let periodSubject = lecture?.subject || '';
-            let periodTeacher = lecture?.teacher || '';
-            let periodRoom    = lecture?.room    || '';
 
             if (currentLectureInfo) {
                 // Period is currently active — use server clock
