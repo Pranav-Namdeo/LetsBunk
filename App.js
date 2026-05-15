@@ -21,7 +21,6 @@ import { initializeServerTime, getServerTime } from './ServerTime';
 import FloatingBrandButton from './FloatingBrandButton';
 // New Teacher UI Components
 import TeacherHeader from './TeacherHeader';
-import StudentSearch from './StudentSearch';
 import StudentList from './StudentList';
 import StudentProfileDialog from './StudentProfileDialog';
 import TeacherProfileDialog from './TeacherProfileDialog';
@@ -382,7 +381,9 @@ export default function App() {
   const selectedRoleRef = useRef(null); // always current role for socket handlers
   const semesterRef = useRef(null);    // always current semester for socket handlers
   const branchRef = useRef(null);      // always current branch for socket handlers
+  const manualSelectionRef = useRef(manualSelection);
   const currentClassInfoRef = useRef(null); // always current class for background WiFi checks
+  const offlinePeriodRef = useRef(null); // Ref to track current period for socket listeners
   const appState = useRef(AppState.currentState);
   const backgroundTimeRef = useRef(null);
   const shownMissedRingIds = useRef(new Set()); // prevent duplicate "missed ring" alerts
@@ -393,7 +394,9 @@ export default function App() {
   useEffect(() => { selectedRoleRef.current = selectedRole; }, [selectedRole]);
   useEffect(() => { semesterRef.current = semester; }, [semester]);
   useEffect(() => { branchRef.current = branch; }, [branch]);
+  useEffect(() => { manualSelectionRef.current = manualSelection; }, [manualSelection]);
   useEffect(() => { currentClassInfoRef.current = currentClassInfo; }, [currentClassInfo]);
+  useEffect(() => { offlinePeriodRef.current = offlinePeriod; }, [offlinePeriod]);
 
   // Animations
   const glowAnim = useRef(new Animated.Value(0)).current;
@@ -635,7 +638,7 @@ export default function App() {
 
       return () => clearInterval(refreshInterval);
     }
-  }, [selectedRole, activeTab]); // Removed semester/branch deps - teacher uses loginId
+  }, [selectedRole, activeTab, manualSelection]); // Added manualSelection to deps to avoid stale closure during interval refresh
 
   // Calculate current class progress every second
   useEffect(() => {
@@ -1777,6 +1780,15 @@ export default function App() {
       if (selectedRoleRef.current === 'student' && studentIdRef.current === data.enrollmentNo) {
         console.log('✅ Random Ring is for this student!');
 
+        // NEW CONDITION: Check if student has active class period and NOT in break/free period
+        const currentPeriod = offlinePeriodRef.current;
+        const hasActivePeriod = currentPeriod && !currentPeriod.isBreak && currentPeriod.subject;
+        
+        if (!hasActivePeriod) {
+          console.log('🚫 Ignoring random ring: No active class period, currently in break, or free period');
+          return;
+        }
+
         const ringPauseTime = _appGetBootMs();
         OfflineTimerService.pauseTimer('random_ring');
         console.log('⏸️ Timer paused for random ring at', ringPauseTime);
@@ -2244,13 +2256,13 @@ export default function App() {
             const storedSemester = await AsyncStorage.getItem(SEMESTER_KEY);
             const storedBranch = await AsyncStorage.getItem(BRANCH_KEY);
             
-            if (storedSemester && storedBranch) {
-              console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch);
+            if (storedSemester) {
+              console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch || 'No Branch');
               setSemester(storedSemester);
               setBranch(storedBranch);
               setManualSelection({ semester: storedSemester, branch: storedBranch });
               setCurrentClassInfo({
-                subject: 'Manual Selection',
+                subject: storedBranch ? 'Manual Selection' : 'Select Branch',
                 branch: storedBranch,
                 semester: storedSemester,
                 isManual: true
@@ -2336,20 +2348,33 @@ export default function App() {
 
   const fetchStudents = async (overrideSelection) => {
     try {
-      // Use override (e.g. from filter dialog) or current state
-      const effectiveSelection = overrideSelection ?? manualSelection;
+      // Use override (e.g. from filter dialog) or current ref value to avoid stale closures in background tasks
+      const effectiveSelection = overrideSelection ?? manualSelectionRef.current;
 
       // When teacher has chosen a filter (branch + semester), use it first so list reflects their selection
-      if (selectedRole === 'teacher' && effectiveSelection.semester !== 'auto' && effectiveSelection.branch) {
-        const manualResponse = await fetch(`${GET_VIEW_RECORDS_STUDENTS}?semester=${encodeURIComponent(effectiveSelection.semester)}&branch=${encodeURIComponent(effectiveSelection.branch)}`);
-        const manualData = await manualResponse.json();
-        if (manualData.success) {
-          console.log(`✅ Filter: ${manualData.students?.length || 0} students for ${effectiveSelection.branch} Sem ${effectiveSelection.semester}`);
-          setStudents(manualData.students || []);
-          joinClassRoom(effectiveSelection.semester, effectiveSelection.branch);
+      if (selectedRole === 'teacher' && effectiveSelection.semester && effectiveSelection.semester !== 'auto') {
+        if (effectiveSelection.branch) {
+          const manualResponse = await fetch(`${GET_VIEW_RECORDS_STUDENTS}?semester=${encodeURIComponent(effectiveSelection.semester)}&branch=${encodeURIComponent(effectiveSelection.branch)}`);
+          const manualData = await manualResponse.json();
+          if (manualData.success) {
+            console.log(`✅ Filter: ${manualData.students?.length || 0} students for ${effectiveSelection.branch} Sem ${effectiveSelection.semester}`);
+            setStudents(manualData.students || []);
+            joinClassRoom(effectiveSelection.semester, effectiveSelection.branch);
+            setCurrentClassInfo({
+              subject: 'Manual Selection',
+              branch: effectiveSelection.branch,
+              semester: effectiveSelection.semester,
+              isManual: true
+            });
+            return;
+          }
+        } else {
+          // Semester selected but no branch yet - show partial selection state and STOP
+          // This prevents the auto-class logic from overriding the user's manual semester choice
+          setStudents([]);
           setCurrentClassInfo({
-            subject: 'Manual Selection',
-            branch: effectiveSelection.branch,
+            subject: 'Select Branch',
+            branch: null,
             semester: effectiveSelection.semester,
             isManual: true
           });
@@ -3562,13 +3587,13 @@ dayKeys.forEach((dayKey) => {
           const storedSemester = await AsyncStorage.getItem(SEMESTER_KEY);
           const storedBranch = await AsyncStorage.getItem(BRANCH_KEY);
           
-          if (storedSemester && storedBranch) {
-            console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch);
+          if (storedSemester) {
+            console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch || 'No Branch');
             setSemester(storedSemester);
             setBranch(storedBranch);
             setManualSelection({ semester: storedSemester, branch: storedBranch });
             setCurrentClassInfo({
-              subject: 'Manual Selection',
+              subject: storedBranch ? 'Manual Selection' : 'Select Branch',
               branch: storedBranch,
               semester: storedSemester,
               isManual: true
@@ -4242,86 +4267,72 @@ const onRefreshStudent = async () => {
         />
         {/* Current Lecture / Manual Selection Banner */}
         {currentClassInfo && (
-          <View style={{
-            backgroundColor: currentClassInfo.isManual ? theme.primary + '20' : theme.primary + '10',
-            padding: 12,
-            borderBottomWidth: 1,
-            borderBottomColor: theme.border
-          }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: theme.text, fontSize: 14, fontWeight: '600' }}>
-                  {currentClassInfo.isManual ? '📌 Manual Selection' : '📚 Current Lecture'}
-                </Text>
-                <Text style={{ color: theme.textSecondary, fontSize: 12, marginTop: 2 }}>
-                  {currentClassInfo.subject} • {currentClassInfo.branch} Sem {currentClassInfo.semester}
-                  {!currentClassInfo.isManual && ` • ${currentClassInfo.startTime}-${currentClassInfo.endTime}`}
-                </Text>
+          <View style={styles.bannerWrapper}>
+            <View style={[styles.bannerContainer, { 
+              backgroundColor: theme.cardBackground,
+              borderColor: currentClassInfo.isManual ? theme.primary + '40' : theme.border,
+            }]}>
+              <View style={styles.bannerInfo}>
+                <View style={[styles.bannerIndicator, { backgroundColor: currentClassInfo.isManual ? theme.primary : '#10b981' }]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.bannerLabel, { color: theme.textSecondary }]}>
+                    {currentClassInfo.isManual ? '📌 Manual Selection' : '📚 Current Lecture'}
+                  </Text>
+                  <Text style={[styles.bannerTitle, { color: theme.text }]} numberOfLines={1}>
+                    {currentClassInfo.subject}
+                  </Text>
+                  <Text style={[styles.bannerSubtext, { color: theme.textSecondary }]}>
+                    {currentClassInfo.branch} • Sem {currentClassInfo.semester}
+                    {!currentClassInfo.isManual && ` • ${currentClassInfo.startTime}-${currentClassInfo.endTime}`}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setShowSemesterSelector(true)}
+                  style={[styles.bannerButton, { backgroundColor: theme.primary }]}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.bannerButtonText}>Change</Text>
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                onPress={() => setShowSemesterSelector(true)}
-                style={{
-                  backgroundColor: theme.primary,
-                  paddingHorizontal: 12,
-                  paddingVertical: 6,
-                  borderRadius: 8
-                }}
-              >
-                <Text style={{ color: '#fff', fontSize: 12, fontWeight: '600' }}>Change</Text>
-              </TouchableOpacity>
             </View>
           </View>
         )}
 
         {/* WiFi Status Display (Development/Testing) */}
         {(__DEV__ || selectedRole === 'teacher') && currentClassInfo && (
-          <View style={{
-            backgroundColor: wifiDebugInfo.status.includes('AUTHORIZED') ? '#10b981' + '20' : '#ef4444' + '20',
-            padding: 8,
-            borderBottomWidth: 1,
-            borderBottomColor: theme.border
-          }}>
-            <Text style={{
-              color: wifiDebugInfo.status.includes('AUTHORIZED') ? '#10b981' : '#ef4444',
-              fontSize: 11,
-              fontWeight: '600',
-              textAlign: 'center'
-            }}>
-              📶 WiFi: {wifiDebugInfo.status} • BSSID: {wifiDebugInfo.currentBSSID}
-            </Text>
-            {wifiDebugInfo.reason && (
-              <Text style={{
-                color: theme.textSecondary,
-                fontSize: 10,
-                textAlign: 'center',
-                marginTop: 2
-              }}>
-                {wifiDebugInfo.reason} • {wifiDebugInfo.lastChecked}
+          <View style={styles.wifiWrapper}>
+            <View style={[styles.wifiContainer, { 
+              backgroundColor: wifiDebugInfo.status.includes('AUTHORIZED') ? '#10b981' + '15' : '#ef4444' + '15',
+              borderColor: wifiDebugInfo.status.includes('AUTHORIZED') ? '#10b981' + '30' : '#ef4444' + '30',
+            }]}>
+              <Text style={[styles.wifiText, { color: wifiDebugInfo.status.includes('AUTHORIZED') ? '#10b981' : '#ef4444' }]}>
+                📶 WiFi: {wifiDebugInfo.status} • BSSID: {wifiDebugInfo.currentBSSID}
               </Text>
-            )}
+              {wifiDebugInfo.reason && (
+                <Text style={[styles.wifiReason, { color: theme.textSecondary }]}>
+                  {wifiDebugInfo.reason} • {wifiDebugInfo.lastChecked}
+                </Text>
+              )}
+            </View>
           </View>
         )}
 
         {/* Semester Selector Button (when no lecture) */}
         {!currentClassInfo && (
-          <View style={{
-            backgroundColor: theme.card,
-            padding: 12,
-            borderBottomWidth: 1,
-            borderBottomColor: theme.border
-          }}>
+          <View style={styles.emptyBannerWrapper}>
             <TouchableOpacity
               onPress={() => setShowSemesterSelector(true)}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'center',
-                padding: 8
-              }}
+              style={[styles.emptyBannerContainer, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}
+              activeOpacity={0.8}
             >
-              <Text style={{ color: theme.primary, fontSize: 14, fontWeight: '600' }}>
-                📚 Select Semester & Branch
-              </Text>
+              <View style={[styles.emptyBannerIcon, { backgroundColor: theme.primary + '15' }]}>
+                <Text style={{ fontSize: 24 }}>📚</Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.emptyBannerTitle, { color: theme.text }]}>No Class Selected</Text>
+                <Text style={[styles.emptyBannerSubtext, { color: theme.textSecondary }]}>Tap to select a semester and branch manually</Text>
+              </View>
+              <Text style={{ color: theme.primary, fontSize: 20, fontWeight: 'bold' }}>→</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -4335,7 +4346,7 @@ const onRefreshStudent = async () => {
             }}
             activeRandomRing={activeRandomRing}
             onTeacherAction={handleTeacherAction}
-            ListHeaderComponent={<StudentSearch theme={theme} students={students} />}
+            onTriggerDropdown={() => setShowSemesterSelector(true)}
             refreshControl={
               <RefreshControl
                 refreshing={refreshingTeacher}
@@ -4423,7 +4434,20 @@ const onRefreshStudent = async () => {
             shadowOpacity: 0.3,
             shadowRadius: 8,
           }}
-          onPress={() => setRandomRingDialogOpen(true)}
+          onPress={() => {
+            const isBreak = currentClassInfo?.subject === 'Break Time' || currentClassInfo?.subject === 'Break';
+            if (!currentClassInfo || isBreak) {
+              Alert.alert(
+                '🔔 Random Ring Restricted',
+                isBreak 
+                  ? 'Random Ring notifications cannot be sent during break times.'
+                  : 'Random Ring notifications can only be sent during an active class period.',
+                [{ text: 'OK' }]
+              );
+              return;
+            }
+            setRandomRingDialogOpen(true);
+          }}
         >
           <Text style={{ fontSize: 24 }}>🔔</Text>
         </TouchableOpacity>
@@ -7153,5 +7177,114 @@ const styles = StyleSheet.create({
     color: '#00d9ff',
     textAlign: 'center',
     marginTop: 15,
+  },
+  bannerWrapper: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: 768,
+  },
+  bannerContainer: {
+    borderRadius: 20,
+    borderWidth: 1.5,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  bannerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    gap: 14,
+  },
+  bannerIndicator: {
+    width: 4,
+    height: 40,
+    borderRadius: 2,
+  },
+  bannerLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 2,
+  },
+  bannerTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+  },
+  bannerSubtext: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 1,
+  },
+  bannerButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  bannerButtonText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  wifiWrapper: {
+    paddingHorizontal: 20,
+    marginBottom: 10,
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: 768,
+  },
+  wifiContainer: {
+    padding: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+  },
+  wifiText: {
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  wifiReason: {
+    fontSize: 10,
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  emptyBannerWrapper: {
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: 768,
+  },
+  emptyBannerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    gap: 16,
+    borderStyle: 'dashed',
+  },
+  emptyBannerIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyBannerTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  emptyBannerSubtext: {
+    fontSize: 12,
+    fontWeight: '500',
+    marginTop: 2,
   },
 });

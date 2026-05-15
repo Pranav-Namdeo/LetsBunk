@@ -1,12 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Modal,
     Platform, Dimensions, TextInput, RefreshControl,
 } from 'react-native';
+import io from 'socket.io-client';
 import { CalendarIcon, ArrowLeftIcon, ArrowRightIcon, CheckIcon, XIcon, RefreshIcon } from './Icons';
 import { getServerTime } from './ServerTime';
 
-import { GET_ATTENDANCE_RECORDS, GET_ATTENDANCE_BY_DATE, GET_ATTENDANCE_BY_DATE_SUBJECT, GET_ATTENDANCE_SUBJECTS, GET_ATTENDANCE_SUBJECT_DATES, GET_HOLIDAYS_RANGE } from './constants/apiEndpoints';
+import { GET_ATTENDANCE_RECORDS, GET_ATTENDANCE_BY_DATE, GET_ATTENDANCE_BY_DATE_SUBJECT, GET_ATTENDANCE_SUBJECTS, GET_ATTENDANCE_SUBJECT_DATES, GET_HOLIDAYS_RANGE, GET_STUDENT_ATTENDANCE_DATES, GET_STUDENT_ATTENDANCE_BY_DATE, GET_STUDENT_ATTENDANCE_SUBJECT_STATS } from './constants/apiEndpoints';
 const DAYS   = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MONTHS = ['January','February','March','April','May','June',
                 'July','August','September','October','November','December'];
@@ -46,27 +47,133 @@ export default function CalendarScreen({
     // ── teacher date-click state ──────────────────────────────────────────────
     const [studentsOnDate,    setStudentsOnDate]     = useState([]);
     const [loadingStudents,   setLoadingStudents]    = useState(false);
+    const [studentsCache,     setStudentsCache]      = useState({});   // dateStr -> processed students list
     // subject mode: per-period navigation
     const [allPeriods,        setAllPeriods]         = useState([]);   // ['P1','P3',…]
     const [currentPeriodIdx,  setCurrentPeriodIdx]   = useState(0);
     // student drill-down
     const [drillStudent,      setDrillStudent]       = useState(null); // student object with lectures
     const [drillSubjectStats, setDrillSubjectStats]  = useState([]);   // per-subject bubbles
+    const [visibleStudentsCount, setVisibleStudentsCount] = useState(20);
+    const [modalTimerOffset, setModalTimerOffset] = useState(0);
+
+    // ── Live timer for modal ──
+    useEffect(() => {
+        let interval;
+        if (showDetailsModal && isToday(selectedDate)) {
+            interval = setInterval(() => {
+                setModalTimerOffset(prev => prev + 1);
+            }, 1000);
+        } else {
+            setModalTimerOffset(0);
+        }
+        return () => { if (interval) clearInterval(interval); };
+    }, [showDetailsModal, selectedDate]);
+
+    // ── Real-time Socket Listener ──
+    useEffect(() => {
+        if (!socketUrl || !showDetailsModal) return;
+
+        const socket = io(socketUrl, {
+            transports: ['websocket'],
+            reconnection: true
+        });
+
+        socket.on('student_timer_sync', (data) => {
+            // data: { enrollmentNo, timerSeconds, isRunning, status, date }
+            const todayStr = isToday(selectedDate) ? selectedDate.toDateString() : null;
+            const eventDate = new Date(data.date).toDateString();
+
+            // Check if this update is for the student we are currently viewing
+            const currentEnrollment = isTeacher ? drillStudent?.enrollmentNo : studentId;
+
+            if (data.enrollmentNo === currentEnrollment && eventDate === todayStr) {
+                console.log(`📡 [SOCKET] Real-time timer update for ${data.enrollmentNo}: ${data.timerSeconds}s`);
+                
+                // Update selectedDateDetails
+                setSelectedDateDetails(prev => {
+                    if (!prev) return prev;
+                    
+                    // Update the active lecture in the lectures array
+                    const updatedLectures = (prev.lectures || []).map(lec => {
+                        // Match either already active or matches the incoming activePeriod
+                        if (lec.status === 'active' || (data.status === 'active' && lec.period === data.activePeriod)) {
+                            return { ...lec, attended: data.timerSeconds, status: data.status };
+                        }
+                        return lec;
+                    });
+                    
+                    // Recalculate total attended minutes from all lectures
+                    const totalAttendedSec = updatedLectures.reduce((sum, l) => sum + (l.attended || 0), 0);
+                    const totalAttendedMin = Math.floor(totalAttendedSec / 60);
+
+                    return { 
+                        ...prev, 
+                        status: data.status, 
+                        totalAttended: totalAttendedMin,
+                        lectures: updatedLectures
+                    };
+                });
+
+                // Reset offset since we just got a fresh sync
+                setModalTimerOffset(0);
+                
+                // If teacher is viewing, update drillStudent too
+                if (isTeacher && drillStudent) {
+                    setDrillStudent(prev => {
+                        if (!prev) return prev;
+                        const updated = { ...prev, status: data.status };
+                        if (updated.lectures) {
+                            updated.lectures = updated.lectures.map(lec => {
+                                if (lec.status === 'active') {
+                                    return { ...lec, attended: data.timerSeconds, status: data.status };
+                                }
+                                return lec;
+                            });
+                        }
+                        return updated;
+                    });
+                }
+            }
+        });
+
+        return () => {
+            socket.disconnect();
+        };
+    }, [socketUrl, showDetailsModal, selectedDate, studentId, isTeacher, drillStudent?.enrollmentNo]);
+
+    // ── memoized stats ────────────────────────────────────────────────────────
+    const modalSummary = useMemo(() => {
+        if (!studentsOnDate.length) return { present: 0, absent: 0, total: 0 };
+        let present = 0;
+        let absent = 0;
+        studentsOnDate.forEach(s => {
+            const status = filterMode === 'subject' && allPeriods.length > 0
+                ? s.periods?.[currentPeriodIdx]?.status
+                : s.status;
+            if (status === 'present') present++;
+            else absent++;
+        });
+        return { present, absent, total: studentsOnDate.length };
+    }, [studentsOnDate, filterMode, allPeriods, currentPeriodIdx]);
 
     // ── effects ───────────────────────────────────────────────────────────────
     // ── shared fetch helper with timeout ─────────────────────────────────────
     const [fetchError, setFetchError] = useState(null);
 
-    const apiFetch = async (url, timeoutMs = 10000) => {
+    const apiFetch = async (url, timeoutMs = 15000) => {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), timeoutMs);
         try {
+            console.log(`🌐 [NETWORK] Fetching: ${url}`);
             const res = await fetch(url, { signal: controller.signal });
             clearTimeout(timer);
+            console.log(`📡 [NETWORK] Response ${res.status} from: ${url}`);
             if (!res.ok) throw new Error(`Server error ${res.status}`);
             return await res.json();
         } catch (err) {
             clearTimeout(timer);
+            console.error(`❌ [NETWORK] Failed to fetch ${url}: ${err.message}`);
             if (err.name === 'AbortError') throw new Error('Request timed out. Check your connection.');
             throw err;
         }
@@ -83,7 +190,12 @@ export default function CalendarScreen({
             fetchMonthAttendance();
         }
         fetchHolidays();
-    }, [currentDate, studentId, semester, branch, filterMode, selectedSubject, isTimerRunning]);
+    }, [currentDate, studentId, semester, branch, filterMode, selectedSubject]);
+
+    // Clear cache when semester or branch changes
+    useEffect(() => {
+        setStudentsCache({});
+    }, [semester, branch]);
 
     // Load subject list when teacher switches to subject mode
     useEffect(() => {
@@ -124,7 +236,14 @@ export default function CalendarScreen({
         setLoading(true);
         setFetchError(null);
         try {
-            const data = await apiFetch(`${GET_ATTENDANCE_RECORDS}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`);
+            const year  = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            // Start of month (UTC 00:00:00)
+            const start = new Date(year, month, 1).toISOString();
+            // End of month (UTC 23:59:59)
+            const end   = new Date(year, month + 1, 0, 23, 59, 59, 999).toISOString();
+
+            const data = await apiFetch(`${GET_ATTENDANCE_RECORDS}?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}&startDate=${start}&endDate=${end}`, 25000);
             if (data.success && Array.isArray(data.records)) {
                 const dateMap = {};
                 let mp = 0;
@@ -203,11 +322,17 @@ export default function CalendarScreen({
         setLoading(true);
         setFetchError(null);
         try {
-            const data = await apiFetch(`${GET_ATTENDANCE_RECORDS}?studentId=${encodeURIComponent(studentId)}`);
-            if (data.success && Array.isArray(data.records)) {
+            const year  = currentDate.getFullYear();
+            const month = currentDate.getMonth();
+            const start = new Date(year, month, 1).toISOString();
+            const end   = new Date(year, month + 1, 0, 23, 59, 59, 999).toISOString();
+
+            const data = await apiFetch(`${GET_STUDENT_ATTENDANCE_DATES(studentId)}?startDate=${start}&endDate=${end}`, 25000);
+            const recordsToProcess = data.dates || data.records;
+            if (data.success && Array.isArray(recordsToProcess)) {
                 const aMap = {};
                 const rMap = {};
-                data.records.forEach(r => {
+                recordsToProcess.forEach(r => {
                     // Convert to IST date string to match calendar cell keys (device is IST)
                     const d = new Date(new Date(r.date).getTime() + 5.5 * 60 * 60 * 1000);
                     const key = d.toDateString();
@@ -246,6 +371,49 @@ export default function CalendarScreen({
         }
     };
 
+    // student: fetch specific date details
+    const fetchStudentDateDetails = async (date, specificEnrollmentNo = null) => {
+        const targetEnrollment = specificEnrollmentNo || studentId;
+        if (!targetEnrollment) return;
+        setLoadingStudents(true);
+        try {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            const dateStr = `${y}-${m}-${d}`;
+
+            // Fetch record + subject stats in parallel
+            const [recordData, statsData] = await Promise.all([
+                apiFetch(GET_STUDENT_ATTENDANCE_BY_DATE(targetEnrollment, dateStr)),
+                apiFetch(GET_STUDENT_ATTENDANCE_SUBJECT_STATS(targetEnrollment))
+            ]);
+
+            if (recordData.success && recordData.record) {
+                const holiday = holidays[date.toDateString()];
+                if (specificEnrollmentNo) {
+                    setDrillStudent({ ...recordData.record, holiday });
+                } else {
+                    setSelectedDateDetails({ ...recordData.record, holiday });
+                }
+            }
+            if (statsData.success) {
+                setDrillSubjectStats(statsData.subjects || []);
+            }
+            setShowDetailsModal(true);
+        } catch (err) {
+            console.warn('fetchStudentDateDetails failed:', err.message);
+            // Fallback to month-view record if fresh fetch fails
+            const key = date.toDateString();
+            const record = attendanceRecords[key];
+            const holiday = holidays[key];
+            if (record || holiday) {
+                setSelectedDateDetails({ ...record, holiday });
+            }
+        } finally {
+            setLoadingStudents(false);
+        }
+    };
+
     // ── date click handlers ───────────────────────────────────────────────────
     const showDateDetails = (date) => {
         if (!date) return;
@@ -258,13 +426,8 @@ export default function CalendarScreen({
             }
             setShowDetailsModal(true);
         } else {
-            const key     = date.toDateString();
-            const record  = attendanceRecords[key];
-            const holiday = holidays[key];
-            if (record || holiday) {
-                setSelectedDateDetails({ ...record, holiday });
-                setShowDetailsModal(true);
-            }
+            fetchStudentDateDetails(date);
+            setShowDetailsModal(true);
         }
     };
 
@@ -274,15 +437,35 @@ export default function CalendarScreen({
         setLoadingStudents(true);
         setStudentsOnDate([]); // optimistic clear
         try {
-            // Use local date parts to build YYYY-MM-DD — avoids UTC offset shifting the date
-            const y = date.getFullYear();
-            const m = String(date.getMonth() + 1).padStart(2, '0');
-            const d = String(date.getDate()).padStart(2, '0');
+            // Use IST date parts to match how badges are indexed (consistency)
+            // badge key logic in fetchTeacherMonthData uses (UTC + 5.5).toDateString()
+            // We do the same here to ensure we are looking for the same logical day.
+            const istDate = new Date(date.getTime());
+            const y = istDate.getFullYear();
+            const m = String(istDate.getMonth() + 1).padStart(2, '0');
+            const d = String(istDate.getDate()).padStart(2, '0');
             const dateStr = `${y}-${m}-${d}`;
+
+            // 1. Check cache first for instant loading
+            if (studentsCache[dateStr]) {
+                setStudentsOnDate(studentsCache[dateStr]);
+                setVisibleStudentsCount(20);
+                setCurrentPeriodIdx(0);
+                setLoadingStudents(false);
+                return;
+            }
+
             const data = await apiFetch(
                 GET_ATTENDANCE_BY_DATE(dateStr) + `?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
             );
-            setStudentsOnDate(data.success ? (data.students || []) : []);
+            // Pre-calculate present count to optimize render loop
+            const processed = (data.students || []).map(s => ({
+                ...s,
+                presentCount: (s.lectures || []).filter(l => l.status === 'present').length
+            }));
+            setStudentsOnDate(processed);
+            setStudentsCache(prev => ({ ...prev, [dateStr]: processed }));
+            setVisibleStudentsCount(20); // reset pagination
             setAllPeriods([]);
             setCurrentPeriodIdx(0);
         } catch (err) {
@@ -304,11 +487,29 @@ export default function CalendarScreen({
             const m = String(date.getMonth() + 1).padStart(2, '0');
             const d = String(date.getDate()).padStart(2, '0');
             const dateStr = `${y}-${m}-${d}`;
+
+            // 1. Check cache (note: subject mode uses a different cache key pattern if needed, 
+            // but for simplicity we'll just check date+subject)
+            const cacheKey = `${dateStr}_${selectedSubject}`;
+            if (studentsCache[cacheKey]) {
+                setStudentsOnDate(studentsCache[cacheKey]);
+                setVisibleStudentsCount(20);
+                setAllPeriods([]); // we'd need to cache periods too if we want full subject-mode cache
+                setLoadingStudents(false);
+                // For now, we'll only cache the list, but subject mode is less frequent
+            }
+
             const data = await apiFetch(
                 GET_ATTENDANCE_BY_DATE_SUBJECT(dateStr, selectedSubject) + `?semester=${encodeURIComponent(semester)}&branch=${encodeURIComponent(branch)}`
             );
             if (data.success) {
-                setStudentsOnDate(data.students || []);
+                // Pre-calculate present count to optimize render loop
+                const processed = (data.students || []).map(s => ({
+                    ...s,
+                    presentCount: (s.lectures || []).filter(l => l.status === 'present').length
+                }));
+                setStudentsOnDate(processed);
+                setVisibleStudentsCount(20); // reset pagination
                 setAllPeriods(data.allPeriods || []);
                 setCurrentPeriodIdx(0);
             } else {
@@ -727,8 +928,8 @@ export default function CalendarScreen({
 
                         {/* ── Teacher view ── */}
                         {isTeacher ? (
-                            <View style={{ flex: 1 }}>
-                            <ScrollView style={styles.modalBody}>
+                            <View style={{ flex: 1, minHeight: 400 }}>
+                            <ScrollView style={styles.modalBody} contentContainerStyle={{ paddingBottom: 40 }}>
                                 {loadingStudents ? (
                                     /* ── Skeleton placeholder while data loads ── */
                                     <View>
@@ -776,16 +977,9 @@ export default function CalendarScreen({
                                             <Text style={[styles.summaryTitle, { color: theme.text }]}>📊 Summary</Text>
                                             <View style={styles.summaryRow}>
                                                 {[
-                                                    { label: 'Present', color: '#10b981',
-                                                      value: filterMode === 'subject' && allPeriods.length > 0
-                                                          ? studentsOnDate.filter(s => s.periods?.[currentPeriodIdx]?.status === 'present').length
-                                                          : studentsOnDate.filter(s => s.status === 'present').length },
-                                                    { label: 'Absent',  color: '#ef4444',
-                                                      value: filterMode === 'subject' && allPeriods.length > 0
-                                                          ? studentsOnDate.filter(s => s.periods?.[currentPeriodIdx]?.status === 'absent').length
-                                                          : studentsOnDate.filter(s => s.status === 'absent').length },
-                                                    { label: 'Total',   color: theme.primary,
-                                                      value: studentsOnDate.length },
+                                                    { label: 'Present', color: '#10b981', value: modalSummary.present },
+                                                    { label: 'Absent',  color: '#ef4444', value: modalSummary.absent },
+                                                    { label: 'Total',   color: theme.primary, value: modalSummary.total },
                                                 ].map(item => (
                                                     <View key={item.label} style={styles.summaryItem}>
                                                         <Text style={[styles.summaryValue, { color: item.color }]}>{item.value}</Text>
@@ -830,7 +1024,7 @@ export default function CalendarScreen({
                                         <Text style={[styles.studentsTitle, { color: theme.text }]}>
                                             Students ({studentsOnDate.length})
                                         </Text>
-                                        {studentsOnDate.map((student, i) => {
+                                        {studentsOnDate.slice(0, visibleStudentsCount).map((student, i) => {
                                             const periodRecord = filterMode === 'subject' && allPeriods.length > 0
                                                 ? student.periods?.[currentPeriodIdx]
                                                 : null;
@@ -838,20 +1032,11 @@ export default function CalendarScreen({
                                             const isPresent = status === 'present';
                                             const initials  = (student.name || student.studentName || '?')[0].toUpperCase();
                                             const lecs      = student.lectures || [];
-                                            const lPresent  = lecs.filter(l => l.status === 'present').length;
+                                            const lPresent  = student.presentCount || 0;
 
                                             return (
                                                 <TouchableOpacity key={i} activeOpacity={0.7} onPress={() => {
-                                                    const drillLecs = filterMode === 'subject' && allPeriods.length > 0
-                                                        ? allPeriods.map((p, pi) => {
-                                                            const pr = student.periods?.[pi];
-                                                            return { period: p, subject: selectedSubject,
-                                                                     status: pr?.status || 'absent',
-                                                                     verificationType: pr?.verificationType,
-                                                                     room: pr?.room, teacher: pr?.teacher };
-                                                          })
-                                                        : lecs;
-                                                    setDrillStudent({ ...student, name: student.name || student.studentName, lectures: drillLecs });
+                                                    fetchStudentDateDetails(selectedDate, student.enrollmentNo);
                                                 }}>
                                                     <View style={[styles.studentCard, {
                                                         backgroundColor: isPresent ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)',
@@ -885,6 +1070,18 @@ export default function CalendarScreen({
                                                 </TouchableOpacity>
                                             );
                                         })}
+
+                                        {studentsOnDate.length > visibleStudentsCount && (
+                                            <TouchableOpacity 
+                                                style={[styles.loadMoreBtn, { borderColor: theme.border, backgroundColor: theme.background + '50' }]}
+                                                onPress={() => setVisibleStudentsCount(prev => prev + 30)}
+                                                activeOpacity={0.7}
+                                            >
+                                                <Text style={[styles.loadMoreText, { color: theme.primary }]}>
+                                                    Load More ({studentsOnDate.length - visibleStudentsCount} remaining)
+                                                </Text>
+                                            </TouchableOpacity>
+                                        )}
                                     </>
                                 )}
                             </ScrollView>
@@ -943,12 +1140,13 @@ export default function CalendarScreen({
                                             </View>
                                         ) : (drillStudent.lectures || []).map((l, i) => {
                                             const isP = l.status === 'present';
+                                            const isActive = l.status === 'active';
                                             return (
                                                 <View key={i} style={[styles.ltRow, {
                                                     borderBottomColor: theme.border,
                                                     borderBottomWidth: i < drillStudent.lectures.length - 1 ? 1 : 0
                                                 }]}>
-                                                    <View style={[styles.ltDot, { backgroundColor: isP ? '#10b981' : '#ef4444' }]} />
+                                                    <View style={[styles.ltDot, { backgroundColor: isP ? '#10b981' : isActive ? '#f59e0b' : '#ef4444' }]} />
                                                     <View style={[styles.ltPeriodBadge, { backgroundColor: 'rgba(0,217,255,0.1)' }]}>
                                                         <Text style={{ color: theme.primary, fontSize: 10, fontWeight: '700' }}>{l.period || '—'}</Text>
                                                     </View>
@@ -958,11 +1156,16 @@ export default function CalendarScreen({
                                                             {[l.teacher && `👨‍🏫 ${l.teacher}`, l.room && `📍 ${l.room}`, l.verificationType && `🔐 ${l.verificationType}`].filter(Boolean).join('  ')}
                                                         </Text>
                                                     </View>
+                                                    <View style={{ alignItems: 'flex-end', marginRight: 8 }}>
+                                                        <Text style={{ color: theme.textSecondary, fontSize: 10 }}>
+                                                           {Math.floor(((l.attended || 0) + (isActive ? modalTimerOffset : 0)) / 60)}m / {Math.floor((l.total || 0) / 60)}m
+                                                        </Text>
+                                                    </View>
                                                     <View style={[styles.ltStatus, {
-                                                        backgroundColor: isP ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)'
+                                                        backgroundColor: isP ? 'rgba(16,185,129,0.15)' : isActive ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)'
                                                     }]}>
-                                                        <Text style={{ color: isP ? '#10b981' : '#ef4444', fontWeight: '700', fontSize: 12 }}>
-                                                            {isP ? '✓' : '✗'}
+                                                        <Text style={{ color: isP ? '#10b981' : isActive ? '#f59e0b' : '#ef4444', fontWeight: '700', fontSize: 12 }}>
+                                                            {isP ? '✓' : isActive ? '⌛' : '✗'}
                                                         </Text>
                                                     </View>
                                                 </View>
@@ -991,13 +1194,18 @@ export default function CalendarScreen({
                                                                     );
                                                                 }
                                                                 const isP   = lec.status === 'present';
-                                                                const color = isP ? '#10b981' : '#ef4444';
+                                                                const isActive = lec.status === 'active';
+                                                                const color = isP ? '#10b981' : isActive ? '#f59e0b' : '#ef4444';
                                                                 const shortName = (lec.subject || '').length > 5 ? (lec.subject || '').substring(0, 4) + '…' : (lec.subject || pid);
+                                                                
+                                                                const totalSecs = (lec.attended || 0) + (isActive ? modalTimerOffset : 0);
+                                                                const displayMin = Math.floor(totalSecs / 60);
+
                                                                 return (
                                                                     <View key={pid} style={[styles.bubbleWrap, { borderColor: color }]}>
                                                                         <Text style={{ color, fontSize: 9, fontWeight: '700', textAlign: 'center' }} numberOfLines={1}>{shortName}</Text>
                                                                         <Text style={{ color, fontSize: 9, fontWeight: '600' }}>{pid}</Text>
-                                                                        <Text style={{ color: isP ? '#10b981' : '#ef4444', fontSize: 8 }}>{isP ? '✓' : '✗'}</Text>
+                                                                        <Text style={{ color, fontSize: 9, fontWeight: '700' }}>{displayMin}m</Text>
                                                                     </View>
                                                                 );
                                                             })}
@@ -1033,36 +1241,95 @@ export default function CalendarScreen({
                                     <>
                                         <View style={[styles.overallStatus,
                                             { backgroundColor: selectedDateDetails.status === 'present'
-                                                ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)' }]}>
-                                            <Text style={[styles.overallStatusText,
-                                                { color: selectedDateDetails.status === 'present' ? '#10b981' : '#ef4444' }]}>
-                                                {selectedDateDetails.status === 'present' ? '✅ Present' : '❌ Absent'}
-                                            </Text>
+                                                ? 'rgba(16,185,129,0.15)' : (selectedDateDetails.status === 'active' ? 'rgba(245,158,11,0.15)' : 'rgba(239,68,68,0.15)') }]}>
+                                            <View style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
+                                                <Text style={[styles.overallStatusText,
+                                                    { color: selectedDateDetails.status === 'present' ? '#10b981' : (selectedDateDetails.status === 'active' ? '#f59e0b' : '#ef4444') }]}>
+                                                    {selectedDateDetails.status === 'present' ? '✅ Present' 
+                                                        : (selectedDateDetails.status === 'active' ? '⏳ Active' : '❌ Absent')}
+                                                </Text>
+                                                {selectedDateDetails.status === 'active' && (
+                                                    <View style={styles.liveBadge}>
+                                                        <View style={styles.liveDot} />
+                                                        <Text style={styles.liveText}>LIVE SYNC</Text>
+                                                    </View>
+                                                )}
+                                            </View>
                                             {selectedDateDetails.totalClassTime > 0 && (
                                                 <Text style={[styles.overallTime, { color: theme.textSecondary }]}>
-                                                    {selectedDateDetails.totalAttended} min / {selectedDateDetails.totalClassTime} min
+                                                    {Math.floor(((selectedDateDetails.totalAttended || 0) * 60 + (selectedDateDetails.status === 'active' ? modalTimerOffset : 0)) / 60)} min / {selectedDateDetails.totalClassTime} min
+                                                </Text>
+                                            )}
+                                            {selectedDateDetails.status === 'active' && (
+                                                <Text style={styles.syncedByStudent}>
+                                                    ⚡ Synced by student timer
                                                 </Text>
                                             )}
                                         </View>
+                                        
+                                        {/* Period bubbles for student */}
+                                        {(() => {
+                                            const lecs = selectedDateDetails.lectures || [];
+                                            const maxPeriod = Math.max(8, ...lecs.map(l => parseInt((l.period || 'P0').replace('P','')) || 0));
+                                            const slots = Array.from({ length: maxPeriod }, (_, i) => {
+                                                const pid = `P${i + 1}`;
+                                                const lec = lecs.find(l => l.period === pid);
+                                                return { pid, lec };
+                                            });
+                                            return (
+                                                <View style={{ marginBottom: 20 }}>
+                                                    <Text style={{ color: theme.textSecondary, fontSize: 11, marginBottom: 10 }}>Periods</Text>
+                                                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                                        <View style={{ flexDirection: 'row', gap: 10, paddingBottom: 4 }}>
+                                                            {slots.map(({ pid, lec }) => {
+                                                                if (!lec) {
+                                                                    return (
+                                                                        <View key={pid} style={[styles.bubbleWrap, { borderColor: 'rgba(255,255,255,0.08)' }]}>
+                                                                            <Text style={{ color: 'rgba(255,255,255,0.2)', fontSize: 9, fontWeight: '700' }}>{pid}</Text>
+                                                                        </View>
+                                                                    );
+                                                                }
+                                                                const isP = lec.status === 'present';
+                                                                const isActive = lec.status === 'active';
+                                                                const color = isP ? '#10b981' : isActive ? '#f59e0b' : '#ef4444';
+                                                                const shortName = (lec.subject || '').length > 5 ? (lec.subject || '').substring(0, 4) + '…' : (lec.subject || pid);
+                                                                
+                                                                const totalSecs = (lec.attended || 0) + (isActive ? modalTimerOffset : 0);
+                                                                const displayMin = Math.floor(totalSecs / 60);
+
+                                                                return (
+                                                                    <View key={pid} style={[styles.bubbleWrap, { borderColor: color }]}>
+                                                                        <Text style={{ color, fontSize: 9, fontWeight: '700', textAlign: 'center' }} numberOfLines={1}>{shortName}</Text>
+                                                                        <Text style={{ color, fontSize: 9, fontWeight: '600' }}>{pid}</Text>
+                                                                        <Text style={{ color, fontSize: 9, fontWeight: '700' }}>{displayMin}m</Text>
+                                                                    </View>
+                                                                );
+                                                            })}
+                                                        </View>
+                                                    </ScrollView>
+                                                </View>
+                                            );
+                                        })()}
+
                                         {selectedDateDetails.lectures?.length > 0 && (
                                             <>
                                                 <Text style={[styles.lecturesTitle, { color: theme.text }]}>Lectures</Text>
                                                 {selectedDateDetails.lectures.map((lec, i) => (
                                                     <View key={i} style={[styles.lectureCard,
                                                         { backgroundColor: theme.background,
-                                                          borderLeftColor: lec.present ? '#10b981' : '#ef4444' }]}>
+                                                          borderLeftColor: lec.present ? '#10b981' : (lec.status === 'active' ? '#f59e0b' : '#ef4444') }]}>
                                                         <View style={styles.lectureHeader}>
                                                             <Text style={[styles.lectureSubject, { color: theme.text }]}>
                                                                 {lec.subject || 'Class'}
                                                             </Text>
                                                             <View style={{ alignItems: 'flex-end' }}>
                                                                 <Text style={[styles.lectureStatus,
-                                                                    { color: lec.present ? '#10b981' : '#ef4444' }]}>
-                                                                    {lec.present ? '✓' : '✗'} {lec.percentage || 0}%
+                                                                    { color: lec.present ? '#10b981' : (lec.status === 'active' ? '#f59e0b' : '#ef4444') }]}>
+                                                                    {lec.present ? '✓ Present' : (lec.status === 'active' ? '⌛ Active' : '✗ Absent')}
                                                                 </Text>
-                                                                {(lec.total > 0 || lec.attended > 0) && (
+                                                                {(lec.total > 0 || (lec.attended || 0) > 0) && (
                                                                     <Text style={{ color: theme.textSecondary, fontSize: 10, marginTop: 2 }}>
-                                                                        {Math.floor((lec.attended || 0) / 60)} min / {Math.floor((lec.total || 0) / 60)} min
+                                                                        {Math.floor(((lec.attended || 0) + (lec.status === 'active' ? modalTimerOffset : 0)) / 60)}m / {Math.floor((lec.total || 0) / 60)}m
                                                                     </Text>
                                                                 )}
                                                             </View>
@@ -1201,7 +1468,7 @@ const styles = StyleSheet.create({
 
     // ── modal ─────────────────────────────────────────────────────────────────
     modalOverlay:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalContent:  { borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '85%' },
+    modalContent:  { borderTopLeftRadius: 20, borderTopRightRadius: 20, maxHeight: '85%', flex: 1 },
     modalHeader: {
         flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
         padding: 20, borderBottomWidth: 1, borderBottomColor: '#e5e7eb',
@@ -1257,6 +1524,13 @@ const styles = StyleSheet.create({
     overallStatus:     { padding: 16, borderRadius: 12, marginBottom: 16 },
     overallStatusText: { fontSize: 16, fontWeight: 'bold', textAlign: 'center' },
     overallTime:       { fontSize: 12, textAlign: 'center', marginTop: 4 },
+    syncedByStudent:   { fontSize: 10, textAlign: 'center', marginTop: 4, color: '#f59e0b', fontStyle: 'italic', opacity: 0.8 },
+    liveBadge: {
+        flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(245,158,11,0.2)',
+        paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, gap: 4
+    },
+    liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#f59e0b' },
+    liveText: { fontSize: 8, fontWeight: 'bold', color: '#f59e0b' },
     lecturesTitle:     { fontSize: 14, fontWeight: 'bold', marginBottom: 12 },
     lectureCard:       { padding: 12, borderRadius: 8, marginBottom: 10, borderLeftWidth: 3 },
     lectureHeader:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 },
@@ -1270,4 +1544,18 @@ const styles = StyleSheet.create({
     holidayInfoEmoji: { fontSize: 40, marginBottom: 8 },
     holidayInfoName:  { fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
     holidayInfoDesc:  { fontSize: 13, textAlign: 'center' },
+
+    loadMoreBtn: {
+        padding: 16,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderStyle: 'dashed',
+        alignItems: 'center',
+        marginTop: 8,
+        marginBottom: 24,
+    },
+    loadMoreText: {
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
 });

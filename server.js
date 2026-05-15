@@ -1882,6 +1882,7 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                     total:       durationSec,   // seconds
                     percentage:  pct,
                     present:     isPresent,
+                    status:      p.status || (isPresent ? 'present' : 'absent'),
                     verifications: p.checkInTime ? [{
                         time:    p.checkInTime,
                         type:    'face',
@@ -1904,6 +1905,7 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                 total:       3600,
                 percentage:  p.status === 'present' ? 100 : 0,
                 present:     p.status === 'present',
+                status:      p.status || (p.status === 'present' ? 'present' : 'absent'),
                 studentCheckIn: p.checkInTime || null,
                 verifications: []
             }));
@@ -3253,6 +3255,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                             const durMin = timeToMinutes(pEnd) - timeToMinutes(pStart);
                             if (durMin > 0 && (storedSeconds / (durMin * 60)) * 100 >= ATTENDANCE_THRESHOLD) {
                                 periodStatus = 'present';
+                            } else if (Boolean(isRunning)) {
+                                periodStatus = 'active';
                             }
                         } else if (storedSeconds >= Math.floor(timerSeconds) && computedStatus === 'present') {
                             // No period info available but a previous sync already marked present — keep it
@@ -3345,6 +3349,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             timerSeconds: Math.floor(timerSeconds),
             isRunning: Boolean(isRunning),
             status: computedStatus,
+            activePeriod: periodId, // periodId is available from the logic above
             date: new Date().toISOString().split('T')[0]
         });
 

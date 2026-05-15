@@ -1,32 +1,98 @@
-import { useState, useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Animated } from 'react-native';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Animated, Modal, ScrollView } from 'react-native';
 import FilterButtons from './FilterButtons';
+import StudentSearch from './StudentSearch';
 
-const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = null, onTeacherAction, ListHeaderComponent, refreshControl }) => {
+// Separate Header component to prevent re-mounting and focus loss
+const ListHeader = React.memo(({ 
+  theme, 
+  searchQuery, 
+  onSearchQueryChange, 
+  presentCount, 
+  totalStudents, 
+  currentRangeLabel, 
+  selectedFilter, 
+  onFilterChange, 
+  filterCounts,
+  onTriggerPagination
+}) => {
+  return (
+    <View style={styles.headerWrapper}>
+      <StudentSearch 
+        theme={theme} 
+        searchQuery={searchQuery} 
+        onSearchQueryChange={onSearchQueryChange} 
+      />
+
+      <View style={styles.header}>
+        <View style={styles.headerMain}>
+          <Text style={[styles.headerTitle, { color: theme.text }]}>Class Attendance</Text>
+          <View style={[styles.presenceBadge, { backgroundColor: theme.primary + '15' }]}>
+            <Text style={[styles.presenceText, { color: theme.primary }]}>
+              {presentCount}/{totalStudents} Present
+            </Text>
+          </View>
+        </View>
+        <Text style={[styles.paginationInfo, { color: theme.textSecondary }]}>
+          Showing {currentRangeLabel} of {totalStudents} Students
+        </Text>
+      </View>
+
+      <FilterButtons
+        selectedFilter={selectedFilter}
+        onFilterChange={onFilterChange}
+        counts={filterCounts}
+        theme={theme}
+        paginationLabel={selectedFilter === 'all' ? currentRangeLabel : null}
+      />
+    </View>
+  );
+});
+
+const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = null, onTeacherAction, refreshControl }) => {
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
+  const [isPaginationModalVisible, setIsPaginationModalVisible] = useState(false);
   const pageSize = 50;
 
-  // status values: 'present' | 'active' | 'absent' | 'offline' (disconnected, timer frozen)
-  const filteredStudents = students.filter((student) => {
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery);
+    }, 500);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const filteredStudents = useMemo(() => students.filter((student) => {
+    if (debouncedSearchQuery.trim() !== '') {
+      const q = debouncedSearchQuery.toLowerCase();
+      const matchesSearch = 
+        student.name?.toLowerCase().includes(q) ||
+        student.enrollmentNo?.toLowerCase().includes(q) ||
+        student.rollNo?.toLowerCase().includes(q);
+      
+      if (!matchesSearch) return false;
+    }
+
     if (selectedFilter === 'all') return true;
     if (selectedFilter === 'active') return student.status === 'active' || student.status === 'offline';
     if (selectedFilter === 'present') return student.status === 'present';
     if (selectedFilter === 'absent') return student.status === 'absent';
     return true;
-  });
+  }), [students, selectedFilter, debouncedSearchQuery]);
 
-  const filterCounts = {
+  const filterCounts = useMemo(() => ({
     all: students.length,
     active: students.filter(s => s.status === 'active' || s.status === 'offline').length,
     present: students.filter(s => s.status === 'present').length,
     absent: students.filter(s => s.status === 'absent').length,
-  };
+  }), [students]);
 
-  const presentCount = students.filter(s => s.status === 'present').length;
+  const presentCount = useMemo(() => students.filter(s => s.status === 'present').length, [students]);
 
-  // Build sorted list: ring-selected students float to top, verified ones return to natural order
-  const sortedStudents = (() => {
+  const sortedStudents = useMemo(() => {
     let list = filteredStudents;
     if (activeRandomRing?.selectedStudents?.length) {
       const ringMap = new Map(
@@ -41,21 +107,45 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
       list = [...floating, ...rest];
     }
     return list;
-  })();
+  }, [filteredStudents, activeRandomRing]);
 
-  // Pagination Logic
-  const paginatedStudents = sortedStudents.slice(0, currentPage * pageSize);
-  const currentRangeLabel = `1-${Math.min(currentPage * pageSize, sortedStudents.length)}`;
+  const paginatedStudents = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    const end = start + pageSize;
+    return sortedStudents.slice(start, end);
+  }, [sortedStudents, currentPage]);
 
-  const loadMore = () => {
+  const currentRangeLabel = useMemo(() => {
+    const start = (currentPage - 1) * pageSize + 1;
+    const end = Math.min(currentPage * pageSize, sortedStudents.length);
+    return sortedStudents.length > 0 ? `${start}-${end}` : '0-0';
+  }, [currentPage, sortedStudents.length]);
+
+  const totalPages = Math.ceil(sortedStudents.length / pageSize);
+
+  const loadMore = useCallback(() => {
     if (currentPage * pageSize < sortedStudents.length) {
       setCurrentPage(prev => prev + 1);
     }
-  };
+  }, [currentPage, sortedStudents.length]);
 
   const scrollY = useRef(new Animated.Value(0)).current;
 
-  const renderStudentItem = ({ item: student, index }) => {
+  const handleSearchChange = useCallback((q) => {
+    setSearchQuery(q);
+    setCurrentPage(1);
+  }, []);
+
+  const handleFilterChange = useCallback((f) => {
+    if (f === 'all' && selectedFilter === 'all') {
+      setIsPaginationModalVisible(true);
+    } else {
+      setSelectedFilter(f);
+      setCurrentPage(1);
+    }
+  }, [selectedFilter]);
+
+  const renderStudentItem = useCallback(({ item: student, index }) => {
     const randomRingStudent = activeRandomRing?.selectedStudents?.find(s =>
       s.enrollmentNo === student.enrollmentNo
     );
@@ -76,43 +166,7 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
         isFloating={isFloating}
       />
     );
-  };
-
-  const ListHeader = () => (
-    <>
-      {/* Existing App.js Header passed as prop */}
-      {ListHeaderComponent}
-
-      <View style={styles.header}>
-        <View>
-          <Text style={[styles.headerTitle, { color: theme.text }]}>Class Attendance</Text>
-          <Text style={[styles.paginationInfo, { color: theme.primary }]}>
-            Showing {currentRangeLabel} of {sortedStudents.length}
-          </Text>
-        </View>
-        <Text style={[styles.headerSubtitle, { color: theme.textSecondary }]}>
-          {presentCount} / {students.length} Present
-        </Text>
-      </View>
-      <FilterButtons
-        selectedFilter={selectedFilter}
-        onFilterChange={(f) => {
-          setSelectedFilter(f);
-          setCurrentPage(1); // Reset pagination on filter change
-        }}
-        counts={filterCounts}
-        theme={theme}
-        paginationLabel={selectedFilter === 'all' ? currentRangeLabel : null}
-      />
-      {paginatedStudents.length === 0 && (
-        <View style={[styles.emptyContainer, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
-          <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
-            {selectedFilter === 'all' ? 'No students enrolled in this class yet.' : `No students with status: ${selectedFilter}`}
-          </Text>
-        </View>
-      )}
-    </>
-  );
+  }, [theme, scrollY, onStudentPress, activeRandomRing, onTeacherAction]);
 
   return (
     <View style={[styles.container, { backgroundColor: theme.background }]}>
@@ -127,40 +181,102 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
         initialNumToRender={10}
         maxToRenderPerBatch={10}
         windowSize={5}
-        ListHeaderComponent={ListHeader}
+        removeClippedSubviews={true}
+        ListHeaderComponent={
+          <ListHeader 
+            theme={theme}
+            searchQuery={searchQuery}
+            onSearchQueryChange={handleSearchChange}
+            presentCount={presentCount}
+            totalStudents={students.length}
+            currentRangeLabel={currentRangeLabel}
+            selectedFilter={selectedFilter}
+            onFilterChange={handleFilterChange}
+            filterCounts={filterCounts}
+          />
+        }
+        ListEmptyComponent={
+          <View style={[styles.emptyContainer, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+            <Text style={[styles.emptyText, { color: theme.textSecondary }]}>
+              {searchQuery.trim() !== '' ? `No results found for "${searchQuery}"` : 
+               (selectedFilter === 'all' ? 'No students enrolled in this class yet.' : `No students with status: ${selectedFilter}`)}
+            </Text>
+          </View>
+        }
         refreshControl={refreshControl}
         onScroll={Animated.event(
           [{ nativeEvent: { contentOffset: { y: scrollY } } }],
-          { useNativeDriver: false }
+          { useNativeDriver: true }
         )}
         scrollEventThrottle={16}
       />
+
+      <Modal
+        visible={isPaginationModalVisible}
+        transparent={true}
+        animationType="fade"
+        onRequestClose={() => setIsPaginationModalVisible(false)}
+      >
+        <TouchableOpacity 
+          style={styles.modalOverlay} 
+          activeOpacity={1} 
+          onPress={() => setIsPaginationModalVisible(false)}
+        >
+          <View style={[styles.paginationModal, { backgroundColor: theme.cardBackground, borderColor: theme.border }]}>
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: theme.text }]}>Select Student Range</Text>
+              <TouchableOpacity onPress={() => setIsPaginationModalVisible(false)}>
+                <Text style={{ color: theme.primary, fontWeight: '700' }}>Close</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.rangeList} showsVerticalScrollIndicator={false}>
+              {Array.from({ length: totalPages }).map((_, i) => {
+                const pageNum = i + 1;
+                const start = i * pageSize + 1;
+                const end = Math.min(pageNum * pageSize, sortedStudents.length);
+                const isSelected = pageNum === currentPage;
+                return (
+                  <TouchableOpacity
+                    key={i}
+                    style={[
+                      styles.rangeItem,
+                      { backgroundColor: isSelected ? theme.primary + '20' : 'transparent' }
+                    ]}
+                    onPress={() => {
+                      setCurrentPage(pageNum);
+                      setIsPaginationModalVisible(false);
+                    }}
+                  >
+                    <Text style={[
+                      styles.rangeText,
+                      { color: isSelected ? theme.primary : theme.text }
+                    ]}>
+                      Students {start} - {end}
+                    </Text>
+                    {isSelected && <Text style={{ color: theme.primary }}>✓</Text>}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 };
 
-const ITEM_HEIGHT = 100; // Approximate height of student card + margin
-
-const fmt = (secs) => {
-  const m = Math.floor(secs / 60);
-  const s = secs % 60;
-  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-};
-
-const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStudent, onTeacherAction, randomRingId, isFloating }) => {
+const StudentItem = React.memo(({ student, theme, index, scrollY, onPress, randomRingStudent, onTeacherAction, randomRingId, isFloating }) => {
   const [displaySecs, setDisplaySecs] = useState(student.timerValue || 0);
   const [actionLoading, setActionLoading] = useState(false);
   const intervalRef = useRef(null);
   const baseRef = useRef({ secs: student.timerValue || 0, ts: Date.now() });
   const staleCutoffRef = useRef(null);
 
-  // Slide-in animation when student floats to top
   const slideAnim = useRef(new Animated.Value(isFloating ? -60 : 0)).current;
   const glowAnim  = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     if (isFloating) {
-      // Slide in from top + pulse glow
       const anim = Animated.parallel([
         Animated.spring(slideAnim, { toValue: 0, tension: 80, friction: 8, useNativeDriver: false }),
         Animated.loop(
@@ -177,7 +293,6 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
         slideAnim.stopAnimation();
       };
     } else {
-      // Slide back to natural position
       Animated.spring(slideAnim, { toValue: 0, tension: 60, friction: 10, useNativeDriver: false }).start();
       glowAnim.stopAnimation();
       glowAnim.setValue(0);
@@ -189,7 +304,6 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
     outputRange: ['rgba(251,191,36,0)', 'rgba(251,191,36,0.8)'],
   });
 
-  // Timer ticking
   useEffect(() => {
     const effectiveSecs = student.status === 'absent' ? 0 : (student.timerValue || 0);
     baseRef.current = { secs: effectiveSecs, ts: Date.now() };
@@ -235,7 +349,6 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
     }
   };
 
-  // Differentiate ring eligibility
   const isWasActive = randomRingStudent?.ringEligibility === 'wasActive';
 
   const handleAction = async (action) => {
@@ -245,7 +358,6 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
       await onTeacherAction(randomRingId, student.enrollmentNo, action);
     } catch (error) {
       console.error(`❌ Error ${action} student:`, error);
-      alert(`Error ${action} student. Please check your connection.`);
     } finally {
       setActionLoading(false);
     }
@@ -253,18 +365,8 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
 
   const statusStyle = getStatusStyle(student.status);
 
-  const opacity = scrollY.interpolate({
-    inputRange: [
-      (index - 1) * ITEM_HEIGHT,
-      index * ITEM_HEIGHT,
-      (index + 0.7) * ITEM_HEIGHT,
-    ],
-    outputRange: [1, 1, 0],
-    extrapolate: 'clamp',
-  });
-
   return (
-    <Animated.View style={{ transform: [{ translateY: slideAnim }], opacity }}>
+    <Animated.View style={{ transform: [{ translateY: slideAnim }] }}>
       <Animated.View style={[
         styles.studentCard,
         { backgroundColor: theme.cardBackground, borderColor: isFloating ? glowBorder : theme.border },
@@ -279,7 +381,6 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
             <View style={styles.studentInfo}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <Text style={[styles.studentName, { color: theme.text }]} numberOfLines={1}>{student.name}</Text>
-                {/* Ring eligibility badge */}
                 {randomRingStudent && isWasActive && (
                   <View style={styles.wasActiveBadge}>
                     <Text style={styles.wasActiveBadgeText}>📅 Was active</Text>
@@ -296,7 +397,9 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
               </View>
             </View>
             <View style={styles.timerContainer}>
-              <Text style={[styles.timerText, { color: theme.text }]}>{fmt(displaySecs)}</Text>
+              <Text style={[styles.timerText, { color: theme.text }]}>{
+                `${Math.floor(displaySecs / 60).toString().padStart(2, '0')}:${(displaySecs % 60).toString().padStart(2, '0')}`
+              }</Text>
               {student.lectureSubject ? (
                 <Text style={[styles.lectureLabel, { color: theme.textSecondary }]} numberOfLines={1}>
                   {student.lectureSubject}
@@ -308,9 +411,6 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
 
         {randomRingStudent && randomRingStudent.teacherAction === 'pending' && !randomRingStudent.verified && (
           <View style={styles.actionSection}>
-            {randomRingStudent.responded && (
-              <Text style={styles.respondedHint}>✋ Student responded — Accept or Reject</Text>
-            )}
             <View style={styles.actionButtons}>
               <TouchableOpacity
                 style={[styles.acceptButton, { opacity: actionLoading ? 0.5 : 1 }]}
@@ -329,59 +429,51 @@ const StudentItem = ({ student, theme, index, scrollY, onPress, randomRingStuden
             </View>
           </View>
         )}
-
-        {randomRingStudent && randomRingStudent.teacherAction !== 'pending' && (
-          <View style={styles.actionStatus}>
-            {randomRingStudent.teacherAction === 'accepted' && (
-              <Text style={[styles.actionStatusText, { color: '#059669' }]}>✓ Accepted by teacher</Text>
-            )}
-            {randomRingStudent.teacherAction === 'rejected' && !randomRingStudent.faceVerifiedAfterRejection && (
-              <Text style={[styles.actionStatusText, { color: '#dc2626' }]}>✕ Rejected - Waiting for face verification</Text>
-            )}
-            {randomRingStudent.faceVerifiedAfterRejection && (
-              <Text style={[styles.actionStatusText, { color: '#059669' }]}>✓ Face verified after rejection</Text>
-            )}
-          </View>
-        )}
       </Animated.View>
     </Animated.View>
   );
-};
+});
 
 const styles = StyleSheet.create({
-  container: { flex: 1, paddingHorizontal: 24, paddingVertical: 24, maxWidth: 768, alignSelf: 'center', width: '100%' },
-  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
-  headerTitle: { fontSize: 18, fontWeight: '600' },
-  headerSubtitle: { fontSize: 14 },
-  paginationInfo: { fontSize: 12, fontWeight: '600', marginTop: 2 },
-  listContent: { paddingBottom: 16 },
-  studentCard: { borderRadius: 8, padding: 16, marginBottom: 16, borderWidth: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2, elevation: 1 },
-  floatingCard: { borderWidth: 2, elevation: 6, shadowOpacity: 0.18, shadowRadius: 6 },
-  studentContent: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  profileImage: { width: 56, height: 56, borderRadius: 28 },
+  container: { flex: 1, width: '100%', alignSelf: 'center', maxWidth: 768 },
+  headerWrapper: { width: '100%' },
+  header: { paddingHorizontal: 20, marginBottom: 10 },
+  headerMain: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
+  headerTitle: { fontSize: 22, fontWeight: '800', letterSpacing: -0.5 },
+  presenceBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  presenceText: { fontSize: 12, fontWeight: '700' },
+  paginationInfo: { fontSize: 12, fontWeight: '500' },
+  listContent: { paddingBottom: 40, paddingHorizontal: 20 },
+  studentCard: { borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1.5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.04, shadowRadius: 8, elevation: 2 },
+  floatingCard: { borderWidth: 2, elevation: 8, shadowOpacity: 0.15, shadowRadius: 12 },
+  studentContent: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  profileImage: { width: 52, height: 52, borderRadius: 16 },
   studentInfo: { flex: 1, minWidth: 0 },
-  studentName: { fontSize: 16, fontWeight: '500', marginBottom: 4 },
-  statusBadge: { alignSelf: 'flex-start', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 12, marginTop: 4 },
-  statusText: { fontSize: 12, fontWeight: '600' },
+  studentName: { fontSize: 16, fontWeight: '700', marginBottom: 2 },
+  statusBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8, marginTop: 2 },
+  statusText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
   timerContainer: { alignItems: 'flex-end' },
-  timerText: { fontSize: 16, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  lectureLabel: { fontSize: 10, marginTop: 2, maxWidth: 80, textAlign: 'right' },
-  emptyContainer: { borderRadius: 8, padding: 32, borderWidth: 1, alignItems: 'center', marginTop: 16 },
-  emptyText: { fontSize: 14 },
-  actionButtons: { flexDirection: 'row', gap: 8 },
-  actionSection: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb' },
-  respondedHint: { color: '#22c55e', fontSize: 11, fontWeight: '600', textAlign: 'center', marginBottom: 8 },
-  acceptButton: { flex: 1, backgroundColor: '#059669', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 6, alignItems: 'center' },
-  acceptButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '600' },
-  rejectButton: { flex: 1, backgroundColor: '#dc2626', paddingVertical: 8, paddingHorizontal: 16, borderRadius: 6, alignItems: 'center' },
-  rejectButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '600' },
-  actionStatus: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#e5e7eb' },
-  actionStatusText: { fontSize: 13, fontWeight: '500', textAlign: 'center' },
-  // Ring eligibility badges
-  ringSelectedBadge: { backgroundColor: 'rgba(251,191,36,0.2)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  ringSelectedBadgeText: { fontSize: 10, color: '#d97706', fontWeight: '600' },
-  wasActiveBadge: { backgroundColor: 'rgba(99,102,241,0.15)', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 },
-  wasActiveBadgeText: { fontSize: 10, color: '#6366f1', fontWeight: '600' },
+  timerText: { fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  lectureLabel: { fontSize: 10, marginTop: 2, maxWidth: 90, textAlign: 'right', fontWeight: '500' },
+  emptyContainer: { borderRadius: 16, padding: 40, borderWidth: 1.5, alignItems: 'center', marginTop: 10, marginHorizontal: 20, borderStyle: 'dashed' },
+  emptyText: { fontSize: 14, fontWeight: '500', textAlign: 'center' },
+  actionSection: { marginTop: 14, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(0,0,0,0.05)' },
+  actionButtons: { flexDirection: 'row', gap: 10 },
+  acceptButton: { flex: 1, backgroundColor: '#10b981', paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+  acceptButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
+  rejectButton: { flex: 1, backgroundColor: '#ef4444', paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
+  rejectButtonText: { color: '#ffffff', fontSize: 14, fontWeight: '700' },
+  ringSelectedBadge: { backgroundColor: 'rgba(245,158,11,0.15)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  ringSelectedBadgeText: { fontSize: 10, color: '#d97706', fontWeight: '700' },
+  wasActiveBadge: { backgroundColor: 'rgba(99,102,241,0.15)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  wasActiveBadgeText: { fontSize: 10, color: '#6366f1', fontWeight: '700' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  paginationModal: { width: '100%', maxHeight: '60%', borderRadius: 24, borderWidth: 1, padding: 20, elevation: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' },
+  modalTitle: { fontSize: 18, fontWeight: '800' },
+  rangeList: { marginHorizontal: -5 },
+  rangeItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 15, borderRadius: 12, marginBottom: 5 },
+  rangeText: { fontSize: 15, fontWeight: '600' },
 });
 
 export default StudentList;

@@ -43,42 +43,55 @@ const TeacherHeader = ({
 
   return (
     <View style={styles.container}>
-      <View style={[styles.header, { backgroundColor: theme.cardBackground }]}>
-        {/* Profile Photo */}
-        <TouchableOpacity onPress={() => setProfileVisible(true)}>
-          {userData?.photoUrl ? (
-            <Image
-              source={{ uri: userData.photoUrl }}
-              style={styles.profileImage}
-            />
-          ) : (
-            <View style={[styles.profileImage, { backgroundColor: theme.primary }]}>
-              <Text style={styles.initialsText}>
-                {getInitials(userData?.name || 'Teacher')}
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
+      <View style={[styles.header, { backgroundColor: theme.cardBackground, borderBottomColor: theme.border }]}>
+        <View style={styles.headerLeft}>
+          {/* Profile Photo */}
+          <TouchableOpacity onPress={() => setProfileVisible(true)} activeOpacity={0.8}>
+            {userData?.photoUrl ? (
+              <View style={styles.profileImageWrapper}>
+                <Image
+                  source={{ uri: userData.photoUrl }}
+                  style={styles.profileImage}
+                />
+              </View>
+            ) : (
+              <View style={[styles.profileImage, { backgroundColor: theme.primary }]}>
+                <Text style={styles.initialsText}>
+                  {getInitials(userData?.name || 'Teacher')}
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          
+          <View style={styles.titleContainer}>
+            <Text style={[styles.welcomeText, { color: theme.textSecondary }]}>Welcome back,</Text>
+            <Text style={[styles.teacherNameHeader, { color: theme.text }]} numberOfLines={1}>
+              {userData?.name || 'Teacher'}
+            </Text>
+          </View>
+        </View>
 
-        {/* App Name */}
-        <Text style={[styles.appName, { color: theme.text }]}>
-          LetsBunk
-        </Text>
+        <View style={styles.headerRight}>
+          {/* Theme Toggle */}
+          <TouchableOpacity
+            onPress={onToggleTheme}
+            style={[styles.iconButton, { backgroundColor: theme.primary + '15' }]}
+            activeOpacity={0.7}
+          >
+            <Text style={{ fontSize: 18 }}>
+              {isDark ? '☀️' : '🌙'}
+            </Text>
+          </TouchableOpacity>
 
-        {/* Theme Toggle */}
-        <TouchableOpacity
-          onPress={onToggleTheme}
-          style={styles.themeButton}
-        >
-          <Text style={{ fontSize: 20 }}>
-            {isDark ? '☀️' : '🌙'}
-          </Text>
-        </TouchableOpacity>
-
-        {/* Menu Button */}
-        <TouchableOpacity onPress={() => setMenuVisible(true)}>
-          <Text style={{ fontSize: 24, color: theme.text }}>⋮</Text>
-        </TouchableOpacity>
+          {/* Menu Button */}
+          <TouchableOpacity 
+            onPress={() => setMenuVisible(true)}
+            style={[styles.iconButton, { backgroundColor: theme.primary + '15' }]}
+            activeOpacity={0.7}
+          >
+            <Text style={{ fontSize: 20, color: theme.primary, fontWeight: 'bold' }}>⋮</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Menu Modal */}
@@ -274,40 +287,65 @@ const TeacherHeader = ({
 
 const styles = StyleSheet.create({
   container: {
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 4,
+    zIndex: 10,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 24, // 6 × 4 = 24 (px-6)
-    paddingVertical: 16,   // 4 × 4 = 16 (py-4)
-    paddingTop: 48,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    paddingTop: 54,
+    borderBottomWidth: 1,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  profileImageWrapper: {
+    padding: 2,
+    borderRadius: 24,
+    borderWidth: 1.5,
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   profileImage: {
-    width: 48,  // 12 × 4 = 48 (w-12)
-    height: 48, // 12 × 4 = 48 (h-12)
-    borderRadius: 24,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  initialsText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: 'bold',
-  },
-  appName: {
-    fontSize: 20,
-    fontWeight: '700',
-    flex: 1,
+  titleContainer: {
     marginLeft: 12,
+    flex: 1,
   },
-  themeButton: {
-    padding: 8,
-    marginRight: 8,
+  welcomeText: {
+    fontSize: 11,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  teacherNameHeader: {
+    fontSize: 17,
+    fontWeight: '700',
+  },
+  iconButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   modalOverlay: {
     flex: 1,

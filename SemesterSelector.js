@@ -277,7 +277,12 @@ const SemesterSelector = ({
                         }
                       ]}
                       onPress={() => {
-                        onSelect({ ...currentSelection, semester: sem.value });
+                        // If selecting auto, clear the branch selection
+                        if (sem.value === 'auto') {
+                          onSelect({ semester: 'auto', branch: null });
+                        } else {
+                          onSelect({ ...(currentSelection || {}), semester: sem.value });
+                        }
                       }}
                       activeOpacity={0.7}
                     >
@@ -330,7 +335,7 @@ const SemesterSelector = ({
                         }
                       ]}
                       onPress={() => {
-                        onSelect({ ...currentSelection, branch: branch.value });
+                        onSelect({ ...(currentSelection || {}), branch: branch.value });
                       }}
                       activeOpacity={0.7}
                     >
