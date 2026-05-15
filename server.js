@@ -2938,6 +2938,7 @@ app.get('/api/students/:studentId/face-data', async (req, res) => {
 app.post('/api/attendance/offline-sync', async (req, res) => {
     const startTime = Date.now();
     const { studentId, timerSeconds, lecture, timestamp, isRunning, isPaused, periodId: clientPeriodId } = req.body;
+    const isQueuedSync = Boolean(req.body.isQueuedSync);
     
     console.log(`🔄 [OFFLINE-SYNC] Sync request - Student: ${studentId}, Timer: ${timerSeconds}s, IP: ${req.ip}`);
     
@@ -2996,7 +2997,6 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         // 3. Update student's timer data
         // Use $max for totalAttendedSeconds so queued syncs from old periods
         // never overwrite a higher value from a more recent sync
-        const isQueuedSync = Boolean(req.body.isQueuedSync);
         const updateData = {
             'attendanceSession.lastSyncTime': new Date(timestamp),
             'attendanceSession.isRunning': Boolean(isRunning),
