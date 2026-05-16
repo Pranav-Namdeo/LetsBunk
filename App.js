@@ -504,6 +504,7 @@ export default function App() {
           if (typeof OfflineTimerService !== 'undefined') {
               OfflineTimerService.clearState?.();
               AsyncStorage.removeItem('@offline_timer_state');
+              SecureStorage.clearTimerStateRedundancy?.();
           }
         }
       } catch (error) {
@@ -528,6 +529,7 @@ export default function App() {
           if (typeof OfflineTimerService !== 'undefined') {
               OfflineTimerService.clearState?.();
               AsyncStorage.removeItem('@offline_timer_state');
+              SecureStorage.clearTimerStateRedundancy?.();
           }
         }
       }
@@ -2253,17 +2255,26 @@ export default function App() {
             // This runs BEFORE the 15s fetchOfflinePeriod poll fires, so the
             // timer card and START TIMER button appear instantly even with no internet.
             if (enrollmentNo) {
-              BSSIDStorage.getCurrentPeriodBSSID()
-                .then(period => {
-                  if (period) {
-                    console.log('📦 Restored offline period from cache:', period.subject);
-                    setOfflinePeriod(period);
+              // Priority 1: Check if we have valid schedule in cache/redundancy
+              BSSIDStorage.needsRefresh()
+                .then(async (needsRefresh) => {
+                  if (!needsRefresh) {
+                    console.log('🛡️ BSSID schedule is valid (restored or cached) — skipping startup fetch');
+                    const period = await BSSIDStorage.getCurrentPeriodBSSID();
+                    if (period) {
+                      console.log('📦 Restored offline period:', period.subject);
+                      setOfflinePeriod(period);
+                    }
                   } else {
-                    // No cached period yet — try fetching from server in background
+                    // No valid schedule for today — fetch in background
+                    console.log('🔄 No valid BSSID schedule — triggering startup fetch');
                     fetchDailyBSSIDSchedule(enrollmentNo, false).catch(() => {});
                   }
                 })
-                .catch(() => {});
+                .catch(() => {
+                  // Fallback: try to fetch if anything fails
+                  fetchDailyBSSIDSchedule(enrollmentNo, false).catch(() => {});
+                });
             }
 
             // Check if face verification is still valid for today
@@ -5953,7 +5964,7 @@ const onRefreshStudent = async () => {
                   // Cap displayed seconds to the lecture duration so timer never shows > period length
                   const periodSrcDisplay = offlinePeriod || offlineTimerState.currentLecture;
                   const maxSecs = (() => {
-                    if (periodSrcDisplay?.startTime && periodSrcDisplay?.endTime) {
+                    if (typeof periodSrcDisplay?.startTime === 'string' && typeof periodSrcDisplay?.endTime === 'string') {
                       const [sh, sm] = periodSrcDisplay.startTime.split(':').map(Number);
                       const [eh, em] = periodSrcDisplay.endTime.split(':').map(Number);
                       const dur = ((eh * 60 + em) - (sh * 60 + sm)) * 60;
@@ -6000,7 +6011,7 @@ const onRefreshStudent = async () => {
 
                 // Compute total period duration in seconds — NO cap
                 const totalSecs = (() => {
-                  if (periodSrc?.startTime && periodSrc?.endTime) {
+                  if (typeof periodSrc?.startTime === 'string' && typeof periodSrc?.endTime === 'string') {
                     const [sh, sm] = periodSrc.startTime.split(':').map(Number);
                     const [eh, em] = periodSrc.endTime.split(':').map(Number);
                     const dur = ((eh * 60 + em) - (sh * 60 + sm)) * 60;
@@ -6011,7 +6022,7 @@ const onRefreshStudent = async () => {
 
                 // Time remaining until period ends (wall-clock based)
                 const periodEndRemainSecs = (() => {
-                  if (!periodSrc?.endTime) return null;
+                  if (typeof periodSrc?.endTime !== 'string') return null;
                   try {
                     const now = new Date();
                     const [eh, em] = periodSrc.endTime.split(':').map(Number);

@@ -10,6 +10,7 @@ const KEYS = {
   CACHED_SERVER_EMBEDDING:        '@letsbunk_cached_server_embedding',
   CACHED_SERVER_EMBEDDING_ENROLLED_AT: '@letsbunk_cached_server_embedding_enrolled_at',
   SYNC_QUEUE: '__pending_sync',
+  TIMER_STATE_REDUNDANCY: '@letsbunk_timer_state_redundancy',
 };
 
 class SecureStorage {
@@ -386,6 +387,84 @@ class SecureStorage {
     } catch (error) {
       console.error('❌ Error loading sync queue:', error);
       return [];
+    }
+  }
+
+  /**
+   * Save critical timer state with Keystore encryption for redundancy
+   * @param {object} state - Minimal state (timerSeconds, periodId, date, isRunning)
+   */
+  static async saveTimerStateRedundancy(state) {
+    try {
+      if (!state) return false;
+      const json = JSON.stringify(state);
+      const { NativeModules } = require('react-native');
+      const { TimerModule } = NativeModules;
+      
+      if (TimerModule && TimerModule.saveRedundancyData) {
+        try {
+          await TimerModule.saveRedundancyData('timer_state_redundancy', json);
+          console.log('🛡️ Timer state redundancy saved to Hardware-backed Secure Storage');
+          return true;
+        } catch (e) {
+          console.warn('⚠️ Native timer redundancy failed:', e.message);
+        }
+      }
+      
+      // Fallback to AsyncStorage if native redundancy fails
+      await AsyncStorage.setItem(KEYS.TIMER_STATE_REDUNDANCY, json);
+      return true;
+    } catch (error) {
+      console.error('❌ Error saving timer redundancy:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Load timer state from Keystore-backed redundancy
+   */
+  static async loadTimerStateRedundancy() {
+      const { NativeModules } = require('react-native');
+      const { TimerModule } = NativeModules;
+      
+      if (TimerModule && TimerModule.getRedundancyData) {
+        try {
+          const decrypted = await TimerModule.getRedundancyData('timer_state_redundancy');
+          if (decrypted) {
+            console.log('🛡️ Timer state recovered from Native Hardware Redundancy');
+            return JSON.parse(decrypted);
+          }
+        } catch (e) {
+          console.error('❌ Native timer redundancy recovery failed:', e.message);
+        }
+      }
+      
+      // Fallback to AsyncStorage
+      const savedData = await AsyncStorage.getItem(KEYS.TIMER_STATE_REDUNDANCY);
+      if (!savedData) return null;
+      
+      return JSON.parse(savedData);
+    } catch (error) {
+      console.error('❌ Error loading timer redundancy:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Clear timer state redundancy (e.g. on new day or logout)
+   */
+  static async clearTimerStateRedundancy() {
+      await AsyncStorage.removeItem(KEYS.TIMER_STATE_REDUNDANCY);
+      const { NativeModules } = require('react-native');
+      const { TimerModule } = NativeModules;
+      if (TimerModule && TimerModule.clearRedundancyData) {
+        await TimerModule.clearRedundancyData('timer_state_redundancy');
+      }
+      console.log('🗑️ Timer redundancy cleared');
+      return true;
+    } catch (error) {
+      console.error('❌ Error clearing timer redundancy:', error);
+      return false;
     }
   }
 }

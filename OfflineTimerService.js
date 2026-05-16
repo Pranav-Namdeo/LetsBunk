@@ -826,7 +826,7 @@ class OfflineTimerService {
         console.log('   Current lecture:', this.currentLecture?.subject);
         
         this.previousLectureData = null;
-        this.wasManuallyStoppedInSameLecture = false;
+        // this.wasManuallyStoppedInSameLecture remains true
         this.thresholdSeconds = null;  // reset threshold on any stop
         this.attendanceStatus = 'absent';
       } else if (reason === 'lecture_ended') {
@@ -1163,6 +1163,7 @@ class OfflineTimerService {
     const currentMinute = now.getMinutes();
     const currentTimeInMinutes = currentHour * 60 + currentMinute;
     
+    if (typeof this.currentLecture?.endTime !== 'string') return false;
     // Parse lecture end time (format: "HH:MM")
     const [endHour, endMinute] = this.currentLecture.endTime.split(':').map(Number);
     const endTimeInMinutes = endHour * 60 + endMinute;
@@ -1223,24 +1224,50 @@ class OfflineTimerService {
    * Check if same lecture (same subject, teacher, room)
    */
   isSameLecture(newLecture) {
-    if (!this.currentLecture || !newLecture) return false;
+    if (!this.currentLecture || !newLecture) {
+      console.log('🔍 isSameLecture: false (one or both lectures null)', {
+        current: !!this.currentLecture,
+        new: !!newLecture
+      });
+      return false;
+    }
 
     // Primary: compare by period number (most reliable)
     const curPeriod = this.currentLecture.period ?? this.currentLecture.periodNumber;
     const newPeriod = newLecture.period ?? newLecture.periodNumber;
+    
+    let isSame = false;
+    let method = '';
+
     if (curPeriod != null && newPeriod != null) {
-      return String(curPeriod) === String(newPeriod);
+      isSame = String(curPeriod) === String(newPeriod);
+      method = 'period';
+    } else if (this.currentLecture.startTime && newLecture.startTime) {
+      // Fallback: compare by start+end time
+      isSame = this.currentLecture.startTime === newLecture.startTime &&
+               this.currentLecture.endTime   === newLecture.endTime;
+      method = 'time';
+    } else {
+      // Last resort: subject + room
+      isSame = (this.currentLecture.subject || '') === (newLecture.subject || '') &&
+               (this.currentLecture.room    || '') === (newLecture.room    || '');
+      method = 'subject+room';
     }
 
-    // Fallback: compare by start+end time (period number not available)
-    if (this.currentLecture.startTime && newLecture.startTime) {
-      return this.currentLecture.startTime === newLecture.startTime &&
-             this.currentLecture.endTime   === newLecture.endTime;
-    }
+    console.log(`🔍 isSameLecture: ${isSame} (via ${method})`, {
+      current: { 
+        subject: this.currentLecture.subject, 
+        period: curPeriod, 
+        time: `${this.currentLecture.startTime}-${this.currentLecture.endTime}` 
+      },
+      new: { 
+        subject: newLecture.subject, 
+        period: newPeriod, 
+        time: `${newLecture.startTime}-${newLecture.endTime}` 
+      }
+    });
 
-    // Last resort: subject + room (old behaviour)
-    return (this.currentLecture.subject || '') === (newLecture.subject || '') &&
-           (this.currentLecture.room    || '') === (newLecture.room    || '');
+    return isSame;
   }
 
   /**
@@ -1909,6 +1936,7 @@ class OfflineTimerService {
         attendanceStatus: this.attendanceStatus,
         thresholdSeconds: this.thresholdSeconds,
         wasRunningBeforeDisconnect: this.wasRunningBeforeDisconnect,
+        wasManuallyStoppedInSameLecture: this.wasManuallyStoppedInSameLecture,
         disconnectionTime: this.disconnectionTime,
         pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
         previousLectureData: this.previousLectureData,
@@ -1918,6 +1946,15 @@ class OfflineTimerService {
       };
       
       await AsyncStorage.setItem(OFFLINE_TIMER_KEY, JSON.stringify(state));
+      
+      // REDUNDANCY: Save the ENTIRE state to Native Hardware-backed Secure Storage
+      // This survives if AsyncStorage is wiped or corrupted, and provides hardware encryption.
+      const { NativeModules } = require('react-native');
+      const { TimerModule } = NativeModules;
+      if (TimerModule && TimerModule.saveRedundancyData) {
+        await TimerModule.saveRedundancyData('timer_state_full', JSON.stringify(state))
+          .catch(err => console.warn('⚠️ Native state redundancy failed:', err.message));
+      }
     } catch (error) {
       console.error('❌ Failed to save timer state:', error);
     }
@@ -1930,7 +1967,27 @@ class OfflineTimerService {
    */
   async loadState() {
     try {
-      const savedState = await AsyncStorage.getItem(OFFLINE_TIMER_KEY);
+      let savedState = await AsyncStorage.getItem(OFFLINE_TIMER_KEY);
+      
+      // REDUNDANCY: Try to recover from TRULY persistent Native Hardware Redundancy
+      const { TimerModule } = NativeModules;
+      if (TimerModule && TimerModule.getRedundancyData) {
+        try {
+          const nativeStateJson = await TimerModule.getRedundancyData('timer_state_full');
+          if (nativeStateJson) {
+            console.log('🛡️ Recovered FULL timer state from Native Hardware Redundancy (Keystore)');
+            if (!savedState) {
+              savedState = nativeStateJson;
+            } else {
+              // Optionally merge or prefer native if it's more recent? 
+              // For now, if AsyncStorage has data, we trust it (it's faster), 
+              // but if it's empty, we use native.
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Native redundancy recovery failed:', e.message);
+        }
+      }
       
       if (savedState) {
         const state = JSON.parse(savedState);
@@ -1961,6 +2018,7 @@ class OfflineTimerService {
           
           // Load disconnection tracking
           this.wasRunningBeforeDisconnect = state.wasRunningBeforeDisconnect || false;
+          this.wasManuallyStoppedInSameLecture = state.wasManuallyStoppedInSameLecture || false;
           this.disconnectionTime = state.disconnectionTime || null;
           this.pausedDueToWiFiLoss = state.pausedDueToWiFiLoss || false;
           this.previousLectureData = state.previousLectureData || null;

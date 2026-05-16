@@ -373,6 +373,7 @@ class ServerTime {
   isWithinTimeRange(startTime, endTime) {
     const currentMinutes = this.getCurrentTimeInMinutes();
 
+    if (typeof startTime !== 'string' || typeof endTime !== 'string') return false;
     const [startH, startM] = startTime.split(':').map(Number);
     const [endH, endM] = endTime.split(':').map(Number);
 

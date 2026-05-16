@@ -461,6 +461,7 @@ class WiFiManager {
 
         if (!periodInfo || period.isBreak) continue;
 
+        if (typeof periodInfo.startTime !== 'string' || typeof periodInfo.endTime !== 'string') continue;
         const [startH, startM] = periodInfo.startTime.split(':').map(Number);
         const [endH, endM] = periodInfo.endTime.split(':').map(Number);
 

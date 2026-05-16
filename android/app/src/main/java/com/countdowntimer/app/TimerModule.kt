@@ -318,4 +318,42 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
             promise.reject("DECRYPT_ERROR", e.message)
         }
     }
+    /**
+     * Save arbitrary redundancy data natively (survives AsyncStorage wipes)
+     */
+    @ReactMethod
+    fun saveRedundancyData(key: String, value: String, promise: Promise) {
+        try {
+            TimerModule.secureStorage?.saveRedundancyData(key, value)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SAVE_REDUNDANCY_ERROR", e.message)
+        }
+    }
+
+    /**
+     * Get arbitrary redundancy data natively
+     */
+    @ReactMethod
+    fun getRedundancyData(key: String, promise: Promise) {
+        try {
+            val value = TimerModule.secureStorage?.getRedundancyData(key)
+            promise.resolve(value)
+        } catch (e: Exception) {
+            promise.reject("GET_REDUNDANCY_ERROR", e.message)
+        }
+    }
+
+    /**
+     * Clear specific redundancy data natively
+     */
+    @ReactMethod
+    fun clearRedundancyData(key: String, promise: Promise) {
+        try {
+            TimerModule.secureStorage?.clearRedundancyData(key)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("CLEAR_REDUNDANCY_ERROR", e.message)
+        }
+    }
 }

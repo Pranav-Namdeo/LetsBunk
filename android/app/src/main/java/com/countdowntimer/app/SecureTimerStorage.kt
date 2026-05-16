@@ -43,6 +43,7 @@ class SecureTimerStorage(private val context: Context) {
         
         // Backup file for extra persistence
         private const val BACKUP_FILE = "timer_backup.enc"
+        private const val REDUNDANCY_PREFS = "redundancy_prefs"
         
         // Keystore alias
         private const val KEYSTORE_ALIAS = "SecureTimerKey"
@@ -58,9 +59,49 @@ class SecureTimerStorage(private val context: Context) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     }
 
+    private val redundancyPrefs: SharedPreferences by lazy {
+        context.getSharedPreferences(REDUNDANCY_PREFS, Context.MODE_PRIVATE)
+    }
+
     private val keystoreKey: SecretKey by lazy {
         getOrCreateKeystoreKey()
     }
+
+    /**
+     * Save arbitrary redundancy data (encrypted)
+     */
+    fun saveRedundancyData(key: String, value: String) {
+        try {
+            val encrypted = encrypt(value)
+            redundancyPrefs.edit()
+                .putString(key, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+                .apply()
+        } catch (e: Exception) {
+            // Ignore
+        }
+    }
+
+    /**
+     * Get arbitrary redundancy data (decrypted)
+     */
+    fun getRedundancyData(key: String): String? {
+        try {
+            val encryptedBase64 = redundancyPrefs.getString(key, null) ?: return null
+            val encryptedData = Base64.decode(encryptedBase64, Base64.NO_WRAP)
+            return decrypt(encryptedData)
+        } catch (e: Exception) {
+            return null
+        }
+    }
+
+    /**
+     * Clear specific redundancy data
+     */
+    fun clearRedundancyData(key: String) {
+        redundancyPrefs.edit().remove(key).apply()
+    }
+
+    private val keystoreKeyAt: Long = 0 // Dummy to maintain structure if needed
 
     /**
      * Get or create a hardware-backed keystore key

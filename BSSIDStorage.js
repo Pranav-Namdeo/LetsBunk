@@ -69,6 +69,7 @@ const KEYS = {
   BSSID_SCHEDULE: '@letsbunk_bssid_schedule',
   BSSID_DATE: '@letsbunk_bssid_date',
   BSSID_CACHED_AT: '@letsbunk_bssid_cached_at',
+  BSSID_REDUNDANCY: '@letsbunk_bssid_redundancy',
 };
 
 class BSSIDStorage {
@@ -100,6 +101,19 @@ class BSSIDStorage {
       await AsyncStorage.setItem(KEYS.BSSID_CACHED_AT, cachedAtStr);
       
       console.log(`✅ BSSID schedule saved for ${today} (${schedule.length} periods)`);
+      
+      // Native Keystore Redundancy (survives AsyncStorage wipes)
+      try {
+        const redundancyData = JSON.stringify({ schedule, date: today });
+        const { TimerModule } = NativeModules;
+        if (TimerModule && TimerModule.saveRedundancyData) {
+          await TimerModule.saveRedundancyData('bssid_schedule_redundancy', redundancyData);
+          console.log('🛡️ BSSID schedule redundancy saved to Hardware-backed Secure Storage');
+        }
+      } catch (redundancyErr) {
+        console.warn('⚠️ Failed to save native BSSID redundancy:', redundancyErr.message);
+      }
+
       return true;
     } catch (error) {
       console.error('❌ Error saving BSSID schedule:', error);
@@ -118,7 +132,28 @@ class BSSIDStorage {
       const today = _getTodayString();
       
       if (!scheduleString || !savedDate) {
-        console.log('📭 No BSSID schedule found in storage');
+        console.log('📭 No BSSID schedule found in AsyncStorage, checking Keystore redundancy...');
+        
+        // Try recovery from Native Redundancy (TRULY persistent)
+        try {
+          const { TimerModule } = NativeModules;
+          if (TimerModule && TimerModule.getRedundancyData) {
+            const decrypted = await TimerModule.getRedundancyData('bssid_schedule_redundancy');
+            if (decrypted) {
+              const recovered = JSON.parse(decrypted);
+              if (recovered && recovered.date === today && recovered.schedule) {
+                console.log('🛡️ BSSID schedule recovered from Native Hardware Redundancy');
+                // Backfill AsyncStorage for performance
+                await AsyncStorage.setItem(KEYS.BSSID_SCHEDULE, JSON.stringify(recovered.schedule));
+                await AsyncStorage.setItem(KEYS.BSSID_DATE, recovered.date);
+                return recovered.schedule;
+              }
+            }
+          }
+        } catch (recoveryErr) {
+          console.warn('⚠️ Native BSSID recovery failed:', recoveryErr.message);
+        }
+
         return null;
       }
 
@@ -129,7 +164,20 @@ class BSSIDStorage {
         return null;
       }
 
-      const schedule = JSON.parse(scheduleString);
+      let schedule;
+      try {
+        schedule = JSON.parse(scheduleString);
+      } catch (e) {
+        console.error('❌ Error parsing BSSID schedule JSON:', e);
+        return null;
+      }
+
+      if (!Array.isArray(schedule)) {
+        console.warn('⚠️ BSSID schedule is not an array, clearing...');
+        await this.clearSchedule();
+        return null;
+      }
+
       console.log(`📥 BSSID schedule retrieved (${schedule.length} periods for ${savedDate})`);
       return schedule;
     } catch (error) {
@@ -156,11 +204,16 @@ class BSSIDStorage {
 
       // Find current period
       for (const period of schedule) {
+        if (!period || typeof period.startTime !== 'string' || typeof period.endTime !== 'string') {
+          console.warn(`⚠️ Skipping invalid period ${period?.period || 'unknown'}:`, period);
+          continue;
+        }
+
         const [startHour, startMin] = period.startTime.split(':').map(Number);
         const [endHour, endMin] = period.endTime.split(':').map(Number);
         
-        const startMinutes = startHour * 60 + startMin;
-        const endMinutes = endHour * 60 + endMin;
+        const startMinutes = (startHour || 0) * 60 + (startMin || 0);
+        const endMinutes = (endHour || 0) * 60 + (endMin || 0);
 
         if (currentTime >= startMinutes && currentTime < endMinutes) {
           // Format BSSID for logging
@@ -273,28 +326,36 @@ class BSSIDStorage {
       const savedDate = await AsyncStorage.getItem(KEYS.BSSID_DATE);
       const today = _getTodayString();
       
-      if (!savedDate) {
-        console.log('🔄 BSSID schedule needs refresh: No data');
-        return true;
+      if (savedDate === today) {
+        console.log('✅ BSSID schedule is up to date in AsyncStorage');
+        return false;
       }
 
-      if (savedDate !== today) {
-        console.log(`🔄 BSSID schedule needs refresh: Date mismatch (${savedDate} vs ${today})`);
-        return true;
+      // Check native redundancy before deciding we need a refresh
+      const { TimerModule } = NativeModules;
+      if (TimerModule && TimerModule.getRedundancyData) {
+        try {
+          const decrypted = await TimerModule.getRedundancyData('bssid_schedule_redundancy');
+          if (decrypted) {
+            const recovered = JSON.parse(decrypted);
+            if (recovered && recovered.date === today) {
+              console.log('✅ BSSID schedule is available in Native Hardware Redundancy');
+              return false;
+            }
+          }
+        } catch (e) {
+          console.log('🛡️ Native redundancy check failed in needsRefresh');
+        }
       }
 
-      console.log('✅ BSSID schedule is up to date');
-      return false;
+      console.log('🔄 BSSID schedule needs refresh (outdated or missing)');
+      return true;
     } catch (error) {
       console.error('❌ Error checking refresh status:', error);
       return true;
     }
   }
 
-  /**
-   * Clear BSSID schedule
-   * @returns {Promise<boolean>} Success status
-   */
   static async clearSchedule() {
     try {
       await AsyncStorage.multiRemove([
@@ -302,6 +363,11 @@ class BSSIDStorage {
         KEYS.BSSID_DATE,
         KEYS.BSSID_CACHED_AT,
       ]);
+      
+      const { TimerModule } = NativeModules;
+      if (TimerModule && TimerModule.clearRedundancyData) {
+        await TimerModule.clearRedundancyData('bssid_schedule_redundancy');
+      }
       console.log('🗑️ BSSID schedule cleared');
       return true;
     } catch (error) {
