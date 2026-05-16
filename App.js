@@ -959,7 +959,7 @@ export default function App() {
     fetchOfflinePeriod();
     const interval = setInterval(fetchOfflinePeriod, 15000); // 15 seconds for faster period detection
     return () => clearInterval(interval);
-  }, [selectedRole]);
+  }, [selectedRole, studentId]);
 
   useEffect(() => {
     // Request all required permissions on first launch
@@ -1100,6 +1100,7 @@ export default function App() {
 
   // Initialize OfflineTimerService when student logs in
   useEffect(() => {
+    console.log('🔍 OfflineTimer init check:', { selectedRole, studentId: !!studentId, showLogin, offlineTimerInitialized });
     if (selectedRole === 'student' && studentId && !showLogin && !offlineTimerInitialized) {
       const initializeOfflineTimer = async () => {
         try {
@@ -1108,12 +1109,12 @@ export default function App() {
           const success = await OfflineTimerService.initialize(studentId, SOCKET_URL);
 
           if (success) {
-            // Update student data for BSSID validation
+            // Update student data for BSSID validation — run in background, don't block init
             if (userData) {
-              await OfflineTimerService.updateStudentData({
+              OfflineTimerService.updateStudentData({
                 semester: userData.semester,
                 branch: userData.branch
-              });
+              }).catch(() => {});
             }
 
             // Setup event listeners
@@ -1414,7 +1415,10 @@ export default function App() {
     isTimerActionInProgress.current = true;
 
     try {
-      if (!offlineTimerInitialized || !currentClassInfo) {
+      // Allow start if either currentClassInfo OR offlinePeriod is active
+      // (offline mode: currentClassInfo may be null but offlinePeriod is valid)
+      const hasActivePeriod = currentClassInfo || (offlinePeriod && !offlinePeriod.isBreak && offlinePeriod.subject);
+      if (!offlineTimerInitialized || !hasActivePeriod) {
         showToast('⚠️ Timer not available — no active lecture', 'warning');
         return;
       }
@@ -1447,18 +1451,18 @@ export default function App() {
       // Extract current lecture info — prefer offline schedule (BSSIDStorage) as source of truth
       // offlinePeriod has the correct subject/teacher/room/time for the current period
       const lectureInfo = offlinePeriod ? {
-        subject: offlinePeriod.subject || currentClassInfo.subject,
-        teacher: offlinePeriod.teacher || offlinePeriod.teacherName || currentClassInfo.teacher || 'Unknown',
-        room: offlinePeriod.room || currentClassInfo.room || 'Unknown',
-        startTime: offlinePeriod.startTime || currentClassInfo.startTime,
-        endTime: offlinePeriod.endTime || currentClassInfo.endTime,
+        subject: offlinePeriod.subject || currentClassInfo?.subject,
+        teacher: offlinePeriod.teacher || offlinePeriod.teacherName || currentClassInfo?.teacher || 'Unknown',
+        room: offlinePeriod.room || currentClassInfo?.room || 'Unknown',
+        startTime: offlinePeriod.startTime || currentClassInfo?.startTime,
+        endTime: offlinePeriod.endTime || currentClassInfo?.endTime,
         period: offlinePeriod.period || null,
       } : {
-        subject: currentClassInfo.subject,
-        teacher: currentClassInfo.teacher || 'Unknown',
-        room: currentClassInfo.room || 'Unknown',
-        startTime: currentClassInfo.startTime,
-        endTime: currentClassInfo.endTime
+        subject: currentClassInfo?.subject,
+        teacher: currentClassInfo?.teacher || 'Unknown',
+        room: currentClassInfo?.room || 'Unknown',
+        startTime: currentClassInfo?.startTime,
+        endTime: currentClassInfo?.endTime
       };
 
       const result = await OfflineTimerService.startTimer(lectureInfo);
@@ -2203,10 +2207,12 @@ export default function App() {
       if (cachedUserData && cachedLoginId) {
         try {
           const userData = normalizeStudentUserData(JSON.parse(cachedUserData));
+          console.log('📱 Restoring cached session for:', userData.role, userData.enrollmentNo || userData.email);
           setUserData(userData);
           setLoginId(cachedLoginId);
           setSelectedRole(userData.role);
           setShowLogin(false);
+          console.log('📱 showLogin set to false, selectedRole:', userData.role);
 
           if (userData.role === 'student') {
             setStudentName(userData.name);
@@ -2241,6 +2247,23 @@ export default function App() {
             }
             if (userData.branch) {
               AsyncStorage.setItem(BRANCH_KEY, userData.branch).catch(() => { });
+            }
+
+            // Immediately load offline BSSID schedule from cache on app restore.
+            // This runs BEFORE the 15s fetchOfflinePeriod poll fires, so the
+            // timer card and START TIMER button appear instantly even with no internet.
+            if (enrollmentNo) {
+              BSSIDStorage.getCurrentPeriodBSSID()
+                .then(period => {
+                  if (period) {
+                    console.log('📦 Restored offline period from cache:', period.subject);
+                    setOfflinePeriod(period);
+                  } else {
+                    // No cached period yet — try fetching from server in background
+                    fetchDailyBSSIDSchedule(enrollmentNo, false).catch(() => {});
+                  }
+                })
+                .catch(() => {});
             }
 
             // Check if face verification is still valid for today
@@ -2633,6 +2656,9 @@ dayKeys.forEach((dayKey) => {
 
         if (!needsRefresh) {
           console.log('✅ Using cached BSSID schedule');
+          // Still trigger offlinePeriod refresh so UI shows current period immediately
+          const currentPeriod = await BSSIDStorage.getCurrentPeriodBSSID();
+          if (currentPeriod) setOfflinePeriod(currentPeriod);
           return;
         }
       }
@@ -2649,10 +2675,11 @@ dayKeys.forEach((dayKey) => {
         await BSSIDStorage.saveDailySchedule(data.schedule);
         console.log(`✅ Cached ${data.schedule.length} periods for ${data.dayName}`);
 
+        // Immediately refresh offlinePeriod so UI updates without waiting for the 15s poll
+        const currentPeriod = await BSSIDStorage.getCurrentPeriodBSSID();
+        if (currentPeriod) setOfflinePeriod(currentPeriod);
+
         // Also refresh face embedding cache whenever the offline schedule is updated.
-        // This keeps the face data in sync with the BSSID schedule so both are
-        // always fresh after any online sync, and offline face verification always
-        // has the latest embedding available.
         (async () => {
           try {
             const faceResponse = await fetch(
@@ -2672,10 +2699,28 @@ dayKeys.forEach((dayKey) => {
           }
         })();
       } else {
-        console.log('⚠️ No BSSID schedule available:', data.message);
+        console.log('⚠️ No BSSID schedule available from server:', data.message);
+        // Fall back to existing cached schedule so offline mode still works
+        const currentPeriod = await BSSIDStorage.getCurrentPeriodBSSID();
+        if (currentPeriod) {
+          console.log('📦 Using existing cached schedule for offline mode');
+          setOfflinePeriod(currentPeriod);
+        }
       }
     } catch (error) {
-      console.error('❌ Error fetching BSSID schedule:', error);
+      console.error('❌ Error fetching BSSID schedule (network error):', error.message);
+      // Network is down — use whatever is already cached on device
+      try {
+        const currentPeriod = await BSSIDStorage.getCurrentPeriodBSSID();
+        if (currentPeriod) {
+          console.log('📦 Offline: using cached BSSID schedule for current period');
+          setOfflinePeriod(currentPeriod);
+        } else {
+          console.log('⚠️ No cached BSSID schedule available offline');
+        }
+      } catch (cacheError) {
+        console.error('❌ Failed to read cached schedule:', cacheError.message);
+      }
     }
   };
 

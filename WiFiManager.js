@@ -358,9 +358,24 @@ class WiFiManager {
       if (serverUrl) {
         console.log('📥 Fetching authorized BSSIDs from server...');
 
-        // Get classrooms with BSSID data
-        const classroomResponse = await fetch(GET_CLASSROOMS);
-        const classroomData = await classroomResponse.json();
+        // Get classrooms with BSSID data — 5s timeout so offline doesn't hang
+        let classroomData;
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 5000);
+          const classroomResponse = await fetch(GET_CLASSROOMS, { signal: controller.signal });
+          clearTimeout(timeoutId);
+          classroomData = await classroomResponse.json();
+        } catch (fetchError) {
+          console.warn('⚠️ Could not fetch classrooms (offline?), using cached BSSIDs:', fetchError.message);
+          // Fall back to cached BSSIDs
+          const cached = await AsyncStorage.getItem(AUTHORIZED_BSSIDS_KEY);
+          if (cached) {
+            this.authorizedBSSIDs = JSON.parse(cached);
+            console.log(`📱 Loaded ${this.authorizedBSSIDs.length} cached BSSIDs (offline fallback)`);
+          }
+          return; // Exit early — BSSIDStorage handles per-period validation anyway
+        }
 
         if (classroomData.success && classroomData.classrooms) {
           this.authorizedBSSIDs = classroomData.classrooms

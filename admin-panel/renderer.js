@@ -282,7 +282,7 @@ if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') 
     localStorage.removeItem('serverUrl');
 }
 
-const DEFAULT_SERVER_URL = 'https://letsbunk-uw7g.onrender.com';
+const DEFAULT_SERVER_URL = 'https://letsbunk-omqs.onrender.com';
 let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
 // Endpoint helpers for the classic Electron renderer script.
@@ -4026,7 +4026,7 @@ async function editClassroom(id) {
         };
 
         try {
-            const response = await fetch(GET_CLASSROOMS, {
+            const response = await fetch(`${GET_CLASSROOMS}/${encodeURIComponent(id)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(classroomData)
@@ -4037,7 +4037,8 @@ async function editClassroom(id) {
                 closeModal();
                 loadClassrooms();
             } else {
-                showNotification('Failed to update classroom', 'error');
+                const errData = await response.json().catch(() => ({}));
+                showNotification(errData.error || 'Failed to update classroom', 'error');
             }
         } catch (error) {
             showNotification('Error: ' + error.message, 'error');

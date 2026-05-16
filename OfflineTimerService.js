@@ -184,10 +184,10 @@ class OfflineTimerService {
 
       // Setup midnight reset for verifiedToday flag
       this._scheduleMidnightReset();
-      
-      // Initial connectivity check and notification
-      await this.checkInternetConnectivity();
-      
+
+      // Initial connectivity check — run in background, don't block initialization
+      this.checkInternetConnectivity().catch(() => {});
+
       console.log('✅ Offline Timer Service initialized');
       return true;
     } catch (error) {
@@ -323,7 +323,12 @@ class OfflineTimerService {
           try {
             console.log('📡 Fetching existing attendance from server for initial state...');
             const todayStr = this._getISTDateString();
-            const response = await fetch(`${this.serverUrl}/api/attendance/student/${this.studentId}/date/${todayStr}`);
+            const attController = new AbortController();
+            const attTimeout = setTimeout(() => attController.abort(), 5000);
+            const response = await fetch(`${this.serverUrl}/api/attendance/student/${this.studentId}/date/${todayStr}`, {
+              signal: attController.signal
+            });
+            clearTimeout(attTimeout);
             if (response.ok) {
               const data = await response.json();
               if (data.success && data.record && data.record.lectures) {
@@ -336,7 +341,7 @@ class OfflineTimerService {
               }
             }
           } catch (err) {
-            console.log('⚠️ Failed to fetch existing attendance:', err.message);
+            console.log('⚠️ Failed to fetch existing attendance (offline?):', err.message);
           }
         }
 
@@ -376,13 +381,12 @@ class OfflineTimerService {
           skippedFaceVerification: !needsFaceVerification
         });
 
-        // Step 4: Register check-in on server only when face verification actually ran
+        // Step 4: Register check-in and sync — run in background, don't block success return.
+        // Timer is already running at this point. Network calls should never delay the UI response.
         if (needsFaceVerification) {
-          await this.registerCheckIn(lectureInfo, bssidCheck.currentBSSID, faceVerificationResult);
+          this.registerCheckIn(lectureInfo, bssidCheck.currentBSSID, faceVerificationResult).catch(() => {});
         }
-
-        // Try to sync with server
-        await this.syncToServer();
+        this.syncToServer().catch(() => {});
 
         console.log('✅ Offline timer started successfully', !needsFaceVerification ? '(face verification skipped)' : '(with face verification)');
         return {
@@ -469,23 +473,43 @@ class OfflineTimerService {
   }
 
   /**
-   * Get student's face embedding from server.
-   * Cached locally — only re-fetches after 7 days or if cache is empty.
+   * Get student's face embedding.
+   * Priority order:
+   *   1. In-memory cache (fastest, valid for 7 days since last fetch)
+   *   2. Persistent SecureStorage cache (survives app restarts — written at login & BSSID refresh)
+   *   3. Live server fetch (requires internet)
+   *   4. Stale in-memory cache (last resort if server unreachable)
    */
   async getStudentFaceData() {
     try {
       const todayStr = this._getISTDateString();
 
-      // Return cached embedding if it's less than 7 days old
+      // 1. Return in-memory cache if it's less than 7 days old
       if (this._cachedFaceEmbedding && this._cachedFaceEmbeddingDate) {
         const cachedDate = new Date(this._cachedFaceEmbeddingDate);
         const daysDiff = (Date.now() - cachedDate.getTime()) / (1000 * 60 * 60 * 24);
         if (daysDiff < 7) {
-          console.log('📦 Using cached face embedding (cached on', this._cachedFaceEmbeddingDate, ')');
+          console.log('📦 Using in-memory cached face embedding (cached on', this._cachedFaceEmbeddingDate, ')');
           return { success: true, embedding: this._cachedFaceEmbedding, enrolledAt: this._cachedFaceEmbeddingDate };
         }
       }
 
+      // 2. Try persistent SecureStorage cache (written at login & BSSID schedule refresh)
+      //    This is the key offline fallback — works even after app restart with no internet.
+      try {
+        const persistedCache = await SecureStorage.getCachedServerEmbedding();
+        if (persistedCache && Array.isArray(persistedCache.embedding) && persistedCache.embedding.length > 0) {
+          console.log('💾 Using persistent SecureStorage face embedding (offline fallback)');
+          // Warm the in-memory cache so subsequent calls in this session are instant
+          this._cachedFaceEmbedding = persistedCache.embedding;
+          this._cachedFaceEmbeddingDate = persistedCache.enrolledAt || todayStr;
+          return { success: true, embedding: persistedCache.embedding, enrolledAt: persistedCache.enrolledAt };
+        }
+      } catch (storageError) {
+        console.warn('⚠️ SecureStorage read failed, proceeding to server fetch:', storageError.message);
+      }
+
+      // 3. Fetch from server (requires internet)
       console.log('📡 Fetching fresh face embedding from server...');
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
@@ -510,18 +534,19 @@ class OfflineTimerService {
         return { success: false, error: 'No face embedding found. Please enroll your face first.' };
       }
 
-      // Cache the embedding
+      // Cache in memory and persist to SecureStorage for future offline use
       this._cachedFaceEmbedding = data.faceEmbedding;
       this._cachedFaceEmbeddingDate = todayStr;
-      console.log('✅ Face embedding fetched and cached');
+      SecureStorage.saveCachedServerEmbedding(data.faceEmbedding, data.enrolledAt || todayStr).catch(() => {});
+      console.log('✅ Face embedding fetched from server and cached');
 
       return { success: true, embedding: data.faceEmbedding, enrolledAt: data.enrolledAt };
 
     } catch (error) {
       console.error('❌ Error fetching face data:', error);
-      // If we have a stale cache, use it rather than failing completely
+      // 4. Last resort: stale in-memory cache
       if (this._cachedFaceEmbedding) {
-        console.warn('⚠️ Using stale cached face embedding due to fetch error');
+        console.warn('⚠️ Using stale in-memory face embedding due to fetch error');
         return { success: true, embedding: this._cachedFaceEmbedding, enrolledAt: this._cachedFaceEmbeddingDate };
       }
       return { success: false, error: `Failed to fetch face data: ${error.message}` };
@@ -554,9 +579,12 @@ class OfflineTimerService {
         timestamp = new Date(_getBootMs() || Date.now()).toISOString();
       }
 
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000); // 8s timeout — skip if offline
       const response = await fetch(POST_ATTENDANCE_CHECK_IN, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           enrollmentNo: this.studentId,
           faceEmbedding: storedEmbedding,
@@ -564,6 +592,7 @@ class OfflineTimerService {
           timestamp,
         }),
       });
+      clearTimeout(timeoutId);
 
       const data = await response.json();
 
@@ -697,9 +726,9 @@ class OfflineTimerService {
         });
       }
       
-      // Step 5: Save state and sync
+      // Step 5: Save state and sync — sync is fire-and-forget (don't block reconnection return)
       await this.saveState();
-      await this.syncToServer();
+      this.syncToServer().catch(() => {});
       
       console.log('✅ WiFi reconnection handled successfully');
       return {
