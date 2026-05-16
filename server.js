@@ -1073,7 +1073,7 @@ app.post('/api/periods/update-all', async (req, res) => {
             // Re-sync all student attendance records for today to match new period settings structure (Show all periods 0%)
             (async () => {
                 try {
-                    const today = new Date(); today.setHours(0, 0, 0, 0);
+                    const today = getISTMidnight();
                     const students = await StudentManagement.find({}).lean();
                     console.log(`🔄 [PERIOD-SYNC] Re-syncing ${students.length} students to match new period settings...`);
                     for (const s of students) {
@@ -1664,6 +1664,18 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
 });
 
 // Helper function to convert time string to minutes (single definition)
+// Helper to get start of day in IST (Asia/Kolkata) regardless of server timezone
+function getISTMidnight(date = new Date()) {
+    const d = new Date(date);
+    const offset = 5.5 * 60 * 60 * 1000; // IST is UTC + 5:30
+    const istTime = new Date(d.getTime() + offset);
+    const y = istTime.getUTCFullYear();
+    const m = istTime.getUTCMonth();
+    const day = istTime.getUTCDate();
+    // Return the UTC date that corresponds to 00:00:00 IST
+    return new Date(Date.UTC(y, m, day, 0, 0, 0) - offset);
+}
+
 function timeToMinutes(timeStr) {
     if (!timeStr) return 0;
     const [hours, minutes] = timeStr.split(':').map(Number);
@@ -1796,12 +1808,12 @@ io.on('connection', (socket) => {
 // ─── Helper: sync AttendanceRecord from PeriodAttendance (status + lectures) ──
 async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, branch, threshold = 75) {
     try {
-        const midnight = new Date(date); midnight.setHours(0, 0, 0, 0);
-        const nextDay  = new Date(midnight); nextDay.setDate(nextDay.getDate() + 1);
+        const midnight = getISTMidnight(date);
+        const nextDay  = new Date(midnight.getTime() + 86400000);
 
-        // 1. Fetch student's canonical info (to ensure correct branch/semester match)
+        // 1. Fetch student's canonical info
         const student = await StudentManagement.findOne({ enrollmentNo });
-        const canonicalSemester = student ? Number(student.semester) : Number(semester);
+        const canonicalSemester = (student ? student.semester : semester)?.toString();
         const canonicalBranch   = student ? student.branch : branch;
 
         // 2. Fetch timetable for this student's class
@@ -1923,6 +1935,9 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
         const totalClassSec     = lecturesWithTime.reduce((s, l) => s + (l.total    || 0), 0);
         const totalAttendedMin  = Math.floor(totalAttendedSec / 60);
         const totalClassMin     = Math.floor(totalClassSec    / 60);
+
+        const dayPercentage = totalClassSec > 0 ? Math.round((totalAttendedSec / totalClassSec) * 100) : 0;
+        const dayStatus = hasActiveTimer ? 'attending' : (dayPercentage >= threshold ? 'present' : 'absent');
 
         await AttendanceRecord.findOneAndUpdate(
             { enrollmentNo, date: midnight },   // simple filter — enrollmentNo is canonical key
@@ -2976,10 +2991,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 2b. Guard: reject sync if student has no verified check-in for today
         const syncDate = new Date(timestamp);
-        const todayStart = new Date(syncDate);
-        todayStart.setHours(0, 0, 0, 0);
-        const todayEnd = new Date(todayStart);
-        todayEnd.setDate(todayEnd.getDate() + 1);
+        const todayStart = getISTMidnight(syncDate);
+        const todayEnd = new Date(todayStart.getTime() + 86400000);
 
         const hasCheckedIn = await PeriodAttendance.exists({
             enrollmentNo: studentId,
@@ -8406,8 +8419,7 @@ cron.schedule('5 0 * * *', async () => {
 cron.schedule('10 0 * * *', async () => {
     console.log('🏁 [CRON] Pre-initializing daily attendance records for all students...');
     try {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = getISTMidnight();
         
         const students = await StudentManagement.find({}).lean();
         let initialized = 0;
@@ -9981,8 +9993,7 @@ app.get('/api/attendance/manage', async (req, res) => {
         // 2. Fetch records with student details
         if (studentId) {
             try {
-                const today = new Date();
-                today.setHours(0, 0, 0, 0);
+                const today = getISTMidnight();
                 const student = await StudentManagement.findOne({ enrollmentNo: studentId });
                 if (student) {
                     await syncAttendanceRecord(
