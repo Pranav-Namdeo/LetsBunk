@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Animated, Modal, ScrollView } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, FlatList, Image, Animated, Modal, ScrollView, PanResponder, Dimensions, ActivityIndicator } from 'react-native';
 import FilterButtons from './FilterButtons';
 import StudentSearch from './StudentSearch';
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 // Separate Header component to prevent re-mounting and focus loss
 const ListHeader = React.memo(({ 
@@ -49,12 +51,25 @@ const ListHeader = React.memo(({
   );
 });
 
-const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = null, onTeacherAction, refreshControl }) => {
+const StudentList = ({ 
+  theme, 
+  students = [], 
+  onStudentPress, 
+  activeRandomRing = null, 
+  onTeacherAction, 
+  onManualMark,
+  currentClassInfo = null,
+  refreshControl 
+}) => {
   const [selectedFilter, setSelectedFilter] = useState('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [isPaginationModalVisible, setIsPaginationModalVisible] = useState(false);
+  
+  const [manualMarkModal, setManualMarkModal] = useState({ visible: false, student: null });
+  const [markingLoading, setMarkingLoading] = useState(false);
+
   const pageSize = 50;
 
   useEffect(() => {
@@ -93,19 +108,39 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
   const presentCount = useMemo(() => students.filter(s => s.status === 'present').length, [students]);
 
   const sortedStudents = useMemo(() => {
-    let list = filteredStudents;
-    if (activeRandomRing?.selectedStudents?.length) {
-      const ringMap = new Map(
-        activeRandomRing.selectedStudents.map(s => [s.enrollmentNo, s])
-      );
-      const isFloating = (s) => {
-        const rs = ringMap.get(s.enrollmentNo);
-        return rs && rs.teacherAction === 'pending' && !rs.verified;
-      };
-      const floating = list.filter(isFloating);
-      const rest     = list.filter(s => !isFloating(s));
-      list = [...floating, ...rest];
-    }
+    let list = [...filteredStudents];
+    
+    const ringMap = activeRandomRing?.selectedStudents?.length ? new Map(
+      activeRandomRing.selectedStudents.map(s => [s.enrollmentNo, s])
+    ) : null;
+
+    list.sort((a, b) => {
+      // 1. Floating (random ring)
+      if (ringMap) {
+        const ra = ringMap.get(a.enrollmentNo);
+        const rb = ringMap.get(b.enrollmentNo);
+        const aIsFloating = ra && ra.teacherAction === 'pending' && !ra.verified;
+        const bIsFloating = rb && rb.teacherAction === 'pending' && !rb.verified;
+        if (aIsFloating && !bIsFloating) return -1;
+        if (!aIsFloating && bIsFloating) return 1;
+      }
+
+      // 2. Manually marked
+      const aIsManual = !!a.markedByName;
+      const bIsManual = !!b.markedByName;
+      if (aIsManual && !bIsManual) return -1;
+      if (!aIsManual && bIsManual) return 1;
+
+      // 3. Status priority (active > present > offline > absent)
+      const statusWeight = { active: 0, present: 1, offline: 2, absent: 3 };
+      const wa = statusWeight[a.status] || 4;
+      const wb = statusWeight[b.status] || 4;
+      if (wa !== wb) return wa - wb;
+
+      // 4. Name alphabetical
+      return (a.name || '').localeCompare(b.name || '');
+    });
+
     return list;
   }, [filteredStudents, activeRandomRing]);
 
@@ -145,6 +180,20 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
     }
   }, [selectedFilter]);
 
+  const handleConfirmManualMark = async (scope) => {
+    if (!onManualMark || !manualMarkModal.student) return;
+    
+    setMarkingLoading(true);
+    try {
+      await onManualMark(manualMarkModal.student.enrollmentNo, scope);
+      setManualMarkModal({ visible: false, student: null });
+    } catch (error) {
+      console.error('Manual mark failed:', error);
+    } finally {
+      setMarkingLoading(false);
+    }
+  };
+
   const renderStudentItem = useCallback(({ item: student, index }) => {
     const randomRingStudent = activeRandomRing?.selectedStudents?.find(s =>
       s.enrollmentNo === student.enrollmentNo
@@ -164,6 +213,7 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
         onTeacherAction={onTeacherAction || (() => {})}
         randomRingId={activeRandomRing?.ringId || activeRandomRing?._id}
         isFloating={isFloating}
+        onPresentSwipe={() => setManualMarkModal({ visible: true, student })}
       />
     );
   }, [theme, scrollY, onStudentPress, activeRandomRing, onTeacherAction]);
@@ -210,6 +260,56 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
         )}
         scrollEventThrottle={16}
       />
+
+      {/* Manual Mark Scope Modal */}
+      <Modal
+        visible={manualMarkModal.visible}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setManualMarkModal({ visible: false, student: null })}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={[styles.choiceModal, { backgroundColor: theme.cardBackground }]}>
+            <Text style={[styles.choiceTitle, { color: theme.text }]}>Manual Attendance</Text>
+            <Text style={[styles.choiceSub, { color: theme.textSecondary }]}>
+              Mark {manualMarkModal.student?.name} as present
+            </Text>
+            
+            <View style={styles.choiceOptions}>
+              <TouchableOpacity 
+                style={[styles.choiceBtn, { backgroundColor: theme.primary + '15', borderColor: theme.primary + '30' }]}
+                onPress={() => handleConfirmManualMark('current')}
+                disabled={markingLoading}
+              >
+                <Text style={{ fontSize: 24, marginBottom: 8 }}>📖</Text>
+                <Text style={[styles.choiceBtnTitle, { color: theme.text }]}>Current Class</Text>
+                <Text style={[styles.choiceBtnSub, { color: theme.textSecondary }]}>Mark only this lecture</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.choiceBtn, { backgroundColor: '#10b981' + '15', borderColor: '#10b981' + '30' }]}
+                onPress={() => handleConfirmManualMark('allday')}
+                disabled={markingLoading}
+              >
+                <Text style={{ fontSize: 24, marginBottom: 8 }}>☀️</Text>
+                <Text style={[styles.choiceBtnTitle, { color: theme.text }]}>All Day</Text>
+                <Text style={[styles.choiceBtnSub, { color: theme.textSecondary }]}>Mark all periods today</Text>
+              </TouchableOpacity>
+            </View>
+
+            {markingLoading ? (
+              <ActivityIndicator color={theme.primary} style={{ marginTop: 20 }} />
+            ) : (
+              <TouchableOpacity 
+                style={styles.cancelBtn}
+                onPress={() => setManualMarkModal({ visible: false, student: null })}
+              >
+                <Text style={[styles.cancelBtnText, { color: theme.textSecondary }]}>Cancel</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </Modal>
 
       <Modal
         visible={isPaginationModalVisible}
@@ -265,7 +365,18 @@ const StudentList = ({ theme, students = [], onStudentPress, activeRandomRing = 
   );
 };
 
-const StudentItem = React.memo(({ student, theme, index, scrollY, onPress, randomRingStudent, onTeacherAction, randomRingId, isFloating }) => {
+const StudentItem = React.memo(({ 
+  student, 
+  theme, 
+  index, 
+  scrollY, 
+  onPress, 
+  randomRingStudent, 
+  onTeacherAction, 
+  randomRingId, 
+  isFloating,
+  onPresentSwipe
+}) => {
   const [displaySecs, setDisplaySecs] = useState(student.timerValue || 0);
   const [actionLoading, setActionLoading] = useState(false);
   const intervalRef = useRef(null);
@@ -274,6 +385,49 @@ const StudentItem = React.memo(({ student, theme, index, scrollY, onPress, rando
 
   const slideAnim = useRef(new Animated.Value(isFloating ? -60 : 0)).current;
   const glowAnim  = useRef(new Animated.Value(0)).current;
+  
+  // Swipe animation
+  const swipeX = useRef(new Animated.Value(0)).current;
+  const swipedOut = useRef(false);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dx) > 10,
+      onPanResponderMove: (_, gestureState) => {
+        // Only allow R2L swipe (negative dx)
+        if (gestureState.dx < 0) {
+          swipeX.setValue(gestureState.dx);
+        }
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx < -100) {
+          // Trigger swipe reveal
+          Animated.spring(swipeX, {
+            toValue: -100,
+            useNativeDriver: false,
+            tension: 40,
+            friction: 7
+          }).start();
+          swipedOut.current = true;
+        } else {
+          // Snap back
+          Animated.spring(swipeX, {
+            toValue: 0,
+            useNativeDriver: false,
+            tension: 40,
+            friction: 7
+          }).start();
+          swipedOut.current = false;
+        }
+      },
+    })
+  ).current;
+
+  const resetSwipe = useCallback(() => {
+    Animated.spring(swipeX, { toValue: 0, useNativeDriver: false }).start();
+    swipedOut.current = false;
+  }, []);
 
   useEffect(() => {
     if (isFloating) {
@@ -367,69 +521,100 @@ const StudentItem = React.memo(({ student, theme, index, scrollY, onPress, rando
 
   return (
     <Animated.View style={{ transform: [{ translateY: slideAnim }] }}>
-      <Animated.View style={[
-        styles.studentCard,
-        { backgroundColor: theme.cardBackground, borderColor: isFloating ? glowBorder : theme.border },
-        isFloating && styles.floatingCard,
-      ]}>
-        <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
-          <View style={styles.studentContent}>
-            <Image
-              source={{ uri: student.profileImage || student.profilePhoto || 'https://via.placeholder.com/56' }}
-              style={styles.profileImage}
-            />
-            <View style={styles.studentInfo}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                <Text style={[styles.studentName, { color: theme.text }]} numberOfLines={1}>{student.name}</Text>
-                {randomRingStudent && isWasActive && (
-                  <View style={styles.wasActiveBadge}>
-                    <Text style={styles.wasActiveBadgeText}>📅 Was active</Text>
-                  </View>
-                )}
-                {randomRingStudent && !isWasActive && (
-                  <View style={styles.ringSelectedBadge}>
-                    <Text style={styles.ringSelectedBadgeText}>🔔 Ringed</Text>
-                  </View>
-                )}
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}>
-                <Text style={[styles.statusText, { color: statusStyle.text }]}>{getStatusLabel(student.status)}</Text>
-              </View>
-            </View>
-            <View style={styles.timerContainer}>
-              <Text style={[styles.timerText, { color: theme.text }]}>{
-                `${Math.floor(displaySecs / 60).toString().padStart(2, '0')}:${(displaySecs % 60).toString().padStart(2, '0')}`
-              }</Text>
-              {student.lectureSubject ? (
-                <Text style={[styles.lectureLabel, { color: theme.textSecondary }]} numberOfLines={1}>
-                  {student.lectureSubject}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-        </TouchableOpacity>
+      <View style={styles.swipeContainer}>
+        {/* Swipe Actions (Behind) */}
+        <View style={styles.swipeActionsBehind}>
+          <TouchableOpacity 
+            style={[styles.presentSwipeAction, { backgroundColor: '#10b981' }]}
+            onPress={() => {
+              onPresentSwipe && onPresentSwipe();
+              resetSwipe();
+            }}
+          >
+            <Text style={styles.swipeActionText}>Present</Text>
+          </TouchableOpacity>
+        </View>
 
-        {randomRingStudent && randomRingStudent.teacherAction === 'pending' && !randomRingStudent.verified && (
-          <View style={styles.actionSection}>
-            <View style={styles.actionButtons}>
-              <TouchableOpacity
-                style={[styles.acceptButton, { opacity: actionLoading ? 0.5 : 1 }]}
-                onPress={() => handleAction('accepted')}
-                disabled={actionLoading}
-              >
-                <Text style={styles.acceptButtonText}>✓ Accept</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.rejectButton, { opacity: actionLoading ? 0.5 : 1 }]}
-                onPress={() => handleAction('rejected')}
-                disabled={actionLoading}
-              >
-                <Text style={styles.rejectButtonText}>✕ Reject</Text>
-              </TouchableOpacity>
+        <Animated.View 
+          style={[
+            styles.studentCard,
+            { backgroundColor: theme.cardBackground, borderColor: isFloating ? glowBorder : theme.border },
+            { transform: [{ translateX: swipeX }] },
+            isFloating && styles.floatingCard,
+          ]}
+          {...panResponder.panHandlers}
+        >
+          <TouchableOpacity onPress={onPress} activeOpacity={0.7}>
+            <View style={styles.studentContent}>
+              <Image
+                source={{ uri: student.profileImage || student.profilePhoto || 'https://via.placeholder.com/56' }}
+                style={styles.profileImage}
+              />
+              <View style={styles.studentInfo}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                  <Text style={[styles.studentName, { color: theme.text }]} numberOfLines={1}>{student.name}</Text>
+                  {student.markedByName && (
+                    <View style={[styles.manualBadge, { backgroundColor: theme.primary + '15' }]}>
+                      <Text style={[styles.manualBadgeText, { color: theme.primary }]}>👨‍🏫 By {student.markedByName}</Text>
+                    </View>
+                  )}
+                  {randomRingStudent && isWasActive && (
+                    <View style={styles.wasActiveBadge}>
+                      <Text style={styles.wasActiveBadgeText}>📅 Was active</Text>
+                    </View>
+                  )}
+                  {randomRingStudent && !isWasActive && (
+                    <View style={styles.ringSelectedBadge}>
+                      <Text style={styles.ringSelectedBadgeText}>🔔 Ringed</Text>
+                    </View>
+                  )}
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                  <View style={[styles.statusBadge, { backgroundColor: statusStyle.bg }]}>
+                    <Text style={[styles.statusText, { color: statusStyle.text }]}>{getStatusLabel(student.status)}</Text>
+                  </View>
+                  {student.manualReason && (
+                    <Text style={[styles.manualReason, { color: theme.textSecondary }]} numberOfLines={1}>
+                      "{student.manualReason}"
+                    </Text>
+                  )}
+                </View>
+              </View>
+              <View style={styles.timerContainer}>
+                <Text style={[styles.timerText, { color: theme.text }]}>{
+                  `${Math.floor(displaySecs / 60).toString().padStart(2, '0')}:${(displaySecs % 60).toString().padStart(2, '0')}`
+                }</Text>
+                {student.lectureSubject ? (
+                  <Text style={[styles.lectureLabel, { color: theme.textSecondary }]} numberOfLines={1}>
+                    {student.lectureSubject}
+                  </Text>
+                ) : null}
+              </View>
             </View>
-          </View>
-        )}
-      </Animated.View>
+          </TouchableOpacity>
+
+          {randomRingStudent && randomRingStudent.teacherAction === 'pending' && !randomRingStudent.verified && (
+            <View style={styles.actionSection}>
+              <View style={styles.actionButtons}>
+                <TouchableOpacity
+                  style={[styles.acceptButton, { opacity: actionLoading ? 0.5 : 1 }]}
+                  onPress={() => handleAction('accepted')}
+                  disabled={actionLoading}
+                >
+                  <Text style={styles.acceptButtonText}>✓ Accept</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.rejectButton, { opacity: actionLoading ? 0.5 : 1 }]}
+                  onPress={() => handleAction('rejected')}
+                  disabled={actionLoading}
+                >
+                  <Text style={styles.rejectButtonText}>✕ Reject</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+        </Animated.View>
+      </View>
     </Animated.View>
   );
 });
@@ -444,13 +629,19 @@ const styles = StyleSheet.create({
   presenceText: { fontSize: 12, fontWeight: '700' },
   paginationInfo: { fontSize: 12, fontWeight: '500' },
   listContent: { paddingBottom: 40, paddingHorizontal: 20 },
-  studentCard: { borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1.5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.04, shadowRadius: 8, elevation: 2 },
+  
+  swipeContainer: { position: 'relative', overflow: 'hidden', borderRadius: 16, marginBottom: 14 },
+  swipeActionsBehind: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 100, flexDirection: 'row', justifyContent: 'flex-end', borderRadius: 16 },
+  presentSwipeAction: { width: 100, height: '100%', justifyContent: 'center', alignItems: 'center', borderRadius: 16 },
+  swipeActionText: { color: 'white', fontWeight: '800', fontSize: 13 },
+
+  studentCard: { borderRadius: 16, padding: 14, borderWidth: 1.5, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.04, shadowRadius: 8, elevation: 2 },
   floatingCard: { borderWidth: 2, elevation: 8, shadowOpacity: 0.15, shadowRadius: 12 },
   studentContent: { flexDirection: 'row', alignItems: 'center', gap: 14 },
   profileImage: { width: 52, height: 52, borderRadius: 16 },
   studentInfo: { flex: 1, minWidth: 0 },
   studentName: { fontSize: 16, fontWeight: '700', marginBottom: 2 },
-  statusBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8, marginTop: 2 },
+  statusBadge: { alignSelf: 'flex-start', paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8 },
   statusText: { fontSize: 11, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
   timerContainer: { alignItems: 'flex-end' },
   timerText: { fontSize: 16, fontWeight: '700', fontVariant: ['tabular-nums'] },
@@ -467,6 +658,11 @@ const styles = StyleSheet.create({
   ringSelectedBadgeText: { fontSize: 10, color: '#d97706', fontWeight: '700' },
   wasActiveBadge: { backgroundColor: 'rgba(99,102,241,0.15)', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
   wasActiveBadgeText: { fontSize: 10, color: '#6366f1', fontWeight: '700' },
+  
+  manualBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  manualBadgeText: { fontSize: 10, fontWeight: '700' },
+  manualReason: { fontSize: 11, fontStyle: 'italic', maxWidth: 120 },
+
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   paginationModal: { width: '100%', maxHeight: '60%', borderRadius: 24, borderWidth: 1, padding: 20, elevation: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 10 }, shadowOpacity: 0.3, shadowRadius: 20 },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, paddingBottom: 15, borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' },
@@ -474,6 +670,16 @@ const styles = StyleSheet.create({
   rangeList: { marginHorizontal: -5 },
   rangeItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 15, borderRadius: 12, marginBottom: 5 },
   rangeText: { fontSize: 15, fontWeight: '600' },
+
+  choiceModal: { width: '100%', maxWidth: 400, borderRadius: 28, padding: 24, alignItems: 'center', elevation: 25 },
+  choiceTitle: { fontSize: 20, fontWeight: '900', marginBottom: 8 },
+  choiceSub: { fontSize: 14, textAlign: 'center', marginBottom: 24 },
+  choiceOptions: { flexDirection: 'row', gap: 16, width: '100%' },
+  choiceBtn: { flex: 1, padding: 20, borderRadius: 20, alignItems: 'center', borderWidth: 1.5 },
+  choiceBtnTitle: { fontSize: 16, fontWeight: '800', marginBottom: 4 },
+  choiceBtnSub: { fontSize: 11, textAlign: 'center', opacity: 0.8 },
+  cancelBtn: { marginTop: 24, paddingVertical: 10, paddingHorizontal: 30 },
+  cancelBtnText: { fontSize: 15, fontWeight: '700' },
 });
 
 export default StudentList;

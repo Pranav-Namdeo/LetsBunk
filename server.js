@@ -388,8 +388,9 @@ const periodAttendanceSchema = new mongoose.Schema({
     wifiBSSID:    { type: String },
 
     // ── Audit ─────────────────────────────────────────────────────────────────
-    markedBy: { type: String },
-    reason:   { type: String },
+    markedBy:     { type: String },
+    markedByName: { type: String },
+    reason:       { type: String },
 
     // ── Timer progress (updated by offline-sync) ──────────────────────────────
     timerSeconds: { type: Number, default: null }   // seconds attended in this period
@@ -1564,11 +1565,15 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
 
         console.log(`👥 Found ${students.length} students for ${currentClass.branch} Semester ${currentClass.semester}`);
 
-        // Enhance students with current attendance session data
-        const today = new Date().toISOString().split('T')[0];
-        const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes — ghost session
-        const SYNC_TIMEOUT_MS    =      90 * 1000; // 90 seconds — missed sync = student offline
-        const nowMs = Date.now();
+        // Get manual marking info for all students in this class for the current period
+        const periodRecords = await PeriodAttendance.find({
+            date: today,
+            period: `P${currentClass.period}`,
+            semester: currentClass.semester.toString(),
+            branch: currentClass.branch
+        });
+        const manualMarkMap = new Map(periodRecords.map(r => [r.enrollmentNo, r]));
+
         const studentsWithStatus = await Promise.all(students.map(async (student) => {
             try {
                 const s = student.toObject();
@@ -1579,6 +1584,9 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                 const isStale = live && live.lastSeen && (nowMs - live.lastSeen) > STALE_THRESHOLD_MS;
                 const effectiveLive = (live && !isStale) ? live : null;
 
+                // Get manual mark info
+                const manualMark = manualMarkMap.get(s.enrollmentNo);
+
                 // If student hasn't synced in 90s but is marked running → they went offline
                 const isSyncTimedOut = effectiveLive && effectiveLive.isRunning &&
                     effectiveLive.lastSeen && (nowMs - effectiveLive.lastSeen) > SYNC_TIMEOUT_MS;
@@ -1588,9 +1596,16 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                 let isRunning = effectiveLive ? effectiveLive.isRunning : (session.isRunning || false);
                 let status    = effectiveLive ? effectiveLive.status    : (session.status    || 'absent');
 
+                // If there's a manual mark, use its status
+                if (manualMark) {
+                    status = manualMark.status;
+                    isRunning = false; // Manual mark freezes running state
+                    timerSecs = manualMark.timerSeconds || timerSecs;
+                }
+
                 // Student went offline — stop showing as running, but KEEP the timer value frozen
                 // Use 'offline' status so the client shows it paused, not zeroed
-                if (isSyncTimedOut) {
+                if (isSyncTimedOut && !manualMark) {
                     isRunning = false;
                     status    = 'offline'; // frozen at last known value
                 }
@@ -1617,7 +1632,9 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                     timerValue: displayTimer,
                     status,
                     lastUpdated: lastSync,
-                    totalAttendedSeconds: timerSecs  // keep real value for stats, only display is zeroed
+                    totalAttendedSeconds: timerSecs,  // keep real value for stats, only display is zeroed
+                    markedByName: manualMark?.markedByName || null,
+                    manualReason: manualMark?.reason || null
                 };
             } catch (error) {
                 console.error(`❌ Error getting status for student ${student.name}:`, error);
@@ -1806,7 +1823,9 @@ io.on('connection', (socket) => {
 });
 
 // ─── Helper: sync AttendanceRecord from PeriodAttendance (status + lectures) ──
-async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, branch, threshold = 75) {
+async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, branch, threshold) {
+    // Use dynamic global threshold if not explicitly provided
+    if (threshold === undefined) threshold = ATTENDANCE_THRESHOLD;
     try {
         const midnight = getISTMidnight(date);
         const nextDay  = new Date(midnight.getTime() + 86400000);
@@ -3857,7 +3876,9 @@ app.post('/api/attendance/random-ring-response', async (req, res) => {
 // POST /api/attendance/manual-mark - Teacher manual attendance marking
 app.post('/api/attendance/manual-mark', async (req, res) => {
     const startTime = Date.now();
-    const { teacherId, enrollmentNo, period, status, reason, timestamp } = req.body;
+    const { teacherId, enrollmentNo, period, status, reason, timestamp, scope, teacherName } = req.body;
+    
+    // scope: 'current' = only this period, 'allday' = all periods, undefined = current+future (legacy)
     
     console.log(`?? [MANUAL-MARK] Request started - Teacher: ${teacherId}, Student: ${enrollmentNo}, Period: ${period}, Status: ${status}`);
     
@@ -3969,10 +3990,12 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             });
         }
 
-        // Find the lecture for this period
-        const lecture = daySchedule.find(l => l.period === periodNumber);
-        if (!lecture || lecture.isBreak) {
-            console.log(`? [MANUAL-MARK] Period not found or is break - Period: ${period}`);
+        // 5. Get period info and validate
+        const pNum = parseInt(period.substring(1));
+        const pLecture = daySchedule.find(l => l.period === pNum);
+        
+        if (!pLecture || pLecture.isBreak) {
+            console.log(`❌ [MANUAL-MARK] Period not found or is break - Period: ${period}`);
             return res.status(400).json({
                 success: false,
                 message: `Period ${period} not found in timetable or is a break`,
@@ -3980,15 +4003,15 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             });
         }
 
-        // Validate teacher teaches this period (or is admin)
-        if (lecture.teacher !== teacherId && !teacher.canEditTimetable) {
-            console.log(`? [MANUAL-MARK] Teacher not authorized - Teacher: ${teacherId}, Period teacher: ${lecture.teacher}`);
-            return res.status(403).json({
-                success: false,
-                message: 'You are not authorized to mark attendance for this period',
-                periodTeacher: lecture.teacher,
-                yourId: teacherId
-            });
+        // 6. Authorization check
+        if (pLecture.teacher && pLecture.teacher !== teacherId && !teacher.canEditTimetable) {
+             console.log(`❌ [MANUAL-MARK] Teacher not authorized - Teacher: ${teacherId}, Period teacher: ${pLecture.teacher}`);
+             return res.status(403).json({ 
+                 success: false, 
+                 message: 'You are not authorized to mark attendance for this period',
+                 periodTeacher: pLecture.teacher,
+                 yourId: teacherId
+             });
         }
 
         // Check if marking future period
@@ -4006,21 +4029,29 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
 
         console.log(`? [MANUAL-MARK] Validation passed - Teacher authorized for ${lecture.subject}`);
 
-        // 6. Determine which periods to mark based on status
+        // 6. Determine which periods to mark based on scope / status
         let periodsToMark = [];
-        if (status === 'present') {
-            // Mark current period + all future periods
+        if (scope === 'allday') {
+            // Mark ALL non-break periods of the day regardless of which period teacher is in
+            for (let i = 1; i <= 8; i++) {
+                const lec = daySchedule.find(l => l.period === i);
+                if (lec && !lec.isBreak) periodsToMark.push(`P${i}`);
+            }
+            console.log(`📋 [MANUAL-MARK] All-day scope - Marking periods: ${periodsToMark.join(', ')}`);
+        } else if (scope === 'current') {
+            // Mark ONLY the single requested period
+            periodsToMark = [period];
+            console.log(`📋 [MANUAL-MARK] Current-only scope - Marking period: ${period}`);
+        } else if (status === 'present') {
+            // Legacy: current period + all future periods
             for (let i = periodNumber; i <= 8; i++) {
                 const futureLecture = daySchedule.find(l => l.period === i);
-                if (futureLecture && !futureLecture.isBreak) {
-                    periodsToMark.push(`P${i}`);
-                }
+                if (futureLecture && !futureLecture.isBreak) periodsToMark.push(`P${i}`);
             }
-            console.log(`?? [MANUAL-MARK] Marking present for periods: ${periodsToMark.join(', ')}`);
+            console.log(`📋 [MANUAL-MARK] Legacy present scope - Marking periods: ${periodsToMark.join(', ')}`);
         } else {
-            // Mark only the specified period as absent
             periodsToMark = [period];
-            console.log(`?? [MANUAL-MARK] Marking absent for period: ${period}`);
+            console.log(`📋 [MANUAL-MARK] Marking absent for period: ${period}`);
         }
 
         // 7. Create or update PeriodAttendance records
@@ -4044,6 +4075,22 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             let changeType = 'create';
             let oldStatus = null;
 
+            // Calculate attendance duration based on admin threshold for this period
+            let periodTimerSeconds = 0;
+            if (status === 'present') {
+                const pNum = parseInt(p.substring(1));
+                const pInfo = timetable.periods[pNum - 1];
+                if (pInfo) {
+                    const startMins = timeToMinutes(pInfo.startTime);
+                    const endMins = timeToMinutes(pInfo.endTime);
+                    const durationMins = endMins - startMins;
+                    periodTimerSeconds = Math.ceil(durationMins * 60 * (ATTENDANCE_THRESHOLD / 100)); 
+                } else {
+                    // Fallback to 45 mins if period timing is missing (75% of 60 mins)
+                    periodTimerSeconds = Math.ceil(3600 * (ATTENDANCE_THRESHOLD / 100));
+                }
+            }
+
             if (existingRecord) {
                 // Update existing record
                 oldStatus = existingRecord.status;
@@ -4052,10 +4099,14 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
                 existingRecord.status = status;
                 existingRecord.verificationType = 'manual';
                 existingRecord.markedBy = teacherId;
+                existingRecord.markedByName = teacherName || teacher.name;
                 existingRecord.reason = reason || 'Manual marking by teacher';
+                if (status === 'present') {
+                    existingRecord.timerSeconds = Math.max(existingRecord.timerSeconds || 0, periodTimerSeconds);
+                }
                 
                 periodRecord = await existingRecord.save();
-                console.log(`?? [MANUAL-MARK] Updated existing record - Period: ${p}, Old: ${oldStatus}, New: ${status}`);
+                console.log(`📝 [MANUAL-MARK] Updated existing record - Period: ${p}, Old: ${oldStatus}, New: ${status}, Timer: ${periodRecord.timerSeconds}s`);
             } else {
                 // Create new record
                 periodRecord = await PeriodAttendance.create({
@@ -4070,14 +4121,16 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
                     teacherName:  pLecture.teacherName,
                     room:         pLecture.room,
                     status,
+                    timerSeconds: status === 'present' ? periodTimerSeconds : 0,
                     checkInTime:      status === 'present' ? new Date() : null,
                     verificationType: 'manual',
                     wifiVerified: false,
                     faceVerified: false,
                     markedBy:     teacherId,
+                    markedByName: teacherName || teacher.name,
                     reason:       reason || 'Manual marking by teacher'
                 });
-                console.log(`? [MANUAL-MARK] Created new record - Period: ${p}, Status: ${status}`);
+                console.log(`✅ [MANUAL-MARK] Created new record - Period: ${p}, Status: ${status}, Timer: ${periodRecord.timerSeconds}s`);
             }
 
             markedRecords.push(periodRecord);
@@ -4136,9 +4189,27 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             console.error('⚠️ [MANUAL-MARK] Failed to sync AttendanceRecord:', syncErr.message);
         }
 
-        // 10. Send response
+        // 10. Broadcast manual mark to all teachers in the class room
+        try {
+            const classRoom = `class:${student.semester}:${student.branch}`;
+            io.to(classRoom).emit('student_manually_marked', {
+                enrollmentNo,
+                studentName: student.name,
+                markedBy: teacherId,
+                markedByName: teacherName || teacher.name,
+                scope: scope || 'legacy',
+                periods: periodsToMark,
+                status,
+                timestamp: new Date().toISOString()
+            });
+            console.log(`📡 [MANUAL-MARK] Broadcasted to room: ${classRoom}`);
+        } catch (broadcastErr) {
+            console.warn(`⚠️ [MANUAL-MARK] Broadcast failed:`, broadcastErr.message);
+        }
+
+        // 11. Send response
         const duration = Date.now() - startTime;
-        console.log(`? [MANUAL-MARK] Completed in ${duration}ms - Marked ${markedRecords.length} period(s)`);
+        console.log(`✅ [MANUAL-MARK] Completed in ${duration}ms - Marked ${markedRecords.length} period(s)`);
 
         return res.json({
             success: true,
@@ -4155,11 +4226,12 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
                 },
                 teacher: {
                     employeeId: teacherId,
-                    name: teacher.name
+                    name: teacherName || teacher.name
                 },
                 date: markingDate,
                 status,
-                periods: periodsToMark
+                periods: periodsToMark,
+                scope: scope || 'legacy'
             }
         });
 

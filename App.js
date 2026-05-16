@@ -1798,6 +1798,18 @@ export default function App() {
       }
     });
 
+    // Listen for manual marking updates (teachers only)
+    socketRef.current.on('student_manually_marked', (data) => {
+      console.log('📡 Student manually marked update:', data);
+      if (selectedRole === 'teacher') {
+        // If it's the teacher who did it, they already know, but others need refresh
+        fetchStudents();
+        if (loginId !== data.markedBy) {
+          alert(`👨‍🏫 Attendance Update!\n\n${data.studentName} was marked ${data.status} by ${data.markedByName}.`);
+        }
+      }
+    });
+
     // Listen for Random Ring notifications (students only)
     socketRef.current.on('random_ring_notification', (data) => {
       console.log('🔔 Random ring received:', data);
@@ -4207,6 +4219,44 @@ const onRefreshStudent = async () => {
     );
   };
 
+  // Manual attendance marking handler (swipe action)
+  const handleManualMark = async (enrollmentNo, scope) => {
+    try {
+      if (!currentClassInfo) {
+        alert('❌ No active class to mark attendance for');
+        return;
+      }
+
+      console.log(`👨‍🏫 Manual marking ${enrollmentNo} as present (Scope: ${scope})`);
+      
+      const response = await fetch(POST_ATTENDANCE_MANUAL_MARK, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          teacherId: loginId,
+          teacherName: userData?.name || 'Teacher',
+          enrollmentNo,
+          period: `P${currentClassInfo.period}`,
+          status: 'present',
+          scope,
+          reason: `Manual marking (${scope === 'allday' ? 'All Day' : 'Current Class'})`
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        showToast(`✅ Marked ${scope === 'allday' ? 'all day' : 'current class'} present`, 'success');
+        // socket will handle the real-time update, but let's refresh just in case
+        fetchStudents();
+      } else {
+        alert('❌ Failed to mark student: ' + (result.message || result.error));
+      }
+    } catch (error) {
+      console.error('Manual mark error:', error);
+      alert('❌ Error connecting to server');
+    }
+  };
+
   // Teacher action handler for random ring accept/reject
   const handleTeacherAction = async (randomRingId, studentId, action) => {
     try {
@@ -4424,6 +4474,8 @@ const onRefreshStudent = async () => {
             }}
             activeRandomRing={activeRandomRing}
             onTeacherAction={handleTeacherAction}
+            onManualMark={handleManualMark}
+            currentClassInfo={currentClassInfo}
             onTriggerDropdown={() => setShowSemesterSelector(true)}
             refreshControl={
               <RefreshControl
