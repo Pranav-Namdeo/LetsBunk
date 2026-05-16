@@ -424,6 +424,7 @@ class SecureStorage {
    * Load timer state from Keystore-backed redundancy
    */
   static async loadTimerStateRedundancy() {
+    try {
       const { NativeModules } = require('react-native');
       const { TimerModule } = NativeModules;
       
@@ -454,6 +455,7 @@ class SecureStorage {
    * Clear timer state redundancy (e.g. on new day or logout)
    */
   static async clearTimerStateRedundancy() {
+    try {
       await AsyncStorage.removeItem(KEYS.TIMER_STATE_REDUNDANCY);
       const { NativeModules } = require('react-native');
       const { TimerModule } = NativeModules;
