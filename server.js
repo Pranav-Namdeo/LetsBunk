@@ -4043,7 +4043,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             }
         }
 
-        console.log(`? [MANUAL-MARK] Validation passed - Teacher authorized for ${lecture.subject}`);
+        console.log(`✅ [MANUAL-MARK] Validation passed - Teacher authorized for ${pLecture.subject}`);
 
         // 6. Determine which periods to mark based on scope / status
         let periodsToMark = [];
