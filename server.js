@@ -1069,6 +1069,22 @@ app.post('/api/periods/update-all', async (req, res) => {
                 message: `Updated ${result.modifiedCount} timetables with ${periods.length} periods`
             });
 
+            // ─── Post-update Sync ───
+            // Re-sync all student attendance records for today to match new period settings structure (Show all periods 0%)
+            (async () => {
+                try {
+                    const today = new Date(); today.setHours(0, 0, 0, 0);
+                    const students = await StudentManagement.find({}).lean();
+                    console.log(`🔄 [PERIOD-SYNC] Re-syncing ${students.length} students to match new period settings...`);
+                    for (const s of students) {
+                        await syncAttendanceRecord(s.enrollmentNo, today, s.name, s.semester, s.branch).catch(() => {});
+                    }
+                    console.log('✅ [PERIOD-SYNC] All students re-synced.');
+                } catch (syncAllErr) {
+                    console.error('❌ [PERIOD-SYNC] Failed to re-sync students:', syncAllErr.message);
+                }
+            })();
+
             // Notify all connected clients
             io.emit('periods_updated', { periods });
             
@@ -1730,9 +1746,6 @@ io.on('connection', (socket) => {
         socket.join(room);
         console.log(`👨‍🏫 Teacher joined room: ${room}`);
 
-        // Immediately send current live state for this class
-        // Only include entries that were updated within the last 10 minutes to avoid
-        // serving stale 'active' status from a previous session hours ago
         const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
         const SYNC_TIMEOUT_MS    =      90 * 1000; // 90 seconds — missed sync = student offline
         const now = Date.now();
@@ -1786,84 +1799,100 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
         const midnight = new Date(date); midnight.setHours(0, 0, 0, 0);
         const nextDay  = new Date(midnight); nextDay.setDate(nextDay.getDate() + 1);
 
-        const periods = await PeriodAttendance.find({
+        // 1. Fetch timetable for this student's class
+        const tt = await Timetable.findOne({ semester, branch });
+        const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+        const dayName = days[midnight.getDay()];
+        const daySchedule = tt ? (tt.timetable[dayName] || []) : [];
+        const periodsConfig = tt ? (tt.periods || []) : [];
+
+        // 2. Fetch all period-wise attendance records for today
+        const periodRecords = await PeriodAttendance.find({
             enrollmentNo, date: { $gte: midnight, $lt: nextDay }
         }).lean();
 
-        const presentCount  = periods.filter(p => p.status === 'present').length;
-        const totalCount    = periods.length;
-        // Only count 'present' (threshold crossed) — 'active' means timer running but not yet at threshold
-        const dayPercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
-        // Day status: 'active' if timer is currently running (any period active), else present/absent by threshold
-        const hasActiveTimer = periods.some(p => p.status === 'active');
-        const dayStatus = hasActiveTimer ? 'active'
-            : (dayPercentage >= threshold ? 'present' : 'absent');
-
-        // Build lectures array with attended/total/percentage/present
-        // Pull period start/end times from timetable so Level 3 has real data
+        // 3. Build the full day's lecture array based on the timetable
         let lecturesWithTime = [];
-        try {
-            const tt = await Timetable.findOne({ semester, branch });
-            const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-            const dayName = days[midnight.getDay()];
-            const daySchedule = tt ? (tt.timetable[dayName] || []) : [];
+        let presentCount = 0;
+        let totalCount = 0;
+        let hasActiveTimer = false;
 
-            lecturesWithTime = periods.map(p => {
-                // Match period by id (P1, P2 …)
-                const periodIndex = parseInt(p.period.replace('P', ''), 10) - 1;
-                const periodInfo  = tt && tt.periods ? tt.periods[periodIndex] : null;
-                const startTime   = periodInfo ? periodInfo.startTime : '';
-                const endTime     = periodInfo ? periodInfo.endTime   : '';
+        // Iterate through ALL scheduled slots in the timetable
+        for (let i = 0; i < daySchedule.length; i++) {
+            const slot = daySchedule[i];
+            const pConfig = periodsConfig[i];
+            if (!slot || slot.isBreak || !slot.subject || !pConfig) continue;
 
-                // Duration in seconds
-                const durationSec = (startTime && endTime)
-                    ? (timeToMinutes(endTime) - timeToMinutes(startTime)) * 60
-                    : 0;
+            totalCount++; // Count only actual teaching periods
+            const pId = `P${i + 1}`;
+            
+            // Find if student has a record for this specific period
+            const pRecord = periodRecords.find(pr => pr.period === pId);
+            
+            const startTime = pConfig.startTime || '';
+            const endTime   = pConfig.endTime   || '';
+            const durationSec = (startTime && endTime)
+                ? (timeToMinutes(endTime) - timeToMinutes(startTime)) * 60
+                : 0;
 
-                // Attended seconds: use timerSeconds if stored, else full duration if present
-                const attendedSec = p.timerSeconds != null
-                    ? Math.floor(p.timerSeconds)
-                    : (p.status === 'present' ? durationSec : 0);
+            const attendedSec = pRecord && pRecord.timerSeconds != null
+                ? Math.floor(pRecord.timerSeconds)
+                : (pRecord && pRecord.status === 'present' ? durationSec : 0);
 
-                const pct = durationSec > 0
-                    ? Math.min(100, Math.round((attendedSec / durationSec) * 100))
-                    : (p.status === 'present' ? 100 : 0);
+            const pct = durationSec > 0
+                ? Math.min(100, Math.round((attendedSec / durationSec) * 100))
+                : (pRecord && pRecord.status === 'present' ? 100 : 0);
 
-                // present = threshold crossed (attended enough) OR already marked present by check-in
-                // 'active' alone (timer running but below threshold) is NOT present
-                const isPresent = p.status === 'present' ||
-                    (durationSec > 0 && (attendedSec / durationSec) * 100 >= threshold);
+            const isPresent = (pRecord && pRecord.status === 'present') ||
+                (durationSec > 0 && (attendedSec / durationSec) * 100 >= threshold);
 
+            if (isPresent) presentCount++;
+            if (pRecord && pRecord.status === 'active') hasActiveTimer = true;
+
+            lecturesWithTime.push({
+                period:      pId,
+                subject:     pRecord?.subject || slot.subject,
+                teacher:     pRecord?.teacher || slot.teacher,
+                teacherName: pRecord?.teacherName || pRecord?.teacher || slot.teacher || '',
+                room:        pRecord?.room || slot.room || '',
+                startTime,
+                endTime,
+                lectureStartedAt: new Date(`${midnight.toISOString().split('T')[0]}T${startTime}:00`),
+                lectureEndedAt:   new Date(`${midnight.toISOString().split('T')[0]}T${endTime}:00`),
+                studentCheckIn:   pRecord?.checkInTime || null,
+                attended:    attendedSec,
+                total:       durationSec,
+                percentage:  pct,
+                present:     isPresent,
+                status:      pRecord?.status || (isPresent ? 'present' : 'absent'),
+                verifications: pRecord?.checkInTime ? [{
+                    time:    pRecord.checkInTime,
+                    type:    'face',
+                    success: pRecord.faceVerified !== false,
+                    event:   'check_in'
+                }] : []
+            });
+        }
+
+        // 4. If no timetable was found, fallback to existing records (legacy behavior)
+        if (lecturesWithTime.length === 0 && periodRecords.length > 0) {
+            lecturesWithTime = periodRecords.map(p => {
+                const isPresent = p.status === 'present';
+                if (isPresent) presentCount++;
+                if (p.status === 'active') hasActiveTimer = true;
                 return {
                     period:      p.period,
                     subject:     p.subject,
                     teacher:     p.teacher,
                     teacherName: p.teacherName || p.teacher,
                     room:        p.room || '',
-                    startTime,
-                    endTime,
-                    lectureStartedAt: periodInfo ? new Date(`${midnight.toISOString().split('T')[0]}T${startTime}:00`) : null,
-                    lectureEndedAt:   periodInfo ? new Date(`${midnight.toISOString().split('T')[0]}T${endTime}:00`)   : null,
-                    studentCheckIn:   p.checkInTime || null,
-                    attended:    attendedSec,   // seconds
-                    total:       durationSec,   // seconds
-                    percentage:  pct,
+                    startTime:   '',
+                    endTime:     '',
+                    attended:    p.timerSeconds || (isPresent ? 3600 : 0),
+                    total:       3600,
+                    percentage:  isPresent ? 100 : 0,
                     present:     isPresent,
                     status:      p.status || (isPresent ? 'present' : 'absent'),
-                    verifications: p.checkInTime ? [{
-                        time:    p.checkInTime,
-                        type:    'face',
-                        success: p.faceVerified !== false,
-                        event:   'check_in'
-                    }] : []
-                };
-            });
-        } catch (_) {
-            // Fallback: no timetable data — still store basic info
-            lecturesWithTime = periods.map(p => ({
-                period:      p.period,
-                subject:     p.subject,
-                teacher:     p.teacher,
                 teacherName: p.teacherName || p.teacher,
                 room:        p.room || '',
                 startTime:   '',
@@ -8361,6 +8390,38 @@ cron.schedule('5 0 * * *', async () => {
     }
 });
 
+// ─── Daily 00:10 AM cron: Pre-initialize AttendanceRecords for all students ──
+// This ensures "Show all periods" requirement is met from the start of the day
+cron.schedule('10 0 * * *', async () => {
+    console.log('🏁 [CRON] Pre-initializing daily attendance records for all students...');
+    try {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        const students = await StudentManagement.find({}).lean();
+        let initialized = 0;
+        
+        for (const student of students) {
+            try {
+                // Trigger syncAttendanceRecord which now builds the structure from the timetable
+                await syncAttendanceRecord(
+                    student.enrollmentNo,
+                    today,
+                    student.name,
+                    student.semester,
+                    student.branch
+                );
+                initialized++;
+            } catch (err) {
+                // Skip students with no timetable or errors
+            }
+        }
+        console.log(`✅ [CRON] Initialized ${initialized}/${students.length} attendance records for today`);
+    } catch (err) {
+        console.error('❌ [CRON] Daily initialization failed:', err);
+    }
+});
+
 console.log('? [TIMEOUT] Random ring timeout handler initialized - checking every minute');
 
 // ============================================
@@ -9906,7 +9967,26 @@ app.get('/api/attendance/manage', async (req, res) => {
             if (endDate) query.date.$lte = new Date(endDate);
         }
 
-        // Fetch records with student details
+        // 2. Fetch records with student details
+        if (studentId) {
+            try {
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+                const student = await StudentManagement.findOne({ enrollmentNo: studentId });
+                if (student) {
+                    await syncAttendanceRecord(
+                        student.enrollmentNo,
+                        today,
+                        student.name,
+                        student.semester,
+                        student.branch
+                    );
+                }
+            } catch (syncErr) {
+                console.error('⚠️ [API-SYNC] Failed to auto-sync today\'s record:', syncErr.message);
+            }
+        }
+
         const records = await AttendanceRecord.find(query)
             .populate('studentId', 'name enrollmentNo course semester photoUrl')
             .sort({ date: -1, createdAt: -1 })
