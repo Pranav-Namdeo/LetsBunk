@@ -1799,8 +1799,23 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
         const midnight = new Date(date); midnight.setHours(0, 0, 0, 0);
         const nextDay  = new Date(midnight); nextDay.setDate(nextDay.getDate() + 1);
 
-        // 1. Fetch timetable for this student's class
-        const tt = await Timetable.findOne({ semester, branch });
+        // 1. Fetch student's canonical info (to ensure correct branch/semester match)
+        const student = await StudentManagement.findOne({ enrollmentNo });
+        const canonicalSemester = student ? Number(student.semester) : Number(semester);
+        const canonicalBranch   = student ? student.branch : branch;
+
+        // 2. Fetch timetable for this student's class
+        let tt = await Timetable.findOne({ semester: canonicalSemester, branch: canonicalBranch });
+        
+        // Fallback for branch aliases (e.g., Cse -> Computer Science)
+        if (!tt && (canonicalBranch === 'Cse' || canonicalBranch === 'CSE')) {
+             tt = await Timetable.findOne({ semester: canonicalSemester, branch: 'Computer Science' });
+        }
+
+        if (!tt) {
+            console.log(`⚠️ [SYNC] No timetable found for student ${enrollmentNo} (Sem: ${canonicalSemester}, Branch: ${canonicalBranch})`);
+        }
+
         const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
         const dayName = days[midnight.getDay()];
         const daySchedule = tt ? (tt.timetable[dayName] || []) : [];
@@ -1893,18 +1908,10 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                     percentage:  isPresent ? 100 : 0,
                     present:     isPresent,
                     status:      p.status || (isPresent ? 'present' : 'absent'),
-                teacherName: p.teacherName || p.teacher,
-                room:        p.room || '',
-                startTime:   '',
-                endTime:     '',
-                attended:    p.timerSeconds || (p.status === 'present' ? durationSec : 0),
-                total:       3600,
-                percentage:  p.status === 'present' ? 100 : 0,
-                present:     p.status === 'present',
-                status:      p.status || (p.status === 'present' ? 'present' : 'absent'),
-                studentCheckIn: p.checkInTime || null,
-                verifications: []
-            }));
+                    studentCheckIn: p.checkInTime || null,
+                    verifications: []
+                };
+            });
         }
 
         // Total attended/class minutes from lectures
