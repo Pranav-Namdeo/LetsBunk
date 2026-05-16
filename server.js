@@ -4031,7 +4031,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         }
 
         // Check if marking future period
-        const periodInfo = timetable.periods[periodNumber - 1];
+        const periodInfo = timetable.periods[pNum - 1];
         if (periodInfo) {
             const periodEndTime = timeToMinutes(periodInfo.endTime);
             const currentTime = now.getHours() * 60 + now.getMinutes();
@@ -4056,17 +4056,17 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             console.log(`📋 [MANUAL-MARK] All-day scope - Marking periods: ${periodsToMark.join(', ')}`);
         } else if (scope === 'current') {
             // Mark ONLY the single requested period
-            periodsToMark = [period];
+            periodsToMark = [periodId];
             console.log(`📋 [MANUAL-MARK] Current-only scope - Marking period: ${period}`);
         } else if (status === 'present') {
             // Legacy: current period + all future periods
-            for (let i = periodNumber; i <= 8; i++) {
+            for (let i = pNum; i <= 8; i++) {
                 const futureLecture = daySchedule.find(l => l.period === i);
                 if (futureLecture && !futureLecture.isBreak) periodsToMark.push(`P${i}`);
             }
             console.log(`📋 [MANUAL-MARK] Legacy present scope - Marking periods: ${periodsToMark.join(', ')}`);
         } else {
-            periodsToMark = [period];
+            periodsToMark = [periodId];
             console.log(`📋 [MANUAL-MARK] Marking absent for period: ${period}`);
         }
 
