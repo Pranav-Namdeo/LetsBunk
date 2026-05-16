@@ -1836,7 +1836,11 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
         for (let i = 0; i < daySchedule.length; i++) {
             const slot = daySchedule[i];
             const pConfig = periodsConfig[i];
-            if (!slot || slot.isBreak || !slot.subject || !pConfig) continue;
+            if (!slot || slot.isBreak || !pConfig) continue;
+            
+            const subjectName = slot.subject || 'No Subject';
+            const teacherName = slot.teacherName || slot.teacher || 'Not Assigned';
+            const roomName    = slot.room || 'N/A';
 
             totalCount++; // Count only actual teaching periods
             const pId = `P${i + 1}`;
@@ -1866,10 +1870,10 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
 
             lecturesWithTime.push({
                 period:      pId,
-                subject:     pRecord?.subject || slot.subject,
-                teacher:     pRecord?.teacher || slot.teacher,
-                teacherName: pRecord?.teacherName || pRecord?.teacher || slot.teacher || '',
-                room:        pRecord?.room || slot.room || '',
+                subject:     pRecord?.subject || subjectName,
+                teacher:     pRecord?.teacher || slot.teacher || 'Not Assigned',
+                teacherName: pRecord?.teacherName || pRecord?.teacher || teacherName,
+                room:        pRecord?.room || roomName,
                 startTime,
                 endTime,
                 lectureStartedAt: new Date(`${midnight.toISOString().split('T')[0]}T${startTime}:00`),
