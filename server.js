@@ -8877,7 +8877,145 @@ app.get('/api/attendance/summary/:enrollmentNo', async (req, res) => {
     }
 });
 
-// Holiday APIs
+
+// Paginated Attendance History for Admin Panel
+app.get('/api/attendance/history-paginated', async (req, res) => {
+    try {
+        const { branch, semester, startDate, endDate, page = 1, limit = 20, search = '' } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const limitVal = Math.min(parseInt(limit), 100); // Sanity limit
+
+        const studentMatch = {};
+        if (branch) studentMatch.branch = branch;
+        if (semester) studentMatch.semester = parseInt(semester);
+        if (search) {
+            studentMatch.$or = [
+                { name: { $regex: search, $options: 'i' } },
+                { enrollmentNo: { $regex: search, $options: 'i' } }
+            ];
+        }
+
+        if (mongoose.connection.readyState !== 1) {
+            return res.json({ success: true, students: [], pagination: { total: 0, page: 1, limit: limitVal, pages: 0 } });
+        }
+
+        // 1. Get total count for pagination
+        const totalStudents = await StudentManagement.countDocuments(studentMatch);
+
+        // 2. Fetch students
+        const students = await StudentManagement.find(studentMatch)
+            .sort({ name: 1 })
+            .skip(skip)
+            .limit(limitVal)
+            .lean();
+
+        if (students.length === 0) {
+            return res.json({
+                success: true,
+                students: [],
+                pagination: {
+                    total: totalStudents,
+                    page: parseInt(page),
+                    limit: limitVal,
+                    pages: Math.ceil(totalStudents / limitVal)
+                }
+            });
+        }
+
+        const enrollmentNumbers = students.map(s => s.enrollmentNo);
+
+        // 3. Fetch summaries in bulk
+        const dateFilter = {};
+        if (startDate) dateFilter.$gte = new Date(startDate);
+        if (endDate)   dateFilter.$lte = new Date(endDate);
+        const hasDateFilter = startDate || endDate;
+
+        const dailyQuery = { enrollmentNo: { $in: enrollmentNumbers } };
+        if (hasDateFilter) dailyQuery.date = dateFilter;
+
+        // Group DailyAttendance by enrollmentNo
+        const dailySummaries = await DailyAttendance.aggregate([
+            { $match: dailyQuery },
+            { $group: {
+                _id: "$enrollmentNo",
+                totalDays: { $sum: 1 },
+                presentDays: { $sum: { $cond: [{ $eq: ["$dailyStatus", "present"] }, 1, 0] } }
+            }}
+        ]);
+
+        // Group PeriodAttendance for subject breakdown
+        const periodSummaries = await PeriodAttendance.aggregate([
+            { $match: dailyQuery },
+            { $group: {
+                _id: { enrollmentNo: "$enrollmentNo", subject: "$subject" },
+                total: { $sum: 1 },
+                present: { $sum: { $cond: [{ $eq: ["$status", "present"] }, 1, 0] } }
+            }},
+            { $group: {
+                _id: "$_id.enrollmentNo",
+                subjects: { $push: {
+                    subject: "$_id.subject",
+                    total: "$total",
+                    present: "$present",
+                    percentage: { $round: [{ $multiply: [{ $divide: ["$present", "$total"] }, 100] }, 0] }
+                }}
+            }}
+        ]);
+
+        // Aggregated totals for the cards
+        const statsAggregation = await DailyAttendance.aggregate([
+            { $match: dailyQuery },
+            { $group: {
+                _id: null,
+                maxDays: { $max: "$totalDays" }, // Not quite right, but we'll fix it in JS
+                totalPresent: { $sum: { $cond: [{ $eq: ["$dailyStatus", "present"] }, 1, 0] } }
+            }}
+        ]);
+
+        // Merge back to students
+        const dailyMap = dailySummaries.reduce((acc, s) => { acc[s._id] = s; return acc; }, {});
+        const periodMap = periodSummaries.reduce((acc, s) => { acc[s._id] = s.subjects; return acc; }, {});
+
+        const withSummary = students.map(s => {
+            const daily = dailyMap[s.enrollmentNo] || { totalDays: 0, presentDays: 0 };
+            const subjects = periodMap[s.enrollmentNo] || [];
+            
+            const overallPercentage = daily.totalDays > 0 
+                ? Math.round((daily.presentDays / daily.totalDays) * 100) 
+                : 0;
+
+            return {
+                ...s,
+                summary: {
+                    totalDays: daily.totalDays,
+                    presentDays: daily.presentDays,
+                    overallPercentage,
+                    subjects
+                }
+            };
+        });
+
+        res.json({
+            success: true,
+            students: withSummary,
+            pagination: {
+                total: totalStudents,
+                page: parseInt(page),
+                limit: limitVal,
+                pages: Math.ceil(totalStudents / limitVal)
+            },
+            branchStats: {
+                avgAttendance: withSummary.length > 0 ? Math.round(withSummary.reduce((a, b) => a + b.summary.overallPercentage, 0) / withSummary.length) : 0,
+                maxDays: dailySummaries.length > 0 ? Math.max(...dailySummaries.map(d => d.totalDays)) : 0
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Error in history-paginated:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 app.get('/api/holidays', async (req, res) => {
     try {
         if (mongoose.connection.readyState === 1) {

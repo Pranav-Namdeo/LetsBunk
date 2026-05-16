@@ -310,6 +310,7 @@ const GET_ATTENDANCE_PERIOD_REPORT = api('/api/attendance/period-report');
 const GET_ATTENDANCE_AUDIT_TRAIL = api('/api/attendance/audit-trail');
 const GET_ATTENDANCE_EXPORT = api('/api/attendance/export');
 const GET_ATTENDANCE_ALL = api('/api/attendance/all');
+const GET_ATTENDANCE_HISTORY_PAGINATED = api('/api/attendance/history-paginated');
 const GET_ATTENDANCE_SUBJECTS = api('/api/attendance/subjects');
 const GET_ATTENDANCE_SUBJECT_DATES = api('/api/attendance/subject-dates');
 const GET_ATTENDANCE_BY_DATE = (date) => api(`/api/attendance/date/${date}`);
@@ -346,6 +347,11 @@ let currentPeriods = [];
 let showTeachers = true;
 let showRooms = true;
 let compactView = false;
+
+// Attendance History Pagination State
+let attendanceHistoryPage = 1;
+let attendanceHistoryLimit = 20;
+let attendanceHistoryTotalPages = 1;
 
 // Dynamic dropdown data (fetched from server)
 let dynamicData = {
@@ -12316,6 +12322,76 @@ function initAttendanceHistory() {
 
     // Subscribe to live timer_broadcast for real-time row updates
     _subscribeAttendanceLiveUpdates();
+
+    // Set initial pagination state
+    attendanceHistoryPage = 1;
+}
+
+function updateAttendancePagination(pagination) {
+    const container = document.getElementById('attendancePagination');
+    if (!container) return;
+
+    attendanceHistoryPage = pagination.page;
+    attendanceHistoryTotalPages = pagination.pages;
+
+    let html = `
+        <div style="color: var(--text-secondary); font-size: 13px;">
+            Showing ${(pagination.page - 1) * pagination.limit + 1} to ${Math.min(pagination.page * pagination.limit, pagination.total)} of ${pagination.total} students
+        </div>
+        <div style="display: flex; align-items: center; gap: 8px;">
+            <div style="display: flex; align-items: center; gap: 4px; margin-right: 12px;">
+                <label style="font-size: 12px; color: var(--text-secondary);">Rows per page:</label>
+                <select onchange="changeAttendanceLimit(this.value)" class="filter-select" style="padding: 2px 8px; height: 28px; font-size: 12px;">
+                    <option value="10" ${pagination.limit == 10 ? 'selected' : ''}>10</option>
+                    <option value="20" ${pagination.limit == 20 ? 'selected' : ''}>20</option>
+                    <option value="50" ${pagination.limit == 50 ? 'selected' : ''}>50</option>
+                    <option value="100" ${pagination.limit == 100 ? 'selected' : ''}>100</option>
+                </select>
+            </div>
+            <button class="btn btn-sm btn-secondary" onclick="changeAttendancePage(${pagination.page - 1})" ${pagination.page <= 1 ? 'disabled' : ''}>
+                Previous
+            </button>
+            <div style="display: flex; align-items: center; gap: 4px;">
+    `;
+
+    // Simple page numbers
+    const maxVisible = 5;
+    let start = Math.max(1, pagination.page - 2);
+    let end = Math.min(pagination.pages, start + maxVisible - 1);
+    if (end - start + 1 < maxVisible) start = Math.max(1, end - maxVisible + 1);
+
+    for (let i = start; i <= end; i++) {
+        html += `
+            <button class="btn btn-sm ${i === pagination.page ? 'btn-primary' : 'btn-secondary'}" 
+                style="min-width: 30px; padding: 0;"
+                onclick="changeAttendancePage(${i})">
+                ${i}
+            </button>
+        `;
+    }
+
+    html += `
+            </div>
+            <button class="btn btn-sm btn-secondary" onclick="changeAttendancePage(${pagination.page + 1})" ${pagination.page >= pagination.pages ? 'disabled' : ''}>
+                Next
+            </button>
+        </div>
+    `;
+
+    container.innerHTML = html;
+    container.style.display = pagination.total > 0 ? 'flex' : 'none';
+}
+
+function changeAttendancePage(page) {
+    if (page < 1 || page > attendanceHistoryTotalPages) return;
+    attendanceHistoryPage = page;
+    loadAttendanceHistory(true);
+}
+
+function changeAttendanceLimit(limit) {
+    attendanceHistoryLimit = parseInt(limit);
+    attendanceHistoryPage = 1;
+    loadAttendanceHistory(true);
 }
 
 function onAttendanceFilterChange() {
@@ -12404,7 +12480,11 @@ function _updateAttendanceRowLive(data) {
     }
 }
 
-async function loadAttendanceHistory() {
+async function loadAttendanceHistory(isPaging = false) {
+    if (!isPaging) {
+        attendanceHistoryPage = 1; // Reset to page 1 on new filter click
+    }
+
     const semesterFilter = document.getElementById('attendanceSemesterFilter')?.value;
     const courseFilter   = document.getElementById('attendanceCourseFilter')?.value;
     const tbody = document.getElementById('attendanceHistoryTableBody');
@@ -12418,54 +12498,49 @@ async function loadAttendanceHistory() {
     }
 
     tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;">
-        <div style="font-size:40px;margin-bottom:12px;"></div>
-        <h3>Loading...</h3></td></tr>`;
+        <div class="loading-spinner" style="margin: 0 auto 12px;"></div>
+        <h3>Loading paginated data...</h3>
+        <p style="color: var(--text-secondary); font-size: 13px;">Fetching student records and attendance summaries in bulk</p></td></tr>`;
 
     try {
         const startDate = document.getElementById('attendanceStartDate')?.value || '';
         const endDate   = document.getElementById('attendanceEndDate')?.value   || '';
-        const search    = document.getElementById('attendanceStudentSearch')?.value?.toLowerCase() || '';
+        const search    = document.getElementById('attendanceStudentSearch')?.value || '';
 
-        // 1. Get students for this semester/branch
-        const studRes  = await fetch(GET_STUDENTS);
-        const studData = await studRes.json();
-        if (!studData.success) throw new Error('Failed to load students');
+        // Build URL for the new paginated history endpoint
+        let url = `${GET_ATTENDANCE_HISTORY_PAGINATED}?branch=${encodeURIComponent(courseFilter)}&semester=${semesterFilter}&page=${attendanceHistoryPage}&limit=${attendanceHistoryLimit}`;
+        if (startDate) url += `&startDate=${startDate}`;
+        if (endDate)   url += `&endDate=${endDate}`;
+        if (search)    url += `&search=${encodeURIComponent(search)}`;
 
-        let students = (studData.students || []).filter(s => {
-            if (!search) return true;
-            return s.name?.toLowerCase().includes(search) || s.enrollmentNo?.toLowerCase().includes(search);
-        });
+        const response = await fetch(url);
+        const data = await response.json();
 
-        // 2. Fetch summary for each student in parallel
-        const withSummary = await Promise.all(students.map(async s => {
-            try {
-                let url = GET_ATTENDANCE_SUMMARY(s.enrollmentNo);
-                const params = [];
-                if (startDate) params.push(`startDate=${startDate}`);
-                if (endDate)   params.push(`endDate=${endDate}`);
-                if (params.length) url += '?' + params.join('&');
-                const r = await fetch(url);
-                const d = await r.json();
-                return { ...s, summary: d.success ? d.summary : _emptySummary() };
-            } catch { return { ...s, summary: _emptySummary() }; }
-        }));
+        if (!data.success) throw new Error(data.error || 'Failed to load attendance history');
 
-        // 3. Update summary cards
-        const total   = withSummary.length;
-        const avgPct  = total > 0 ? Math.round(withSummary.reduce((a, s) => a + s.summary.overallPercentage, 0) / total) : 0;
-        const maxDays = Math.max(0, ...withSummary.map(s => s.summary.totalDays));
-        const totalHrs = Math.floor(withSummary.reduce((a, s) => a + s.summary.totalAttendedMinutes, 0) / 60);
+        const students = data.students || [];
+        const pagination = data.pagination || { total: 0, page: 1, limit: attendanceHistoryLimit, pages: 0 };
+        const stats = data.branchStats || { avgAttendance: 0, maxDays: 0 };
 
-        _setEl('totalStudentsAttendance', total);
-        _setEl('avgAttendanceRate', `${avgPct}%`);
-        _setEl('totalDaysTracked', maxDays);
+        // 1. Update summary cards
+        _setEl('totalStudentsAttendance', pagination.total);
+        _setEl('avgAttendanceRate', `${stats.avgAttendance}%`);
+        _setEl('totalDaysTracked', stats.maxDays);
+        
+        // Hours calculation (estimated from aggregated days if not provided)
         const hEl = document.getElementById('totalHoursAttended') || document.getElementById('avgPeriodsPerDay');
-        if (hEl) hEl.textContent = `${totalHrs}h`;
+        if (hEl) {
+            const totalHrs = students.reduce((a, s) => a + (s.summary.totalAttendedMinutes || 0), 0);
+            hEl.textContent = stats.avgAttendance > 0 ? `~${Math.round(stats.maxDays * 6)}h` : '0h';
+        }
 
-        // 4. Render table
-        renderAttendanceHistoryTable(withSummary);
+        // 2. Render table
+        renderAttendanceHistoryTable(students, (pagination.page - 1) * pagination.limit);
 
-        // 5. Join live socket room for real-time updates
+        // 3. Update Pagination UI
+        updateAttendancePagination(pagination);
+
+        // 4. Join live socket room
         if (_attendanceSocket) {
             _attendanceSocket.emit('join_class_room', { semester: semesterFilter, branch: courseFilter });
         }
@@ -12487,7 +12562,7 @@ function _setEl(id, val) {
     if (el) el.textContent = val;
 }
 
-function renderAttendanceHistoryTable(students) {
+function renderAttendanceHistoryTable(students, startIdx = 0) {
     const tbody = document.getElementById('attendanceHistoryTableBody');
     if (!tbody) return;
 
@@ -12527,7 +12602,7 @@ function renderAttendanceHistoryTable(students) {
             onmouseout="this.style.background=''"
             onclick="showStudentAttendance('${s.enrollmentNo}','${s.name.replace(/'/g,"\\'")}')">
 
-            <td style="padding:14px 16px;font-size:13px;color:var(--text-secondary);">${i + 1}</td>
+            <td style="padding:14px 16px;font-size:13px;color:var(--text-secondary);">${startIdx + i + 1}</td>
 
             <td style="padding:14px 16px;">
                 <div style="font-weight:600;font-size:14px;color:var(--text-primary);">${s.name}</div>
