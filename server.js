@@ -3909,16 +3909,28 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             });
         }
 
+        // Normalize period (convert 'p1' to 'P1', handle 'PP1' accidentally sent)
+        let normalizedPeriod = period ? period.toString().toUpperCase() : '';
+        if (normalizedPeriod.startsWith('PP')) normalizedPeriod = normalizedPeriod.substring(1);
+        if (normalizedPeriod && !normalizedPeriod.startsWith('P') && /^[1-8]$/.test(normalizedPeriod)) {
+            normalizedPeriod = 'P' + normalizedPeriod;
+        }
+
         // Validate period format
         const validPeriods = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8'];
-        if (!validPeriods.includes(period)) {
-            console.log(`? [MANUAL-MARK] Invalid period - Received: ${period}`);
+        if (!validPeriods.includes(normalizedPeriod)) {
+            console.log(`❌ [MANUAL-MARK] Invalid period - Received: "${period}" (Normalized: "${normalizedPeriod}")`);
             return res.status(400).json({
                 success: false,
                 message: 'Invalid period. Must be P1-P8',
-                receivedPeriod: period
+                receivedPeriod: period,
+                normalizedPeriod: normalizedPeriod
             });
         }
+        
+        // Use the normalized period from here on
+        const periodId = normalizedPeriod; 
+        const pNum = parseInt(periodId.substring(1));
 
         // 2. Get teacher information — allow ADMIN bypass
         let teacher;
@@ -3977,12 +3989,10 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const markingDay = days[markingDate.getDay()];
         
-        // Get period info from timetable
-        const periodNumber = parseInt(period.substring(1)); // Extract number from "P1", "P2", etc.
+        // 4. Get schedule for the day
         const daySchedule = timetable.timetable[markingDay];
-        
         if (!daySchedule || daySchedule.length === 0) {
-            console.log(`? [MANUAL-MARK] No schedule for day - Day: ${markingDay}`);
+            console.log(`? [MANUAL-MARK] No schedule found for student's class on ${markingDay}`);
             return res.status(400).json({
                 success: false,
                 message: `No classes scheduled for ${markingDay}`,
@@ -3991,15 +4001,14 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         }
 
         // 5. Get period info and validate
-        const pNum = parseInt(period.substring(1));
         const pLecture = daySchedule.find(l => l.period === pNum);
         
         if (!pLecture || pLecture.isBreak) {
-            console.log(`❌ [MANUAL-MARK] Period not found or is break - Period: ${period}`);
+            console.log(`❌ [MANUAL-MARK] Period not found or is break - Period: ${periodId}`);
             return res.status(400).json({
                 success: false,
-                message: `Period ${period} not found in timetable or is a break`,
-                period
+                message: `Period ${periodId} not found in timetable or is a break`,
+                period: periodId
             });
         }
 
