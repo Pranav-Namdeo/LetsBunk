@@ -4228,6 +4228,15 @@ const onRefreshStudent = async () => {
       }
 
       console.log(`👨‍🏫 Manual marking ${enrollmentNo} as present (Scope: ${scope})`);
+      console.log(`🔗 URL: ${POST_ATTENDANCE_MANUAL_MARK}`);
+      console.log(`📦 Body:`, {
+        teacherId: loginId,
+        teacherName: userData?.name || 'Teacher',
+        enrollmentNo,
+        period: `P${currentClassInfo.period}`,
+        scope,
+        reason: `Manual marking (${scope === 'allday' ? 'All Day' : 'Current Class'})`
+      });
       
       const response = await fetch(POST_ATTENDANCE_MANUAL_MARK, {
         method: 'POST',

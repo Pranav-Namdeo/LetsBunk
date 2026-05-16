@@ -4013,12 +4013,19 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         }
 
         // 6. Authorization check
-        if (pLecture.teacher && pLecture.teacher !== teacherId && !teacher.canEditTimetable) {
-             console.log(`❌ [MANUAL-MARK] Teacher not authorized - Teacher: ${teacherId}, Period teacher: ${pLecture.teacher}`);
+        const isAssignedTeacher = pLecture.teacher && (
+            pLecture.teacher === teacherId || 
+            pLecture.teacher.toLowerCase() === teacher.name.toLowerCase() ||
+            pLecture.teacher.toLowerCase().includes(teacher.name.toLowerCase())
+        );
+
+        if (pLecture.teacher && !isAssignedTeacher && !teacher.canEditTimetable) {
+             console.log(`❌ [MANUAL-MARK] Teacher not authorized - Teacher: ${teacherId} (${teacher.name}), Period teacher: ${pLecture.teacher}`);
              return res.status(403).json({ 
                  success: false, 
                  message: 'You are not authorized to mark attendance for this period',
                  periodTeacher: pLecture.teacher,
+                 yourName: teacher.name,
                  yourId: teacherId
              });
         }
@@ -6741,51 +6748,61 @@ app.get('/api/view-records/students', async (req, res) => {
                 branch: branch
             }).select('-password');
 
-            // Get attendance stats for each student
-            const studentsWithStats = await Promise.all(
-                students.map(async (student) => {
-                    try {
-                        // Get attendance records for historical stats
-                        const records = await AttendanceRecord.find({
-                            studentId: student._id
-                        });
+            // Optimize: Batch fetch all attendance records for these students in one query
+            const studentIds = students.map(s => s._id);
+            const allAttendanceRecords = await AttendanceRecord.find({
+                studentId: { $in: studentIds }
+            }).lean();
 
-                        const total = records.length;
-                        const present = records.filter(r => r.status === 'present').length;
-                        const attendancePercentage = total > 0 ? Math.round((present / total) * 100) : 0;
+            // Group records by studentId for O(1) lookup
+            const recordsMap = allAttendanceRecords.reduce((acc, record) => {
+                const sid = record.studentId.toString();
+                if (!acc[sid]) acc[sid] = [];
+                acc[sid].push(record);
+                return acc;
+            }, {});
 
-                        // Use real-time data from attendanceSession (updated by offline-sync)
-                        const live = liveTimerState.get(student.enrollmentNo);
-                        const session = student.attendanceSession || {};
-                        return {
-                            ...student.toObject(),
-                            attendancePercentage,
-                            totalDays: total,
-                            presentDays: present,
-                            isRunning: live ? live.isRunning : (session.isRunning || false),
-                            timerValue: live ? live.attendedSeconds : (session.totalAttendedSeconds || 0),
-                            status: live ? live.status : (session.status || 'absent'),
-                            lastUpdated: live ? live.lastSyncTime : (session.lastSyncTime || null),
-                            totalAttendedSeconds: live ? live.attendedSeconds : (session.totalAttendedSeconds || 0),
-                            _id: student._id.toString()
-                        };
-                    } catch (error) {
-                        console.error(`❌ Error getting data for student ${student.name}:`, error);
-                        return {
-                            ...student.toObject(),
-                            attendancePercentage: 0,
-                            totalDays: 0,
-                            presentDays: 0,
-                            isRunning: false,
-                            timerValue: 0,
-                            status: 'absent',
-                            lastUpdated: null,
-                            totalAttendedSeconds: 0,
-                            _id: student._id.toString()
-                        };
-                    }
-                })
-            );
+            const studentsWithStats = students.map((student) => {
+                try {
+                    const sid = student._id.toString();
+                    const records = recordsMap[sid] || [];
+
+                    const total = records.length;
+                    const present = records.filter(r => r.status === 'present').length;
+                    const attendancePercentage = total > 0 ? Math.round((present / total) * 100) : 0;
+
+                    // Use real-time data from attendanceSession (updated by offline-sync)
+                    const live = liveTimerState.get(student.enrollmentNo);
+                    const session = student.attendanceSession || {};
+                    
+                    return {
+                        ...student.toObject(),
+                        attendancePercentage,
+                        totalDays: total,
+                        presentDays: present,
+                        isRunning: live ? live.isRunning : (session.isRunning || false),
+                        timerValue: live ? live.attendedSeconds : (session.totalAttendedSeconds || 0),
+                        status: live ? live.status : (session.status || 'absent'),
+                        lastUpdated: live ? live.lastSyncTime : (session.lastSyncTime || null),
+                        totalAttendedSeconds: live ? live.attendedSeconds : (session.totalAttendedSeconds || 0),
+                        _id: sid
+                    };
+                } catch (error) {
+                    console.error(`❌ Error mapping data for student ${student.name}:`, error);
+                    return {
+                        ...student.toObject(),
+                        attendancePercentage: 0,
+                        totalDays: 0,
+                        presentDays: 0,
+                        isRunning: false,
+                        timerValue: 0,
+                        status: 'absent',
+                        lastUpdated: null,
+                        totalAttendedSeconds: 0,
+                        _id: student._id.toString()
+                    };
+                }
+            });
 
             console.log(`✅ Fetched ${studentsWithStats.length} students for ${branch} Sem ${semester}`);
             console.log(`📊 Active students: ${studentsWithStats.filter(s => s.isRunning).length}`);
