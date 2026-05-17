@@ -4201,35 +4201,16 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             console.log(`?? [MANUAL-MARK] Audit record created - AuditId: ${auditRecord.auditId}`);
         }
 
-        // 9. Update AttendanceRecord (daily summary) so history page reflects manual marks
+        // 9. Update AttendanceRecord (daily summary) so history page reflects manual marks with full minutes & lecture details
         try {
-            const allPeriodRecords = await PeriodAttendance.find({
+            await syncAttendanceRecord(
                 enrollmentNo,
-                date: markingDate
-            }).lean();
-
-            const presentCount = allPeriodRecords.filter(r => r.status === 'present').length;
-            const totalCount = allPeriodRecords.length;
-            const dayPercentage = totalCount > 0 ? Math.round((presentCount / totalCount) * 100) : 0;
-            const dayStatus = dayPercentage >= 75 ? 'present' : 'absent';
-
-            await AttendanceRecord.findOneAndUpdate(
-                { enrollmentNo, date: markingDate },   // simple filter — no $or with upsert
-                {
-                    $set: {
-                        studentId: enrollmentNo,
-                        enrollmentNo,
-                        studentName: student.name,
-                        semester: student.semester,
-                        branch: student.branch,
-                        status: dayStatus,
-                        dayPercentage,
-                        updatedAt: new Date()
-                    }
-                },
-                { upsert: true }
+                markingDate,
+                student.name,
+                student.semester,
+                student.branch
             );
-            console.log(`✅ [MANUAL-MARK] AttendanceRecord updated - Status: ${dayStatus}, ${presentCount}/${totalCount} periods`);
+            console.log(`✅ [MANUAL-MARK] Daily AttendanceRecord successfully synced using timetable metrics`);
         } catch (syncErr) {
             console.error('⚠️ [MANUAL-MARK] Failed to sync AttendanceRecord:', syncErr.message);
         }
@@ -8739,9 +8720,11 @@ app.get('/api/attendance/records', async (req, res) => {
             // --- INJECT SYNTHETIC ABSENT RECORDS FOR MISSED DAYS ---
             if (studentId) {
                 try {
-                    const student = await StudentManagement.findOne(
-                        { $or: [{ _id: studentId }, { enrollmentNo: studentId }] }
-                    ).lean();
+                    const queryConditions = [{ enrollmentNo: studentId }];
+                    if (mongoose.Types.ObjectId.isValid(studentId)) {
+                        queryConditions.push({ _id: studentId });
+                    }
+                    const student = await StudentManagement.findOne({ $or: queryConditions }).lean();
                     
                     if (student && student.semester && student.branch) {
                         const tt = await Timetable.findOne({ 
