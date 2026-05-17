@@ -4227,13 +4227,15 @@ const onRefreshStudent = async () => {
         return;
       }
 
+      const requestPeriod = currentClassInfo.period ? `P${currentClassInfo.period}` : 'detect';
+
       console.log(`👨‍🏫 Manual marking ${enrollmentNo} as present (Scope: ${scope})`);
       console.log(`🔗 URL: ${POST_ATTENDANCE_MANUAL_MARK}`);
       console.log(`📦 Body:`, {
         teacherId: loginId,
         teacherName: userData?.name || 'Teacher',
         enrollmentNo,
-        period: `P${currentClassInfo.period}`,
+        period: requestPeriod,
         scope,
         reason: `Manual marking (${scope === 'allday' ? 'All Day' : 'Current Class'})`
       });
@@ -4245,7 +4247,7 @@ const onRefreshStudent = async () => {
           teacherId: loginId,
           teacherName: userData?.name || 'Teacher',
           enrollmentNo,
-          period: `P${currentClassInfo.period}`,
+          period: requestPeriod,
           status: 'present',
           scope,
           reason: `Manual marking (${scope === 'allday' ? 'All Day' : 'Current Class'})`

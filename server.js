@@ -3883,15 +3883,14 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
     console.log(`?? [MANUAL-MARK] Request started - Teacher: ${teacherId}, Student: ${enrollmentNo}, Period: ${period}, Status: ${status}`);
     
     try {
-        // 1. Validate request body
-        if (!teacherId || !enrollmentNo || !period || !status) {
+        // 1. Validate request body (make period optional or dynamically detected)
+        if (!teacherId || !enrollmentNo || !status) {
             const missingFields = [];
             if (!teacherId) missingFields.push('teacherId');
             if (!enrollmentNo) missingFields.push('enrollmentNo');
-            if (!period) missingFields.push('period');
             if (!status) missingFields.push('status');
             
-            console.log(`? [MANUAL-MARK] Validation failed - Missing fields: ${missingFields.join(', ')}`);
+            console.log(`❌ [MANUAL-MARK] Validation failed - Missing fields: ${missingFields.join(', ')}`);
             return res.status(400).json({
                 success: false,
                 message: `Missing required fields: ${missingFields.join(', ')}`,
@@ -3901,36 +3900,13 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
 
         // Validate status enum
         if (!['present', 'absent'].includes(status)) {
-            console.log(`? [MANUAL-MARK] Invalid status - Received: ${status}`);
+            console.log(`❌ [MANUAL-MARK] Invalid status - Received: ${status}`);
             return res.status(400).json({
                 success: false,
                 message: 'Invalid status. Must be "present" or "absent"',
                 receivedStatus: status
             });
         }
-
-        // Normalize period (convert 'p1' to 'P1', handle 'PP1' accidentally sent)
-        let normalizedPeriod = period ? period.toString().toUpperCase() : '';
-        if (normalizedPeriod.startsWith('PP')) normalizedPeriod = normalizedPeriod.substring(1);
-        if (normalizedPeriod && !normalizedPeriod.startsWith('P') && /^[1-8]$/.test(normalizedPeriod)) {
-            normalizedPeriod = 'P' + normalizedPeriod;
-        }
-
-        // Validate period format
-        const validPeriods = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8'];
-        if (!validPeriods.includes(normalizedPeriod)) {
-            console.log(`❌ [MANUAL-MARK] Invalid period - Received: "${period}" (Normalized: "${normalizedPeriod}")`);
-            return res.status(400).json({
-                success: false,
-                message: 'Invalid period. Must be P1-P8',
-                receivedPeriod: period,
-                normalizedPeriod: normalizedPeriod
-            });
-        }
-        
-        // Use the normalized period from here on
-        const periodId = normalizedPeriod; 
-        const pNum = parseInt(periodId.substring(1));
 
         // 2. Get teacher information — allow ADMIN bypass
         let teacher;
@@ -3955,14 +3931,14 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         // 3. Get student information
         const student = await StudentManagement.findOne({ enrollmentNo });
         if (!student) {
-            console.log(`? [MANUAL-MARK] Student not found - Enrollment: ${enrollmentNo}`);
+            console.log(`❌ [MANUAL-MARK] Student not found - Enrollment: ${enrollmentNo}`);
             return res.status(404).json({
                 success: false,
                 message: 'Student not found',
                 enrollmentNo
             });
         }
-        console.log(`? [MANUAL-MARK] Student found - Name: ${student.name}, Semester: ${student.semester}, Branch: ${student.branch}`);
+        console.log(`✅ [MANUAL-MARK] Student found - Name: ${student.name}, Semester: ${student.semester}, Branch: ${student.branch}`);
 
         // 4. Get timetable to validate teacher teaches this class
         const timetable = await Timetable.findOne({ 
@@ -3971,7 +3947,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         });
         
         if (!timetable) {
-            console.log(`? [MANUAL-MARK] Timetable not found - Semester: ${student.semester}, Branch: ${student.branch}`);
+            console.log(`❌ [MANUAL-MARK] Timetable not found - Semester: ${student.semester}, Branch: ${student.branch}`);
             return res.status(404).json({
                 success: false,
                 message: 'Timetable not found for student class',
@@ -3984,15 +3960,14 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         const markingDate = timestamp ? new Date(timestamp) : new Date();
         markingDate.setHours(0, 0, 0, 0); // Normalize to start of day
         
-        // Validate period is not in the future
         const now = new Date();
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
         const markingDay = days[markingDate.getDay()];
         
-        // 4. Get schedule for the day
+        // Get schedule for the day
         const daySchedule = timetable.timetable[markingDay];
         if (!daySchedule || daySchedule.length === 0) {
-            console.log(`? [MANUAL-MARK] No schedule found for student's class on ${markingDay}`);
+            console.log(`❌ [MANUAL-MARK] No schedule found for student's class on ${markingDay}`);
             return res.status(400).json({
                 success: false,
                 message: `No classes scheduled for ${markingDay}`,
@@ -4000,19 +3975,80 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             });
         }
 
-        // 5. Get period info and validate
-        const pLecture = daySchedule.find(l => l.period === pNum);
-        
-        if (!pLecture || pLecture.isBreak) {
-            console.log(`❌ [MANUAL-MARK] Period not found or is break - Period: ${periodId}`);
-            return res.status(400).json({
-                success: false,
-                message: `Period ${periodId} not found in timetable or is a break`,
-                period: periodId
-            });
+        // Normalize period (convert 'p1' to 'P1', handle 'PP1' accidentally sent)
+        let normalizedPeriod = period ? period.toString().toUpperCase() : '';
+        if (normalizedPeriod.startsWith('PP')) normalizedPeriod = normalizedPeriod.substring(1);
+        if (normalizedPeriod && !normalizedPeriod.startsWith('P') && /^[1-8]$/.test(normalizedPeriod)) {
+            normalizedPeriod = 'P' + normalizedPeriod;
         }
 
-        // 6. Authorization check
+        const validPeriods = ['P1', 'P2', 'P3', 'P4', 'P5', 'P6', 'P7', 'P8'];
+
+        // If period is not provided, invalid, or "PUNDEFINED", detect it dynamically based on current local time!
+        if (!normalizedPeriod || !validPeriods.includes(normalizedPeriod) || normalizedPeriod === 'PUNDEFINED') {
+            console.log(`ℹ️ [MANUAL-MARK] Period not valid/provided ("${period}"). Detecting dynamically from current local time...`);
+            
+            const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
+            let detectedPeriod = null;
+            
+            if (timetable.periods && timetable.periods.length > 0) {
+                // Find period matching current time
+                for (let i = 0; i < timetable.periods.length; i++) {
+                    const periodInfo = timetable.periods[i];
+                    const periodStart = timeToMinutes(periodInfo.startTime);
+                    const periodEnd = timeToMinutes(periodInfo.endTime);
+                    if (currentTime >= periodStart && currentTime <= periodEnd) {
+                        detectedPeriod = `P${periodInfo.number || (i + 1)}`;
+                        break;
+                    }
+                }
+                
+                // Fallback to closest period if not strictly in a slot
+                if (!detectedPeriod) {
+                    let minDiff = Infinity;
+                    for (let i = 0; i < timetable.periods.length; i++) {
+                        const periodInfo = timetable.periods[i];
+                        const periodStart = timeToMinutes(periodInfo.startTime);
+                        const diff = Math.abs(currentTime - periodStart);
+                        if (diff < minDiff) {
+                            minDiff = diff;
+                            detectedPeriod = `P${periodInfo.number || (i + 1)}`;
+                        }
+                    }
+                }
+            }
+            
+            normalizedPeriod = detectedPeriod || 'P1';
+            console.log(`🎯 [MANUAL-MARK] Dynamic period detection resolved to: "${normalizedPeriod}"`);
+        }
+
+        // Use the normalized/detected period from here on
+        const periodId = normalizedPeriod; 
+        const pNum = parseInt(periodId.substring(1));
+
+        // 6. Get period info and validate (or create dynamic placeholder)
+        let pLecture = daySchedule.find(l => l.period === pNum);
+        
+        if (!pLecture) {
+            console.log(`ℹ️ [MANUAL-MARK] Creating dynamic placeholder for period: ${periodId}`);
+            pLecture = {
+                period: pNum,
+                subject: 'Manual Mark',
+                teacher: teacherId,
+                teacherName: teacherName || teacher.name,
+                room: 'Manual',
+                isBreak: false
+            };
+        } else if (pLecture.isBreak) {
+            console.log(`ℹ️ [MANUAL-MARK] Overriding break period to allow manual marking: ${periodId}`);
+            pLecture = {
+                ...pLecture.toObject(),
+                isBreak: false,
+                subject: pLecture.subject || 'Manual Mark'
+            };
+        }
+
+        // 7. Authorization check - relaxed to let teachers override substitute/any period
         const isAssignedTeacher = pLecture.teacher && (
             pLecture.teacher === teacherId || 
             pLecture.teacher.toLowerCase() === teacher.name.toLowerCase() ||
@@ -4020,14 +4056,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         );
 
         if (pLecture.teacher && !isAssignedTeacher && !teacher.canEditTimetable) {
-             console.log(`❌ [MANUAL-MARK] Teacher not authorized - Teacher: ${teacherId} (${teacher.name}), Period teacher: ${pLecture.teacher}`);
-             return res.status(403).json({ 
-                 success: false, 
-                 message: 'You are not authorized to mark attendance for this period',
-                 periodTeacher: pLecture.teacher,
-                 yourName: teacher.name,
-                 yourId: teacherId
-             });
+             console.log(`⚠️ [MANUAL-MARK] Substituting official teacher "${pLecture.teacher}" with active marking teacher "${teacher.name}"`);
         }
 
         // Check if marking future period
