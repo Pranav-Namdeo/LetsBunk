@@ -285,6 +285,16 @@ if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') 
 const DEFAULT_SERVER_URL = 'https://letsbunk-uw7g.onrender.com';
 let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
+// Auto-sanitize SERVER_URL to ensure it has http/https protocol prefix and no trailing slash
+if (SERVER_URL) {
+    SERVER_URL = SERVER_URL.trim().replace(/\/+$/, '');
+    if (SERVER_URL && !/^https?:\/\//i.test(SERVER_URL)) {
+        SERVER_URL = 'https://' + SERVER_URL;
+        localStorage.setItem('serverUrl', SERVER_URL);
+        console.log('🔧 Auto-sanitized malformed server URL to:', SERVER_URL);
+    }
+}
+
 // Endpoint helpers for the classic Electron renderer script.
 // Keep this local because index.html loads renderer.js without type="module".
 const api = (path) => `${SERVER_URL}${path}`;
@@ -1958,7 +1968,7 @@ function showStudentTemplateExample() {
 
 async function toggleTimetableAccess(teacherId, canEdit) {
     try {
-        const response = await fetch(GET_TEACHERS, {
+        const response = await fetch(`${GET_TEACHERS}/${encodeURIComponent(teacherId)}/timetable-access`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ canEditTimetable: canEdit })
@@ -3724,7 +3734,7 @@ async function editStudent(id) {
 
             try {
                 const identifier = student._id || id;
-                const response = await fetch(GET_STUDENTS, {
+                const response = await fetch(`${GET_STUDENTS}/${encodeURIComponent(identifier)}`, {
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(studentData)
@@ -3938,7 +3948,7 @@ async function editTeacher(id) {
         }
 
         try {
-            const response = await fetch(GET_TEACHERS, {
+            const response = await fetch(`${GET_TEACHERS}/${encodeURIComponent(id)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(teacherData)
@@ -6853,7 +6863,7 @@ async function saveHolidayEdit(holidayId) {
     };
 
     try {
-        const response = await fetch(GET_HOLIDAYS, {
+        const response = await fetch(`${GET_HOLIDAYS}/${encodeURIComponent(holidayId)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(updatedHoliday)
@@ -9427,7 +9437,7 @@ async function saveEditedSubject(subjectCode) {
     const isActive = document.getElementById('editIsActive').checked;
 
     try {
-        const response = await fetch(GET_SUBJECTS, {
+        const response = await fetch(`${GET_SUBJECTS}/${encodeURIComponent(subjectCode)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -9616,7 +9626,7 @@ async function bulkActivateSubjects() {
             const subject = subjects.find(s => s.subjectCode === subjectCode);
             if (!subject) continue;
 
-            const response = await fetch(GET_SUBJECTS, {
+            const response = await fetch(`${GET_SUBJECTS}/${encodeURIComponent(subjectCode)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ...subject, isActive: true })
@@ -9656,7 +9666,7 @@ async function bulkDeactivateSubjects() {
             const subject = subjects.find(s => s.subjectCode === subjectCode);
             if (!subject) continue;
 
-            const response = await fetch(GET_SUBJECTS, {
+            const response = await fetch(`${GET_SUBJECTS}/${encodeURIComponent(subjectCode)}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ ...subject, isActive: false })
@@ -11920,9 +11930,9 @@ async function saveAttendanceThreshold() {
     }
     try {
         const res = await fetch(GET_SETTINGS_ATTENDANCE_THRESHOLD, {
-            method: 'PUT',
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ threshold: value })
+            body: JSON.stringify({ threshold: value, updatedBy: 'admin' })
         });
         const data = await res.json();
         if (data.success) {
