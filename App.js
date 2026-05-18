@@ -698,6 +698,7 @@ export default function App() {
               room: slot.room,
               startTime: start,
               endTime: end,
+              period: slot.period || slot.periodNumber || null,
             };
           }
         }
@@ -731,6 +732,7 @@ export default function App() {
             elapsedSeconds: elapsed,
             totalSeconds: total,
             isWithinLectureHours: true,
+            period: currentLecture ? currentLecture.period : null,
           };
         }
       }
@@ -1500,7 +1502,8 @@ export default function App() {
         teacher: currentClassInfo?.teacher || 'Unknown',
         room: currentClassInfo?.room || 'Unknown',
         startTime: currentClassInfo?.startTime,
-        endTime: currentClassInfo?.endTime
+        endTime: currentClassInfo?.endTime,
+        period: currentClassInfo?.period || null,
       };
 
       const result = await OfflineTimerService.startTimer(lectureInfo);

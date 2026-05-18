@@ -383,7 +383,7 @@ const periodAttendanceSchema = new mongoose.Schema({
     checkInTime: { type: Date },
 
     // ── Verification ──────────────────────────────────────────────────────────
-    verificationType: { type: String, required: true, enum: ['initial', 'random', 'manual'] },
+    verificationType: { type: String, required: true, enum: ['initial', 'random', 'manual', 'timer_sync'] },
     wifiVerified: { type: Boolean, default: false },
     faceVerified: { type: Boolean, default: false },
     wifiBSSID:    { type: String },
@@ -3079,6 +3079,9 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // Retrieve timetable to check period details and cap timerSeconds
         let resolvedPeriodId = clientPeriodId;
+        if (!resolvedPeriodId || resolvedPeriodId === 'Unknown') {
+            resolvedPeriodId = null;
+        }
         const timetable = await Timetable.findOne({
             semester: student.semester?.toString(),
             branch: student.branch
@@ -3370,6 +3373,28 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         let periodTeacher = lecture?.teacher || '';
         let periodRoom    = lecture?.room    || '';
 
+        // If subject or teacher is missing (e.g. offline start fallback), try to populate from server timetable
+        if ((!periodSubject || !periodTeacher) && ttObj) {
+            try {
+                const now = new Date();
+                const dayName = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+                const schedule = ttObj.timetable?.[dayName] || [];
+                const slot = schedule.find(s => s && s.period === pNum);
+                if (slot) {
+                    if (!periodSubject) periodSubject = slot.subject || '';
+                    if (!periodTeacher) periodTeacher = slot.teacher || slot.teacherName || '';
+                    if (!periodRoom) periodRoom = slot.room || '';
+                }
+            } catch (e) {
+                console.warn('⚠️ Error recovering lecture info from timetable:', e.message);
+            }
+        }
+
+        // Enforce fallback values to guarantee Mongoose validation passes
+        if (!periodSubject) periodSubject = 'Self Study';
+        if (!periodTeacher) periodTeacher = 'Unknown';
+        if (!periodRoom) periodRoom = 'Unknown';
+
         try {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
@@ -3531,7 +3556,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             timerSeconds: cappedTimerSeconds,
             isRunning: Boolean(isRunning),
             status: computedStatus,
-            activePeriod: periodId, // periodId is available from the logic above
+            activePeriod: resolvedPeriodId, // Use resolvedPeriodId instead of periodId
             date: new Date().toISOString().split('T')[0]
         });
 
