@@ -231,14 +231,10 @@ class OfflineTimerService {
         console.log(`   Start time: ${lectureInfo.startTime}`);
         console.log(`   End time: ${lectureInfo.endTime}`);
 
+        // Under Shuttle Relay (Partner/Couple Relay), we allow starting the timer even if manually marked 
+        // to let the student's physical tracking time catch up to the manual baseline and potentially exceed it!
         if (this.isManuallyMarked) {
-          console.log('🚫 Cannot start timer: student has been manually marked by teacher');
-          return {
-            success: false,
-            error: 'Your attendance has been manually overridden by the teacher for this period.',
-            reason: 'manual_override_frozen',
-            step: 'manual_override_frozen'
-          };
+          console.log('🏃 [SHUTTLE RELAY] Student manually marked present but starting/resuming countdown timer.');
         }
 
         // Step 1: Validate BSSID using BSSIDStorage system
@@ -345,9 +341,14 @@ class OfflineTimerService {
               if (data.success && data.record && data.record.lectures) {
                 const periodId = lectureInfo.period ? `P${lectureInfo.period}` : (lectureInfo.periodNumber ? `P${lectureInfo.periodNumber}` : 'P1');
                 const existingLecture = data.record.lectures.find(l => l.period === periodId);
-                if (existingLecture && existingLecture.attended > 0) {
-                  this.timerSeconds = existingLecture.attended;
-                  console.log(`✅ Recovered ${this.timerSeconds} seconds from server for ${periodId}`);
+                if (existingLecture) {
+                  const recoveredSeconds = existingLecture.actualAttended != null
+                    ? existingLecture.actualAttended
+                    : (existingLecture.attended || 0);
+                  if (recoveredSeconds > 0) {
+                    this.timerSeconds = recoveredSeconds;
+                    console.log(`✅ Recovered ${this.timerSeconds} actual seconds from server for ${periodId}`);
+                  }
                 }
               }
             }

@@ -1463,40 +1463,24 @@ export default function App() {
 
         const statusResult = await statusResponse.json();
         if (statusResult.success && statusResult.isManuallyMarked) {
-          console.log(`⚠️ Server confirms student is manually marked ${statusResult.status}! Locking timer.`);
+          console.log(`⚠️ Server confirms student is manually marked ${statusResult.status}! Running Shuttle Relay.`);
           
           // Sync with the server's manual mark state locally
-          OfflineTimerService.isManuallyMarked = true;
+          OfflineTimerService.isManuallyMarked = (statusResult.status === 'present');
           OfflineTimerService.attendanceStatus = statusResult.status;
-          OfflineTimerService.timerSeconds = statusResult.timerSeconds || 0;
           await OfflineTimerService.saveState();
 
           setOfflineTimerState(prev => ({
             ...prev,
-            isRunning: false,
-            timerSeconds: statusResult.timerSeconds || 0,
             attendanceStatus: statusResult.status
           }));
 
-          Alert.alert(
-            '👨‍🏫 Manual Override Active',
-            `Your attendance has been manually marked by the teacher for this period. You cannot start the timer.`,
-            [{ text: 'OK' }]
-          );
-          return;
+          if (statusResult.status === 'present') {
+            showToast('🏃 Shuttle Relay active — present status guaranteed, let\'s catch up!', 'success', 3000);
+          }
         }
       } catch (err) {
         console.warn('⚠️ Server check for manual mark failed, falling back to local state:', err.message);
-        
-        // Fallback to local state check
-        if (OfflineTimerService.isManuallyMarked) {
-          Alert.alert(
-            '👨‍🏫 Manual Override Active',
-            'Your attendance has been manually marked by the teacher for this period. You cannot start the timer.',
-            [{ text: 'OK' }]
-          );
-          return;
-        }
       }
 
       // Show loading toast for verification process
@@ -1865,51 +1849,32 @@ export default function App() {
         }
       } else if (selectedRole === 'student') {
         if (studentId === data.enrollmentNo) {
-          console.log(`⚠️ Student manually marked ${data.status} by teacher! Stopping and freezing timer.`);
+          console.log(`⚠️ Student manually marked ${data.status} by teacher! Activating Shuttle Relay.`);
           
-          // 1. Force stop the OfflineTimerService timer
-          try {
-            await OfflineTimerService.stopTimer('manual_mark');
-          } catch (e) {
-            console.error('Error stopping timer on manual mark:', e);
-          }
-          
-          // 2. Set the student's status and timer seconds in state
-          // Calculate the correct 75% timer value for this period
-          let periodTimerSeconds = 0;
-          if (data.status === 'present') {
-            const currentPeriod = offlinePeriodRef.current || currentLectureRef.current;
-            if (currentPeriod && currentPeriod.startTime && currentPeriod.endTime) {
-              const startMins = timeToMinutes(currentPeriod.startTime);
-              const endMins = timeToMinutes(currentPeriod.endTime);
-              const durationMins = endMins - startMins;
-              periodTimerSeconds = Math.ceil(durationMins * 60 * 0.75); // 75% threshold
-            } else {
-              periodTimerSeconds = Math.ceil(3600 * 0.75); // 45 mins (75% of 60 mins)
-            }
-          }
-
-          // 3. Update OfflineTimerService internal state directly so it's frozen
-          OfflineTimerService.timerSeconds = periodTimerSeconds;
+          // Sync with the server's manual mark state locally
+          OfflineTimerService.isManuallyMarked = (data.status === 'present');
           OfflineTimerService.attendanceStatus = data.status;
-          OfflineTimerService.isManuallyMarked = true; // freeze timer starting
-          
-          // 4. Save state so it persists across reload/re-start
           await OfflineTimerService.saveState();
 
-          // 5. Update local React state to reflect present/absent immediately
+          // Update local React state to reflect present/absent immediately
           setOfflineTimerState(prev => ({
             ...prev,
-            isRunning: false,
-            timerSeconds: periodTimerSeconds,
             attendanceStatus: data.status
           }));
 
-          Alert.alert(
-            '👨‍🏫 Manual Attendance Override',
-            `Your teacher manually marked you ${data.status} for this period. Your timer has been frozen.`,
-            [{ text: 'OK' }]
-          );
+          if (data.status === 'present') {
+            Alert.alert(
+              '🏃 Shuttle Relay Active!',
+              `Your teacher manually marked you present! 🎓\n\nYour 75% attendance status is guaranteed, but you can continue running your timer to let your tracking catch up and potentially exceed it (76%, 80%, 100%)!`,
+              [{ text: 'Great!' }]
+            );
+          } else {
+            Alert.alert(
+              '👨‍🏫 Attendance Overridden',
+              `Your teacher manually marked you ${data.status} for this period. You can still run your timer to log your physical attendance.`,
+              [{ text: 'OK' }]
+            );
+          }
         }
       }
     });

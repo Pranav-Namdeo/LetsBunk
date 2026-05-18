@@ -336,7 +336,8 @@ const attendanceRecordSchema = new mongoose.Schema({
         lectureEndedAt:   Date,
         studentCheckIn:   Date,
         // ── Attendance metrics (populated by syncAttendanceRecord) ────────────
-        attended:    { type: Number, default: 0 },   // seconds attended
+        attended:    { type: Number, default: 0 },   // seconds attended (effective value for reporting/status)
+        actualAttended: { type: Number, default: 0 }, // actual tracked seconds accumulated by the student
         total:       { type: Number, default: 0 },   // total period seconds
         percentage:  { type: Number, default: 0 },   // 0-100
         present:     { type: Boolean, default: false },
@@ -393,7 +394,8 @@ const periodAttendanceSchema = new mongoose.Schema({
     reason:       { type: String },
 
     // ── Timer progress (updated by offline-sync) ──────────────────────────────
-    timerSeconds: { type: Number, default: null }   // seconds attended in this period
+    timerSeconds: { type: Number, default: null },   // seconds attended in this period (effective value for reporting/status)
+    actualTimerSeconds: { type: Number, default: 0 }  // actual tracked seconds accumulated by the student's device timer
 }, { timestamps: true });
 
 periodAttendanceSchema.index({ enrollmentNo: 1, date: 1, period: 1 }, { unique: true });
@@ -1947,6 +1949,14 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                 attendedSec = durationSec;
             }
 
+            let actualAttendedSec = pRecord && pRecord.actualTimerSeconds != null
+                ? Math.floor(pRecord.actualTimerSeconds)
+                : attendedSec;
+
+            if (durationSec > 0 && actualAttendedSec > durationSec) {
+                actualAttendedSec = durationSec;
+            }
+
             const pct = durationSec > 0
                 ? Math.min(100, Math.round((attendedSec / durationSec) * 100))
                 : (pRecord && pRecord.status === 'present' ? 100 : 0);
@@ -1969,6 +1979,7 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                 lectureEndedAt:   new Date(`${midnight.toISOString().split('T')[0]}T${endTime}:00`),
                 studentCheckIn:   pRecord?.checkInTime || null,
                 attended:    attendedSec,
+                actualAttended: actualAttendedSec,
                 total:       durationSec,
                 percentage:  pct,
                 present:     isPresent,
@@ -3355,7 +3366,6 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 7. Upsert timer progress into the current period's PeriodAttendance record FIRST
         // so syncAttendanceRecord (step 7b) reads fresh data.
-        let periodId = null;
         let periodSubject = lecture?.subject || '';
         let periodTeacher = lecture?.teacher || '';
         let periodRoom    = lecture?.room    || '';
@@ -3364,120 +3374,85 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
 
-            // Try server clock first (period still active)
-            const currentLectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
-
-            if (clientPeriodId) {
-                // Client explicitly sent the period ID (queued sync) — use it directly
-                periodId = clientPeriodId;
-                console.log(`📊 [OFFLINE-SYNC] Using client-provided periodId: ${periodId}`);
-                
-                // If it's a queued sync, also try to fetch subject/teacher from that period if missing
-                if (lecture?.subject) {
-                    periodSubject = lecture.subject;
-                    periodTeacher = lecture.teacher || '';
-                    periodRoom    = lecture.room    || '';
-                } else if (currentLectureInfo && `P${currentLectureInfo.period}` === clientPeriodId) {
-                    periodSubject = currentLectureInfo.subject || '';
-                    periodTeacher = currentLectureInfo.teacher || '';
-                    periodRoom    = currentLectureInfo.room    || '';
-                }
-            } else if (currentLectureInfo) {
-                // Period is currently active and no client ID provided — use server clock
-                periodId      = `P${currentLectureInfo.period}`;
-                periodSubject = lecture?.subject || currentLectureInfo.subject || '';
-                periodTeacher = lecture?.teacher || currentLectureInfo.teacher || '';
-                periodRoom    = lecture?.room    || currentLectureInfo.room    || '';
-            } else if (lecture?.subject) {
-                // Period has ended — find the existing PeriodAttendance record for this lecture
-                // by matching subject + today's date (most recent one for this student today)
-                const existingRecord = await PeriodAttendance.findOne({
-                    enrollmentNo: student.enrollmentNo,
-                    date: { $gte: today, $lt: new Date(today.getTime() + 86400000) },
-                    subject: lecture.subject
-                }).sort({ updatedAt: -1 }).lean();
-
-                if (existingRecord) {
-                    periodId = existingRecord.period;
-                    console.log(`📊 [OFFLINE-SYNC] Period ended — updating existing record ${periodId} for subject ${lecture.subject}`);
-                } else {
-                    console.log(`⚠️ [OFFLINE-SYNC] No active period and no existing record for subject ${lecture.subject} — skipping`);
-                }
-            } else {
-                console.log(`⚠️ [OFFLINE-SYNC] No active period and no lecture info — skipping PeriodAttendance upsert`);
-            }
+            const periodId = resolvedPeriodId;
 
             if (periodId) {
-                // Use $max to only update timerSeconds if the new value is higher
-                // This prevents old queued items from overwriting newer data
-                await PeriodAttendance.updateOne(
-                    {
-                        enrollmentNo: student.enrollmentNo,
-                        date: today,
-                        period: periodId
-                    },
-                    {
-                        $max: {
-                            timerSeconds: cappedTimerSeconds
-                        },
-                        $set: {
-                            updatedAt: new Date()
-                        },
-                        $setOnInsert: {
-                            studentName:      student.name,
-                            semester:         student.semester?.toString() || '',
-                            branch:           student.branch || '',
-                            subject:          periodSubject,
-                            teacher:          periodTeacher,
-                            teacherName:      periodTeacher,
-                            room:             periodRoom,
-                            verificationType: 'timer_sync',
-                            wifiVerified:     true,
-                            faceVerified:     false,
-                            checkInTime:      new Date(),
-                            createdAt:        new Date()
-                        }
-                    },
-                    { upsert: true }
-                );
-
-                // After upsert, compute status from the actual stored timerSeconds
-                // (the $max above may have kept a higher value than what arrived in this sync)
-                const storedRecord = await PeriodAttendance.findOne({
+                // Find existing record to preserve and calculate manual mark relay (Shuttle Relay)
+                let existingRecord = await PeriodAttendance.findOne({
                     enrollmentNo: student.enrollmentNo,
                     date: today,
                     period: periodId
-                }).lean();
+                });
 
-                if (storedRecord) {
-                    const storedSeconds = storedRecord.timerSeconds || 0;
-                    // Recompute status using stored (max) timerSeconds so a late queued sync
-                    // with a lower value never downgrades a student who already hit threshold
-                    let periodStatus = 'absent';
-                    try {
-                        const lectureInfoForStatus = await getCurrentLectureInfo(student.semester, student.branch);
-                        const pStart = lectureInfoForStatus?.startTime || storedRecord.startTime;
-                        const pEnd   = lectureInfoForStatus?.endTime   || storedRecord.endTime;
-                        if (pStart && pEnd) {
-                            const durMin = timeToMinutes(pEnd) - timeToMinutes(pStart);
-                            if (durMin > 0 && (storedSeconds / (durMin * 60)) * 100 >= ATTENDANCE_THRESHOLD) {
+                let periodStatus = computedStatus;
+
+                // Determine base threshold seconds for manual override (75%)
+                const thresholdSec = Math.ceil(maxSeconds * (ATTENDANCE_THRESHOLD / 100));
+
+                if (existingRecord) {
+                    const isManuallyMarkedDb = (existingRecord.verificationType === 'manual' && existingRecord.status === 'present');
+                    
+                    // actualTimerSeconds tracks the student's physical device timer accumulation
+                    const newActual = Math.max(existingRecord.actualTimerSeconds || 0, cappedTimerSeconds);
+                    
+                    // Effective timerSeconds is the higher of their actual time or the manual baseline
+                    let newEffective = newActual;
+                    if (isManuallyMarkedDb) {
+                        const baseManualSeconds = Math.max(existingRecord.timerSeconds || 0, thresholdSec);
+                        newEffective = Math.max(baseManualSeconds, newActual);
+                        periodStatus = 'present'; // Stay Present guaranteed
+                    } else {
+                        // Recompute status for standard records
+                        try {
+                            const lectureInfoForStatus = await getCurrentLectureInfo(student.semester, student.branch);
+                            const pStart = lectureInfoForStatus?.startTime || existingRecord.startTime;
+                            const pEnd   = lectureInfoForStatus?.endTime   || existingRecord.endTime;
+                            if (pStart && pEnd) {
+                                const durMin = timeToMinutes(pEnd) - timeToMinutes(pStart);
+                                if (durMin > 0 && (newEffective / (durMin * 60)) * 100 >= ATTENDANCE_THRESHOLD) {
+                                    periodStatus = 'present';
+                                } else if (Boolean(isRunning)) {
+                                    periodStatus = 'active';
+                                } else {
+                                    periodStatus = 'absent';
+                                }
+                            } else if (newEffective >= thresholdSec) {
                                 periodStatus = 'present';
-                            } else if (Boolean(isRunning)) {
-                                periodStatus = 'active';
                             }
-                        } else if (storedSeconds >= cappedTimerSeconds && computedStatus === 'present') {
-                            // No period info available but a previous sync already marked present — keep it
-                            periodStatus = 'present';
-                        }
-                    } catch (_) {}
+                        } catch (_) {}
+                    }
 
-                    await PeriodAttendance.updateOne(
-                        { enrollmentNo: student.enrollmentNo, date: today, period: periodId },
-                        { $set: { status: periodStatus, updatedAt: new Date() } }
-                    );
+                    existingRecord.actualTimerSeconds = newActual;
+                    existingRecord.timerSeconds = newEffective;
+                    existingRecord.status = periodStatus;
+                    existingRecord.updatedAt = new Date();
+
+                    await existingRecord.save();
+                    console.log(`📊 [OFFLINE-SYNC] Shuttle Relay Update — Student: ${studentId}, Period: ${periodId}, Actual: ${newActual}s, Effective: ${newEffective}s, Status: ${periodStatus}`);
+                } else {
+                    // Create fresh record
+                    await PeriodAttendance.create({
+                        enrollmentNo:     student.enrollmentNo,
+                        studentName:      student.name,
+                        semester:         student.semester?.toString() || '',
+                        branch:           student.branch || '',
+                        date:             today,
+                        period:           periodId,
+                        subject:          periodSubject,
+                        teacher:          periodTeacher,
+                        teacherName:      periodTeacher,
+                        room:             periodRoom,
+                        status:           computedStatus,
+                        timerSeconds:     cappedTimerSeconds,
+                        actualTimerSeconds: cappedTimerSeconds,
+                        verificationType: 'timer_sync',
+                        wifiVerified:     true,
+                        faceVerified:     false,
+                        checkInTime:      new Date(),
+                        createdAt:        new Date()
+                    });
+                    console.log(`📊 [OFFLINE-SYNC] Fresh PeriodAttendance Created — Student: ${studentId}, Period: ${periodId}, Timer: ${cappedTimerSeconds}s`);
                 }
-
-                console.log(`📊 [OFFLINE-SYNC] Upserted PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Timer: ${cappedTimerSeconds}s`);
             }
         } catch (periodError) {
             console.error(`❌ [OFFLINE-SYNC] Error upserting PeriodAttendance:`, periodError);
@@ -4300,11 +4275,15 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
                 existingRecord.markedByName = teacherName || teacher.name;
                 existingRecord.reason = reason || 'Manual marking by teacher';
                 if (status === 'present') {
+                    // Populate actualTimerSeconds if not set already
+                    if (!existingRecord.actualTimerSeconds || existingRecord.actualTimerSeconds === 0) {
+                        existingRecord.actualTimerSeconds = Math.floor(existingRecord.timerSeconds || 0);
+                    }
                     existingRecord.timerSeconds = Math.max(existingRecord.timerSeconds || 0, periodTimerSeconds);
                 }
                 
                 periodRecord = await existingRecord.save();
-                console.log(`📝 [MANUAL-MARK] Updated existing record - Period: ${p}, Old: ${oldStatus}, New: ${status}, Timer: ${periodRecord.timerSeconds}s`);
+                console.log(`📝 [MANUAL-MARK] Updated existing record - Period: ${p}, Old: ${oldStatus}, New: ${status}, Timer: ${periodRecord.timerSeconds}s, Actual: ${periodRecord.actualTimerSeconds}s`);
             } else {
                 // Create new record
                 periodRecord = await PeriodAttendance.create({
@@ -4320,6 +4299,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
                     room:         pLecture.room,
                     status,
                     timerSeconds: status === 'present' ? periodTimerSeconds : 0,
+                    actualTimerSeconds: 0, // start at 0 actual until the student runs the timer to catch up!
                     checkInTime:      status === 'present' ? new Date() : null,
                     verificationType: 'manual',
                     wifiVerified: false,
@@ -7897,6 +7877,7 @@ app.get('/api/attendance/student/:enrollmentNo/date/:date', async (req, res) => 
                     startTime: l.startTime,
                     endTime: l.endTime,
                     attended: l.attended || 0,
+                    actualAttended: l.actualAttended || l.attended || 0,
                     total: l.total || 0,
                     percentage: l.percentage || (l.total > 0 ? Math.round((l.attended / l.total) * 100) : (l.present ? 100 : 0)),
                     present: l.present || (l.total > 0 && (l.attended / l.total) * 100 >= 75),
@@ -7949,6 +7930,7 @@ app.get('/api/attendance/student/:enrollmentNo/date/:date/lecture/:period', asyn
                 lectureEndedAt: lecture.lectureEndedAt,
                 studentCheckIn: lecture.studentCheckIn,
                 attended: lecture.attended,
+                actualAttended: lecture.actualAttended || lecture.attended || 0,
                 total: lecture.total,
                 percentage: lecture.percentage,
                 present: lecture.present,
