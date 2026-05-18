@@ -349,6 +349,27 @@ let students = [];
 let teachers = [];
 let classrooms = [];
 let subjects = [];
+let cachedAllSubjects = null;
+
+async function getCachedSubjects(forceRefresh = false) {
+    if (cachedAllSubjects && !forceRefresh) {
+        return cachedAllSubjects;
+    }
+    console.log('🔄 Fetching subjects from server and caching...');
+    try {
+        const response = await fetch(GET_SUBJECTS);
+        const data = await response.json();
+        if (data.success && data.subjects) {
+            cachedAllSubjects = data.subjects;
+        } else {
+            cachedAllSubjects = [];
+        }
+    } catch (error) {
+        console.error('Error in getCachedSubjects:', error);
+        cachedAllSubjects = [];
+    }
+    return cachedAllSubjects;
+}
 let selectedSubjects = new Set();
 let currentTimetable = null;
 let currentPeriods = [];
@@ -4820,24 +4841,109 @@ function deleteSelectedCells() {
 }
 
 // Subject Manager
-function showSubjectManager() {
+async function showSubjectManager() {
     const modalBody = document.getElementById('modalBody');
     modalBody.innerHTML = `
         <h2> Subject Manager</h2>
-        <p>Manage common subjects for quick access</p>
-        <div class="subject-list">
-            <div class="subject-item">Mathematics <button onclick="applySubjectToSelected('Mathematics')">Apply</button></div>
-            <div class="subject-item">Physics <button onclick="applySubjectToSelected('Physics')">Apply</button></div>
-            <div class="subject-item">Chemistry <button onclick="applySubjectToSelected('Chemistry')">Apply</button></div>
-            <div class="subject-item">Programming <button onclick="applySubjectToSelected('Programming')">Apply</button></div>
-            <div class="subject-item">Data Structures <button onclick="applySubjectToSelected('Data Structures')">Apply</button></div>
-            <div class="subject-item">DBMS <button onclick="applySubjectToSelected('DBMS')">Apply</button></div>
-            <div class="subject-item">Operating Systems <button onclick="applySubjectToSelected('Operating Systems')">Apply</button></div>
-            <div class="subject-item">Computer Networks <button onclick="applySubjectToSelected('Computer Networks')">Apply</button></div>
+        <p style="color: var(--text-secondary); margin-bottom: 20px;">Fetching subjects from database...</p>
+        <div class="subject-list" style="display: flex; justify-content: center; align-items: center; padding: 20px;">
+            <div class="loader-spinner"></div>
         </div>
         <button class="btn btn-secondary" onclick="closeModal()">Close</button>
     `;
     openModal();
+
+    try {
+        let semester = currentTimetable ? currentTimetable.semester : '';
+        let branch = currentTimetable ? currentTimetable.branch : '';
+
+        // Get subjects from our high-performance cache
+        const allSubjects = await getCachedSubjects();
+        let fetchedSubjects = [];
+
+        // 1. Try to filter by both semester and branch
+        if (semester || branch) {
+            fetchedSubjects = allSubjects.filter(s => {
+                let match = true;
+                if (semester && s.semester !== semester) match = false;
+                if (branch && s.branch !== branch) match = false;
+                return match;
+            });
+        }
+
+        // 2. Fallback: if no specific match, filter by semester only
+        if (fetchedSubjects.length === 0 && semester) {
+            fetchedSubjects = allSubjects.filter(s => s.semester === semester);
+        }
+
+        // 3. Fallback 2: show all active subjects in cache
+        if (fetchedSubjects.length === 0) {
+            fetchedSubjects = allSubjects;
+        }
+
+        // Render the fetched subjects
+        if (fetchedSubjects.length === 0) {
+            modalBody.innerHTML = `
+                <h2> Subject Manager</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 20px;">Manage common subjects for quick access</p>
+                <div class="no-data-alert" style="margin-bottom: 20px; color: var(--text-warning);">
+                    ⚠️ No subjects found in the database.
+                </div>
+                <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                    <button class="btn btn-primary" onclick="closeModal(); switchSection('subjects'); showAddSubjectDialog();">Add Subject</button>
+                    <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+                </div>
+            `;
+            return;
+        }
+
+        // De-duplicate by subjectName to avoid duplicates
+        const uniqueSubjects = [];
+        const seenNames = new Set();
+        fetchedSubjects.forEach(s => {
+            if (!seenNames.has(s.subjectName)) {
+                seenNames.add(s.subjectName);
+                uniqueSubjects.push({
+                    name: s.subjectName,
+                    shortName: s.shortName || '',
+                    code: s.subjectCode,
+                    semester: s.semester,
+                    branch: s.branch
+                });
+            }
+        });
+
+        const subjectItemsHtml = uniqueSubjects.map(s => {
+            const displayTitle = s.shortName ? `${s.name} (${s.shortName})` : s.name;
+            const subtitle = `Sem ${s.semester} • ${s.branch} • ${s.code}`;
+            return `
+                <div class="subject-item" style="display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; margin-bottom: 8px; background: rgba(255, 255, 255, 0.05); border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.1);">
+                    <div style="text-align: left;">
+                        <span style="font-weight: 600; color: var(--text-primary); display: block;">${displayTitle}</span>
+                        <span style="font-size: 0.8rem; color: var(--text-secondary);">${subtitle}</span>
+                    </div>
+                    <button class="btn btn-primary" onclick="applySubjectToSelected('${s.name}')" style="padding: 6px 12px; font-size: 0.85rem;">Apply</button>
+                </div>
+            `;
+        }).join('');
+
+        modalBody.innerHTML = `
+            <h2> Subject Manager</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 15px;">Manage common subjects for quick access</p>
+            <div class="subject-list" style="max-height: 400px; overflow-y: auto; padding-right: 5px; margin-bottom: 20px;">
+                ${subjectItemsHtml}
+            </div>
+            <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+        `;
+
+    } catch (error) {
+        console.error('Error fetching subjects for manager:', error);
+        modalBody.innerHTML = `
+            <h2> Subject Manager</h2>
+            <p style="color: var(--text-danger); margin-bottom: 20px;">❌ Error loading subjects: ${error.message}</p>
+            <button class="btn btn-secondary" onclick="closeModal()">Close</button>
+        `;
+    }
 }
 
 function applySubjectToSelected(subject) {
@@ -8876,6 +8982,7 @@ function debounce(func, wait) {
 // ========================================
 
 async function loadSubjects() {
+    cachedAllSubjects = null; // Invalidate the high-performance subject cache
     try {
         const semester = document.getElementById('subjectSemesterFilter').value;
         const branch = document.getElementById('subjectBranchFilter').value;
