@@ -1450,6 +1450,55 @@ export default function App() {
         return;
       }
 
+      // Check if student has been manually marked on the server first
+      try {
+        const activePeriod = offlinePeriod?.period || currentClassInfo?.period || 'P1';
+        let pId = activePeriod.toString();
+        if (!pId.startsWith('P')) pId = `P${pId}`;
+
+        console.log(`📡 Checking server manual override status for student ${studentId}, period: ${pId}`);
+        const statusResponse = await fetch(`${SERVER_URL}/api/attendance/student/${studentId}/check-manual-mark/${pId}`, {
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        const statusResult = await statusResponse.json();
+        if (statusResult.success && statusResult.isManuallyMarked) {
+          console.log(`⚠️ Server confirms student is manually marked ${statusResult.status}! Locking timer.`);
+          
+          // Sync with the server's manual mark state locally
+          OfflineTimerService.isManuallyMarked = true;
+          OfflineTimerService.attendanceStatus = statusResult.status;
+          OfflineTimerService.timerSeconds = statusResult.timerSeconds || 0;
+          await OfflineTimerService.saveState();
+
+          setOfflineTimerState(prev => ({
+            ...prev,
+            isRunning: false,
+            timerSeconds: statusResult.timerSeconds || 0,
+            attendanceStatus: statusResult.status
+          }));
+
+          Alert.alert(
+            '👨‍🏫 Manual Override Active',
+            `Your attendance has been manually marked by the teacher for this period. You cannot start the timer.`,
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+      } catch (err) {
+        console.warn('⚠️ Server check for manual mark failed, falling back to local state:', err.message);
+        
+        // Fallback to local state check
+        if (OfflineTimerService.isManuallyMarked) {
+          Alert.alert(
+            '👨‍🏫 Manual Override Active',
+            'Your attendance has been manually marked by the teacher for this period. You cannot start the timer.',
+            [{ text: 'OK' }]
+          );
+          return;
+        }
+      }
+
       // Show loading toast for verification process
       showToast('🔐 Verifying WiFi & face — please wait…', 'info', 8000);
 

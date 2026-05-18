@@ -7873,6 +7873,45 @@ app.get('/api/attendance/student/:enrollmentNo/date/:date/lecture/:period', asyn
     }
 });
 
+// Check if student has been manually marked for the specified period today
+app.get('/api/attendance/student/:enrollmentNo/check-manual-mark/:period', async (req, res) => {
+    try {
+        const { enrollmentNo, period } = req.params;
+        
+        let normalizedPeriod = period ? period.toString().toUpperCase() : '';
+        if (normalizedPeriod.startsWith('PP')) normalizedPeriod = normalizedPeriod.substring(1);
+        if (normalizedPeriod && !normalizedPeriod.startsWith('P') && /^[1-8]$/.test(normalizedPeriod)) {
+            normalizedPeriod = 'P' + normalizedPeriod;
+        }
+
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+
+        const record = await PeriodAttendance.findOne({
+            enrollmentNo: enrollmentNo,
+            date: today,
+            period: normalizedPeriod
+        });
+
+        if (record) {
+            return res.json({
+                success: true,
+                isManuallyMarked: true,
+                status: record.status,
+                timerSeconds: record.timerSeconds
+            });
+        }
+
+        res.json({
+            success: true,
+            isManuallyMarked: false
+        });
+    } catch (error) {
+        console.error('Error checking student manual mark:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Get teacher's lectures (Level 4: Teacher View)
 app.get('/api/attendance/teacher/:teacherId/lectures', async (req, res) => {
     try {
