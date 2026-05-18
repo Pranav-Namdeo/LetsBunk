@@ -1079,10 +1079,34 @@ class OfflineTimerService {
         }
       }
 
-      // CAPPING LOGIC: Ensure timerSeconds NEVER exceeds total lecture duration in seconds
-      const maxSeconds = this._getLectureDurationSeconds();
+      // CAPPING LOGIC: Ensure timerSeconds NEVER exceeds the actual elapsed progress of the lecture
+      let maxSeconds = this._getLectureDurationSeconds();
+      if (this.isManuallyMarked) {
+        // Bypass elapsed capping for manual overrides to preserve 75% marked present threshold
+      } else if (this.currentLecture && this.currentLecture.startTime) {
+        try {
+          const now = new Date();
+          const todayDateStr = now.toISOString().split('T')[0];
+          const periodStart = new Date(`${todayDateStr}T${this.currentLecture.startTime}:00`);
+          const periodEnd = this.currentLecture.endTime 
+            ? new Date(`${todayDateStr}T${this.currentLecture.endTime}:00`)
+            : new Date(periodStart.getTime() + maxSeconds * 1000);
+          
+          const currentTime = now.getTime();
+          const elapsedMs = currentTime - periodStart.getTime();
+          
+          if (elapsedMs > 0) {
+            const elapsedSec = Math.floor(elapsedMs / 1000);
+            const durationSec = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 1000);
+            maxSeconds = Math.min(durationSec, elapsedSec);
+          } else {
+            maxSeconds = 0; // Class hasn't started yet!
+          }
+        } catch (_) {}
+      }
+
       if (this.timerSeconds > maxSeconds) {
-        console.log(`⏱️ Capping timerSeconds at maximum period duration of ${maxSeconds} seconds (was ${this.timerSeconds}s)`);
+        console.log(`⏱️ Capping timerSeconds at actual elapsed progress of ${maxSeconds} seconds (was ${this.timerSeconds}s)`);
         this.timerSeconds = maxSeconds;
       }
 

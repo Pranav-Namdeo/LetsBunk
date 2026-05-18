@@ -3103,6 +3103,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         const pNum = parseInt(resolvedPeriodId.replace(/[^0-9]/g, '')) || 1;
         let maxSeconds = 3600; // default 1 hour fallback
+        let elapsedSecondsCap = maxSeconds;
+
         if (ttObj && ttObj.periods) {
             const pInfo = ttObj.periods[pNum - 1];
             if (pInfo && pInfo.startTime && pInfo.endTime) {
@@ -3112,13 +3114,51 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 if (durationMins > 0) {
                     maxSeconds = durationMins * 60;
                 }
+
+                // Strictly cap timer seconds at actual elapsed seconds since the class start time
+                try {
+                    const now = new Date();
+                    const todayDateStr = now.toISOString().split('T')[0];
+                    const periodStart = new Date(`${todayDateStr}T${pInfo.startTime}:00`);
+                    const periodEnd = new Date(`${todayDateStr}T${pInfo.endTime}:00`);
+                    
+                    const currentTime = now.getTime();
+                    const elapsedMs = currentTime - periodStart.getTime();
+                    
+                    if (elapsedMs > 0) {
+                        const elapsedSec = Math.floor(elapsedMs / 1000);
+                        const durationSec = Math.floor((periodEnd.getTime() - periodStart.getTime()) / 1000);
+                        elapsedSecondsCap = Math.min(durationSec, elapsedSec);
+                    } else {
+                        elapsedSecondsCap = 0; // class hasn't started yet on the server timeline
+                    }
+                } catch (_) {
+                    elapsedSecondsCap = maxSeconds;
+                }
             }
         }
 
         let cappedTimerSeconds = Math.floor(timerSeconds);
-        if (cappedTimerSeconds > maxSeconds) {
-            console.log(`⏱️ [OFFLINE-SYNC] Capping timerSeconds from student ${studentId} at maximum of ${maxSeconds}s (was ${cappedTimerSeconds}s)`);
-            cappedTimerSeconds = maxSeconds;
+        
+        // Skip elapsed capping only if student is currently manually marked present in the DB
+        const isManuallyMarkedDb = await PeriodAttendance.exists({
+            enrollmentNo: studentId,
+            date: getISTMidnight(new Date(timestamp)),
+            period: resolvedPeriodId,
+            verificationType: 'manual',
+            status: 'present'
+        });
+
+        if (isManuallyMarkedDb) {
+            console.log(`👨‍🏫 [OFFLINE-SYNC] Bypassing elapsed time cap for manual-marked student ${studentId}`);
+            if (cappedTimerSeconds > maxSeconds) {
+                cappedTimerSeconds = maxSeconds;
+            }
+        } else {
+            if (cappedTimerSeconds > elapsedSecondsCap) {
+                console.log(`⏱️ [OFFLINE-SYNC] Capping timerSeconds from student ${studentId} at elapsed class progress of ${elapsedSecondsCap}s (was ${cappedTimerSeconds}s)`);
+                cappedTimerSeconds = elapsedSecondsCap;
+            }
         }
 
         // 2b. Guard: reject sync if student has no verified check-in for today
