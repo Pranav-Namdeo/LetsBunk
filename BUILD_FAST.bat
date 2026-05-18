@@ -38,11 +38,25 @@ if not exist "%APK_PATH%" (
 echo ✅ APK ready: %APK_PATH%
 
 REM Check for devices
+set TARGET_DEVICE=
+for /f "tokens=1" %%i in ('adb devices') do (
+    set "LINE=%%i"
+    if not "!LINE!"=="!LINE::5555=!" (
+        set "TARGET_DEVICE=!LINE!"
+    )
+)
+
 adb devices > temp_devices.txt 2>nul
 findstr /C:"device" temp_devices.txt | findstr /V /C:"List of devices" >nul
 if %ERRORLEVEL% EQU 0 (
-    echo ✅ Device detected - installing directly...
-    adb install -r "%APK_PATH%"
+    if not "!TARGET_DEVICE!"=="" (
+        echo ✅ Wireless TCP/IP device detected: !TARGET_DEVICE! - installing wirelessly...
+        adb -s !TARGET_DEVICE! install -r "%APK_PATH%"
+    ) else (
+        echo ✅ USB Device detected - installing directly...
+        adb install -r "%APK_PATH%"
+    )
+    
     if %ERRORLEVEL% EQU 0 (
         echo.
         echo ========================================
@@ -51,7 +65,7 @@ if %ERRORLEVEL% EQU 0 (
     ) else (
         echo.
         echo ⚠️ Install failed - check your device for permission prompts
-        echo You may need to enable "Install via USB" in Developer Options.
+        echo You may need to enable "Install via USB" or "Wireless Debugging" in Developer Options.
     )
 ) else (
     echo.
