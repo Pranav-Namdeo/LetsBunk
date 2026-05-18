@@ -966,15 +966,24 @@ class OfflineTimerService {
         : (this.authorizedBSSID || '');
 
       if (TimerModule.startTimerWithBSSIDAndSyncAndEnd) {
-        // Full version: BSSID + sync + lecture end time (stops natively when period ends)
+        // Full version: BSSID + sync + lecture end time + periodId (stops natively when period ends)
         const endTime = this.currentLecture?.endTime || '';
+        let periodId = '';
+        if (this.currentLecture?.period) {
+          const rawPeriod = this.currentLecture.period.toString();
+          periodId = rawPeriod.startsWith('P') ? rawPeriod : `P${rawPeriod}`;
+        } else if (this.currentLecture?.periodNumber) {
+          const rawPeriod = this.currentLecture.periodNumber.toString();
+          periodId = rawPeriod.startsWith('P') ? rawPeriod : `P${rawPeriod}`;
+        }
         TimerModule.startTimerWithBSSIDAndSyncAndEnd(
           subject,
           this.timerSeconds,
           bssidList,
           this.studentId || '',
           this.serverUrl || '',
-          endTime
+          endTime,
+          periodId
         ).catch((e) => console.warn('⚠️ Native timer start failed:', e));
       } else if (TimerModule.startTimerWithBSSIDAndSync) {
         TimerModule.startTimerWithBSSIDAndSync(

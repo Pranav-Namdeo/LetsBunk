@@ -853,8 +853,8 @@ export default function App() {
 
           // Period changed - save attendance to server for admin panel
           // Save even if timer not running, as long as there's attendance data
-          if (prev.elapsedSeconds > 0 || todayAttendance.lectures.length > 0) {
-            saveAttendanceToServer(prev.elapsedSeconds, 'attending');
+          if (prev.timerSeconds > 0 || todayAttendance.lectures.length > 0) {
+            saveAttendanceToServer(prev.timerSeconds, 'attending', prev.currentLecture);
           }
 
           const updatedLecture = {
@@ -869,7 +869,7 @@ export default function App() {
 
           // Auto-start timer for period transitions (P1->P2, P2->P3, etc.)
           // First time of day requires manual start, regardless of which period
-          const hasStartedTimerToday = prev.elapsedSeconds > 0 || prev.isRunning;
+          const hasStartedTimerToday = prev.timerSeconds > 0 || prev.isRunning;
           const wasRunningBeforeLectureEnd = OfflineTimerService.wasRunningBeforeLectureEnd;
 
           if (hasStartedTimerToday && wasRunningBeforeLectureEnd) {
@@ -2131,21 +2131,16 @@ export default function App() {
   };
 
   // Save attendance to server (period-specific for period changes)
-  const saveAttendanceToServer = async (timerValue, status) => {
+  const saveAttendanceToServer = async (timerValue, status, historicalPeriod) => {
     if (!studentId) return;
 
-    // If no parameters provided, get defaults
-    if (timerValue === undefined) {
-      if (todayAttendance.lectures.length === 0) return;
-      timerValue = todayAttendance.totalAttended || 0;
-    }
     if (status === undefined) {
       status = 'attending';
     }
 
     try {
-      // Get current period info
-      const currentPeriod = offlinePeriod || offlineTimerState.currentLecture;
+      // Get current period info (prefer explicit historical period to avoid race conditions during transitions)
+      const currentPeriod = historicalPeriod || offlinePeriod || offlineTimerState.currentLecture;
       if (!currentPeriod || !currentPeriod.period) {
         console.log('⚠️ No period info available for saving attendance');
         return;
@@ -2160,13 +2155,16 @@ export default function App() {
         clientDate = new Date(_appGetBootMs()).toISOString();
       }
 
-      // Get current timer state from OfflineTimerService if available
-      let currentTimerSeconds = 0;
-      try {
-        const timerState = OfflineTimerService.getState();
-        currentTimerSeconds = timerState.timerSeconds || 0;
-      } catch (error) {
-        console.log('Could not get timer state:', error);
+      // Use the explicitly provided timerValue if defined, otherwise fallback to current singleton state
+      let currentTimerSeconds = timerValue;
+      if (currentTimerSeconds === undefined) {
+        try {
+          const timerState = OfflineTimerService.getState();
+          currentTimerSeconds = timerState.timerSeconds || 0;
+        } catch (error) {
+          console.log('Could not get timer state:', error);
+          currentTimerSeconds = 0;
+        }
       }
 
       console.log('📊 Saving period-specific attendance to server:');
@@ -3114,7 +3112,7 @@ dayKeys.forEach((dayKey) => {
 
     periodicSyncRef.current = setInterval(async () => {
       if (offlineTimerState.isRunning && userData) {
-        saveAttendanceToServer(offlineTimerState.elapsedSeconds, 'attending');
+        saveAttendanceToServer(offlineTimerState.timerSeconds, 'attending');
         console.log('🔄 Periodic attendance sync to server');
       }
     }, 2 * 60 * 1000); // Sync every 2 minutes during active class

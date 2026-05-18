@@ -45,6 +45,9 @@ class TimerService : Service() {
         @Volatile var stoppedDueToWifiInvalid: Boolean = false
         @Volatile var authorizedBSSID: String = ""
 
+        // Period specific info to prevent overlapping period syncs
+        @Volatile var periodId: String = ""
+
         /**
          * Boot-relative elapsed time in milliseconds.
          */
@@ -99,7 +102,8 @@ class TimerService : Service() {
                 val sid        = intent.getStringExtra("studentId") ?: ""
                 val surl       = intent.getStringExtra("serverUrl") ?: ""
                 val endTime    = intent.getStringExtra("lectureEndTime") ?: ""  // "HH:MM"
-                startTimer(subject, resumeFrom, bssid, sid, surl, endTime)
+                val period     = intent.getStringExtra("periodId") ?: ""
+                startTimer(subject, resumeFrom, bssid, sid, surl, endTime, period)
             }
             ACTION_STOP -> stopTimer()
         }
@@ -107,7 +111,7 @@ class TimerService : Service() {
         return START_STICKY
     }
 
-    private fun startTimer(subject: String, resumeFrom: Long, bssid: String, sid: String, surl: String, endTime: String) {
+    private fun startTimer(subject: String, resumeFrom: Long, bssid: String, sid: String, surl: String, endTime: String, period: String) {
         lectureSubject          = subject
         baseSeconds             = resumeFrom
         startBootMs             = SystemClock.elapsedRealtime()
@@ -119,10 +123,11 @@ class TimerService : Service() {
         stoppedDueToWifiInvalid = false
         syncTickCounter         = 0
         nullBssidStreak         = 0
+        periodId                = period
 
         // Parse lecture end time "HH:MM" → minutes since midnight
         lectureEndMinutes = parseEndTime(endTime)
-        Log.d(TAG, "Timer started: subject=$subject resumeFrom=${resumeFrom}s studentId=$sid endTime=$endTime (${lectureEndMinutes}min)")
+        Log.d(TAG, "Timer started: subject=$subject resumeFrom=${resumeFrom}s studentId=$sid endTime=$endTime (${lectureEndMinutes}min) period=$period")
 
         updateNotification()
         handler.post(tickRunnable)
@@ -173,6 +178,13 @@ class TimerService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
         Log.d(TAG, "Timer stopped at ${elapsedSeconds}s")
+
+        // Reset static companion object variables to prevent cross-session leaks
+        elapsedSeconds = 0L
+        lectureSubject = ""
+        stoppedDueToWifiInvalid = false
+        authorizedBSSID = ""
+        periodId = ""
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -195,8 +207,8 @@ class TimerService : Service() {
                 val nowMin = currentWallMinutes()
                 // Handle midnight wrap: if end time is e.g. 00:30 and now is 00:31
                 val diff = nowMin - lectureEndMinutes
-                // Stop if we're past end time (allow 1 min grace for clock drift)
-                if (diff >= 1) {
+                // Stop if we've reached or passed end time (spoof-proof exact stop)
+                if (diff >= 0) {
                     Log.d(TAG, "Lecture ended at $lectureEndMinutes min, now=$nowMin — stopping timer")
                     stopTimer()
                     return
@@ -228,6 +240,7 @@ class TimerService : Service() {
         val sid            = studentId
         val surl           = serverUrl
         val subject        = lectureSubject
+        val pId            = periodId
         val timestamp      = System.currentTimeMillis()
 
         networkExecutor.execute {
@@ -240,12 +253,12 @@ class TimerService : Service() {
                 conn.connectTimeout = 10000
                 conn.readTimeout    = 10000
 
-                val body = """{"studentId":"$sid","timerSeconds":$currentSeconds,"timestamp":$timestamp,"isRunning":${!isFinalSync},"isPaused":false,"lecture":{"subject":"$subject"},"attendedMinutes":${currentSeconds / 60}}"""
+                val body = """{"studentId":"$sid","timerSeconds":$currentSeconds,"timestamp":$timestamp,"isRunning":${!isFinalSync},"isPaused":false,"lecture":{"subject":"$subject"},"periodId":"$pId","attendedMinutes":${currentSeconds / 60}}"""
 
                 OutputStreamWriter(conn.outputStream).use { it.write(body) }
 
                 val code = conn.responseCode
-                Log.d(TAG, "Background sync: HTTP $code, seconds=$currentSeconds, final=$isFinalSync")
+                Log.d(TAG, "Background sync: HTTP $code, seconds=$currentSeconds, period=$pId, final=$isFinalSync")
                 conn.disconnect()
             } catch (e: Exception) {
                 Log.w(TAG, "Background sync failed (non-fatal): ${e.message}")
@@ -421,6 +434,14 @@ class TimerService : Service() {
         handler.removeCallbacks(tickRunnable)
         networkExecutor.shutdown()
         wakeLock?.let { if (it.isHeld) it.release() }
+        
+        // Reset static companion object variables to prevent cross-session leaks
+        elapsedSeconds = 0L
+        lectureSubject = ""
+        stoppedDueToWifiInvalid = false
+        authorizedBSSID = ""
+        periodId = ""
+        
         super.onDestroy()
     }
 }

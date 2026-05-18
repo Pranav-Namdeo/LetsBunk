@@ -70,7 +70,7 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
         serverUrl: String,
         promise: Promise
     ) {
-        startTimerWithBSSIDAndSyncAndEnd(subject, resumeFromSeconds, authorizedBSSID, studentId, serverUrl, "", promise)
+        startTimerWithBSSIDAndSyncAndEnd(subject, resumeFromSeconds, authorizedBSSID, studentId, serverUrl, "", "", promise)
     }
 
     /**
@@ -85,6 +85,7 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
         studentId: String,
         serverUrl: String,
         lectureEndTime: String,
+        periodId: String,
         promise: Promise
     ) {
         try {
@@ -96,6 +97,7 @@ class TimerModule(private val reactContext: ReactApplicationContext) :
                 putExtra("studentId", studentId)
                 putExtra("serverUrl", serverUrl)
                 putExtra("lectureEndTime", lectureEndTime)
+                putExtra("periodId", periodId)
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 reactContext.startForegroundService(intent)
