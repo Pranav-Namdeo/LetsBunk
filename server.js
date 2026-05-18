@@ -671,14 +671,33 @@ app.get('/api/timetable/:semester/*', async (req, res, next) => {
     const semester = req.params.semester;
     const branch = decodeURIComponent(wildcard); // e.g. "AI/ML"
     try {
+        // Disable browser/Chromium caching completely
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+
         if (mongoose.connection.readyState === 1) {
             let timetable = await Timetable.findOne({ semester, branch }).lean();
             if (!timetable) timetable = createDefaultTimetable(semester, branch);
-            res.set('Cache-Control', 'public, max-age=300');
+            
+            // Dynamically inject global period settings
+            const globalPeriodsDoc = await Timetable.findOne({ periods: { $exists: true, $ne: [] } }).select('periods').lean();
+            const globalPeriods = globalPeriodsDoc?.periods || [];
+            if (globalPeriods && globalPeriods.length > 0) {
+                timetable.periods = globalPeriods;
+            }
+
             return res.json({ success: true, timetable });
         } else {
             const key = `${semester}_${branch}`;
             let timetable = timetableMemory[key] || createDefaultTimetable(semester, branch);
+            
+            // For in-memory fallback, also try to use standard periods if available
+            const anyMemoryTimetable = Object.values(timetableMemory).find(t => t.periods && t.periods.length > 0);
+            if (anyMemoryTimetable && anyMemoryTimetable.periods) {
+                timetable.periods = anyMemoryTimetable.periods;
+            }
+
             return res.json({ success: true, timetable });
         }
     } catch (error) {
@@ -693,10 +712,23 @@ app.get('/api/timetable/:semester/:branch', async (req, res) => {
         // e.g. /api/timetable/3/AI%2FML → branch = "AI/ML"
         const effectiveBranch = req.query.branch || req.params.branch;
 
+        // Disable browser/Chromium caching completely
+        res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        res.set('Pragma', 'no-cache');
+        res.set('Expires', '0');
+
         // ── Redis cache ───────────────────────────────────────────────────────
         const cacheKey = `timetable:${semester}:${effectiveBranch}`;
         const cached = await cacheGet(cacheKey);
         if (cached) {
+            // Dynamically inject global period settings if available
+            if (mongoose.connection.readyState === 1) {
+                const globalPeriodsDoc = await Timetable.findOne({ periods: { $exists: true, $ne: [] } }).select('periods').lean();
+                const globalPeriods = globalPeriodsDoc?.periods || [];
+                if (globalPeriods && globalPeriods.length > 0) {
+                    cached.periods = globalPeriods;
+                }
+            }
             res.set('X-Cache', 'HIT');
             return res.json({ success: true, timetable: cached });
         }
@@ -706,8 +738,15 @@ app.get('/api/timetable/:semester/:branch', async (req, res) => {
             if (!timetable) {
                 timetable = createDefaultTimetable(semester, effectiveBranch);
             }
+            
+            // Dynamically inject global period settings
+            const globalPeriodsDoc = await Timetable.findOne({ periods: { $exists: true, $ne: [] } }).select('periods').lean();
+            const globalPeriods = globalPeriodsDoc?.periods || [];
+            if (globalPeriods && globalPeriods.length > 0) {
+                timetable.periods = globalPeriods;
+            }
+
             await cacheSet(cacheKey, timetable, CACHE_TTL.TIMETABLE);
-            res.set('Cache-Control', 'public, max-age=300');
             res.set('X-Cache', 'MISS');
             res.json({ success: true, timetable });
         } else {
@@ -717,6 +756,13 @@ app.get('/api/timetable/:semester/:branch', async (req, res) => {
                 timetable = createDefaultTimetable(semester, effectiveBranch);
                 timetableMemory[key] = timetable;
             }
+
+            // For in-memory fallback, also try to use standard periods if available
+            const anyMemoryTimetable = Object.values(timetableMemory).find(t => t.periods && t.periods.length > 0);
+            if (anyMemoryTimetable && anyMemoryTimetable.periods) {
+                timetable.periods = anyMemoryTimetable.periods;
+            }
+
             res.json({ success: true, timetable });
         }
     } catch (error) {
@@ -1428,6 +1474,14 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
         const currentDay = days[now.getDay()];
         const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
 
+        const todayMidnight = getISTMidnight();
+        const today = todayMidnight;
+        const todayStr = new Date(todayMidnight.getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
+        
+        const nowMs = Date.now();
+        const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+        const SYNC_TIMEOUT_MS    =      90 * 1000; // 90 seconds
+
         console.log(`🔍 Finding current class for teacher: ${teacherId} at ${now.toLocaleTimeString()}`);
 
         // Find teacher
@@ -1618,7 +1672,7 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                 const lastSyncDate = lastSync
                     ? new Date(lastSync).toISOString().split('T')[0]
                     : null;
-                if (lastSyncDate && lastSyncDate !== today) {
+                if (lastSyncDate && lastSyncDate !== todayStr) {
                     timerSecs = 0;
                 }
 
@@ -4199,6 +4253,53 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             
             auditRecords.push(auditRecord);
             console.log(`?? [MANUAL-MARK] Audit record created - AuditId: ${auditRecord.auditId}`);
+
+            // If the period matches the current active period, update liveTimerState and emit timer_broadcast
+            const now = new Date();
+            const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
+            let currentPeriod = null;
+            if (timetable.periods && timetable.periods.length > 0) {
+                for (let i = 0; i < timetable.periods.length; i++) {
+                    const periodInfo = timetable.periods[i];
+                    const periodStart = timeToMinutes(periodInfo.startTime);
+                    const periodEnd = timeToMinutes(periodInfo.endTime);
+                    if (currentTime >= periodStart && currentTime <= periodEnd) {
+                        currentPeriod = `P${periodInfo.number || (i + 1)}`;
+                        break;
+                    }
+                }
+            }
+            
+            if (p === currentPeriod) {
+                console.log(`📡 [MANUAL-MARK] Period ${p} matches current active period. Updating liveTimerState & emitting timer_broadcast...`);
+                try {
+                    const broadcastData = {
+                        studentId: enrollmentNo,
+                        enrollmentNo,
+                        name: student.name,
+                        semester: student.semester?.toString() || '',
+                        branch: student.branch || '',
+                        attendedSeconds: Math.floor(periodTimerSeconds),
+                        timerValue: Math.floor(periodTimerSeconds),
+                        isRunning: false, // Manual mark freezes running state
+                        lectureSubject: pLecture.subject || '',
+                        lectureTeacher: pLecture.teacher || '',
+                        lectureRoom: pLecture.room || '',
+                        lastSyncTime: new Date().toISOString(),
+                        status: status
+                    };
+
+                    await liveTimerState.set(enrollmentNo, {
+                        ...broadcastData,
+                        lastSeen: Date.now()
+                    });
+
+                    const classRoom = `class:${student.semester}:${student.branch}`;
+                    io.to(classRoom).emit('timer_broadcast', broadcastData);
+                } catch (liveErr) {
+                    console.error('⚠️ [MANUAL-MARK] Failed to update live state/emit timer_broadcast:', liveErr.message);
+                }
+            }
         }
 
         // 9. Update AttendanceRecord (daily summary) so history page reflects manual marks with full minutes & lecture details

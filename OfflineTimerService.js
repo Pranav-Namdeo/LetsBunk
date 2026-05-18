@@ -72,6 +72,7 @@ class OfflineTimerService {
     this.syncInterval = null;
     this.bssidMonitorInterval = null;
     this.lectureEndCheckInterval = null;
+    this.isManuallyMarked = false;
     
     // Lecture context
     this.currentLecture = null;
@@ -229,6 +230,16 @@ class OfflineTimerService {
         console.log(`   Room: ${lectureInfo.room}`);
         console.log(`   Start time: ${lectureInfo.startTime}`);
         console.log(`   End time: ${lectureInfo.endTime}`);
+
+        if (this.isManuallyMarked) {
+          console.log('🚫 Cannot start timer: student has been manually marked by teacher');
+          return {
+            success: false,
+            error: 'Your attendance has been manually overridden by the teacher for this period.',
+            reason: 'manual_override_frozen',
+            step: 'manual_override_frozen'
+          };
+        }
 
         // Step 1: Validate BSSID using BSSIDStorage system
         console.log('📶 Step 1: Validating BSSID...');
@@ -815,6 +826,13 @@ class OfflineTimerService {
         console.log('💾 Preserving lecture context for potential resume');
         console.log('   Current timer seconds:', this.timerSeconds);
         console.log('   Current lecture:', this.currentLecture?.subject);
+      } else if (reason === 'manual_mark') {
+        console.log('👨‍🏫 Manual mark stop detected - freezing timer');
+        this.wasRunningBeforeDisconnect = false;
+        this.pausedDueToWiFiLoss = false;
+        this.disconnectionTime = null;
+        this.previousLectureData = null;
+        this.thresholdSeconds = null;
       } else if (reason === 'manual') {
         // Manual stop - track for potential same-lecture restart
         console.log('✋ Manual stop detected - tracking for potential same-lecture restart');
@@ -1949,6 +1967,7 @@ class OfflineTimerService {
         disconnectionTime: this.disconnectionTime,
         pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
         previousLectureData: this.previousLectureData,
+        isManuallyMarked: this.isManuallyMarked,
         timestamp: _getBootMs() || Date.now(),
         bootMs: _getBootMs(),  // spoof-proof anchor for age check on restore
         date: this._getISTDateString() // Add date to discard across midnight
@@ -2033,6 +2052,7 @@ class OfflineTimerService {
           this.previousLectureData = state.previousLectureData || null;
           this.attendanceStatus = state.attendanceStatus || 'absent';
           this.thresholdSeconds = state.thresholdSeconds || null;
+          this.isManuallyMarked = state.isManuallyMarked || false;
           
           console.log('📦 Loaded timer state from storage:', {
             timerSeconds: this.timerSeconds,
@@ -2221,6 +2241,7 @@ class OfflineTimerService {
       this.disconnectionTime = null;
       this.pausedDueToWiFiLoss = false;
       this.previousLectureData = null;
+      this.isManuallyMarked = false;
       
       this.wasManuallyStoppedInSameLecture = false;
       this.wasRunningBeforeLectureEnd = false;

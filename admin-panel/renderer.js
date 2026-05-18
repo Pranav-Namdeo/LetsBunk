@@ -2263,23 +2263,36 @@ async function loadTimetable() {
     }
 
     try {
-        // Load timetable and classrooms in parallel
-        const [timetableRes, classroomsRes, teachersRes] = await Promise.all([
-            fetch(api(`/api/timetable/${semester}/${encodeURIComponent(course)}`)),
-            fetch(GET_CLASSROOMS),
-            fetch(GET_TEACHERS)
+        // Load timetable, classrooms, teachers, and global periods in parallel (cache-busting enabled)
+        const [timetableRes, classroomsRes, teachersRes, periodsRes] = await Promise.all([
+            fetch(api(`/api/timetable/${semester}/${encodeURIComponent(course)}`), { cache: 'no-store' }),
+            fetch(GET_CLASSROOMS, { cache: 'no-store' }),
+            fetch(GET_TEACHERS, { cache: 'no-store' }),
+            fetch(GET_PERIODS, { cache: 'no-store' })
         ]);
 
         const timetableData = await timetableRes.json();
         const classroomsData = await classroomsRes.json();
         const teachersData = await teachersRes.json();
+        const periodsData = await periodsRes.json();
 
         // Update global arrays
         classrooms = classroomsData.classrooms || [];
         teachers = teachersData.teachers || [];
 
+        let globalPeriods = [];
+        if (periodsData.success && Array.isArray(periodsData.periods) && periodsData.periods.length > 0) {
+            globalPeriods = periodsData.periods;
+        }
+
         if (timetableData.success) {
             currentTimetable = timetableData.timetable;
+
+            // Dynamically override/inject global periods configuration so the timetable grid and timings are server-driven!
+            if (globalPeriods.length > 0) {
+                currentTimetable.periods = globalPeriods;
+            }
+
             saveToHistory();
             renderAdvancedTimetableEditor(currentTimetable);
         } else {
@@ -2292,6 +2305,7 @@ async function loadTimetable() {
             `;
         }
     } catch (error) {
+        console.error('Error loading timetable:', error);
         showNotification('Error loading timetable', 'error');
     }
 }
@@ -2305,8 +2319,8 @@ function createNewTimetable() {
         return;
     }
 
-    // Create default timetable structure with configurable college timings
-    const periods = getDefaultPeriods();
+    // Create default timetable structure with dynamically loaded college timings if available
+    const periods = (currentPeriods && currentPeriods.length > 0) ? currentPeriods : getDefaultPeriods();
 
     const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
     const timetable = {};

@@ -889,6 +889,7 @@ export default function App() {
                 OfflineTimerService._countingStartedAt = null;
                 OfflineTimerService.attendanceStatus = 'absent';
                 OfflineTimerService.thresholdSeconds = null;
+                OfflineTimerService.isManuallyMarked = false; // Reset manual mark on transition
                 OfflineTimerService.wasRunningBeforeLectureEnd = false;  // Clear the flag
                 console.log('   Timer state reset to 0 for new period');
 
@@ -920,12 +921,14 @@ export default function App() {
             OfflineTimerService.timerSeconds = 0;
             OfflineTimerService.attendanceStatus = 'absent';
             OfflineTimerService.thresholdSeconds = null;
+            OfflineTimerService.isManuallyMarked = false; // Reset manual mark
           } else {
             console.log('⏸️ Timer was not running in previous period - requires manual start');
             // Reset stale timer from previous period so new period starts clean
             OfflineTimerService.timerSeconds = 0;
             OfflineTimerService.attendanceStatus = 'absent';
             OfflineTimerService.thresholdSeconds = null;
+            OfflineTimerService.isManuallyMarked = false; // Reset manual mark
           }
 
           // Also update OfflineTimerService's internal currentLecture
@@ -1479,6 +1482,10 @@ export default function App() {
 
         // Provide specific error messages based on the step that failed
         switch (result.step) {
+          case 'manual_override_frozen':
+            title = '👨‍🏫 Manual Override Active';
+            message = 'Your attendance has been manually marked by the teacher for this period. You cannot start the timer.';
+            break;
           case 'bssid_validation':
             title = '📶 WiFi Validation Failed';
             message = result.error + '\n\nPlease ensure you are connected to the correct classroom WiFi network.';
@@ -1798,14 +1805,62 @@ export default function App() {
       }
     });
 
-    // Listen for manual marking updates (teachers only)
-    socketRef.current.on('student_manually_marked', (data) => {
+    // Listen for manual marking updates
+    socketRef.current.on('student_manually_marked', async (data) => {
       console.log('📡 Student manually marked update:', data);
       if (selectedRole === 'teacher') {
         // If it's the teacher who did it, they already know, but others need refresh
         fetchStudents();
         if (loginId !== data.markedBy) {
           alert(`👨‍🏫 Attendance Update!\n\n${data.studentName} was marked ${data.status} by ${data.markedByName}.`);
+        }
+      } else if (selectedRole === 'student') {
+        if (studentId === data.enrollmentNo) {
+          console.log(`⚠️ Student manually marked ${data.status} by teacher! Stopping and freezing timer.`);
+          
+          // 1. Force stop the OfflineTimerService timer
+          try {
+            await OfflineTimerService.stopTimer('manual_mark');
+          } catch (e) {
+            console.error('Error stopping timer on manual mark:', e);
+          }
+          
+          // 2. Set the student's status and timer seconds in state
+          // Calculate the correct 75% timer value for this period
+          let periodTimerSeconds = 0;
+          if (data.status === 'present') {
+            const currentPeriod = offlinePeriodRef.current || currentLectureRef.current;
+            if (currentPeriod && currentPeriod.startTime && currentPeriod.endTime) {
+              const startMins = timeToMinutes(currentPeriod.startTime);
+              const endMins = timeToMinutes(currentPeriod.endTime);
+              const durationMins = endMins - startMins;
+              periodTimerSeconds = Math.ceil(durationMins * 60 * 0.75); // 75% threshold
+            } else {
+              periodTimerSeconds = Math.ceil(3600 * 0.75); // 45 mins (75% of 60 mins)
+            }
+          }
+
+          // 3. Update OfflineTimerService internal state directly so it's frozen
+          OfflineTimerService.timerSeconds = periodTimerSeconds;
+          OfflineTimerService.attendanceStatus = data.status;
+          OfflineTimerService.isManuallyMarked = true; // freeze timer starting
+          
+          // 4. Save state so it persists across reload/re-start
+          await OfflineTimerService.saveState();
+
+          // 5. Update local React state to reflect present/absent immediately
+          setOfflineTimerState(prev => ({
+            ...prev,
+            isRunning: false,
+            timerSeconds: periodTimerSeconds,
+            attendanceStatus: data.status
+          }));
+
+          Alert.alert(
+            '👨‍🏫 Manual Attendance Override',
+            `Your teacher manually marked you ${data.status} for this period. Your timer has been frozen.`,
+            [{ text: 'OK' }]
+          );
         }
       }
     });
@@ -4338,51 +4393,66 @@ const onRefreshStudent = async () => {
   // Show ViewRecords screen (full screen overlay)
   if (selectedRole === 'teacher' && showViewRecords) {
     return (
-      <ViewRecords
-        onBack={() => setShowViewRecords(false)}
-        theme={theme}
-      />
+      <View style={{ flex: 1 }}>
+        <ViewRecords
+          onBack={() => setShowViewRecords(false)}
+          theme={theme}
+        />
+        <ToastContainer />
+      </View>
     );
   }
 
   // Show Notifications screen
   if (selectedRole === 'teacher' && showNotification) {
     return (
-      <Notifications
-        onBack={() => setShowNotification(false)}
-        theme={theme}
-        teacherId={userData?.employeeId}
-      />
+      <View style={{ flex: 1 }}>
+        <Notifications
+          onBack={() => setShowNotification(false)}
+          theme={theme}
+          teacherId={userData?.employeeId}
+        />
+        <ToastContainer />
+      </View>
     );
   }
 
   // Show Updates screen
   if (selectedRole === 'teacher' && showUpdates) {
     return (
-      <Updates
-        onBack={() => setShowUpdates(false)}
-        theme={theme}
-      />
+      <View style={{ flex: 1 }}>
+        <Updates
+          onBack={() => setShowUpdates(false)}
+          theme={theme}
+        />
+        <ToastContainer />
+      </View>
     );
   }
 
   // Show Help and Support screen
   if (selectedRole === 'teacher' && showHelpAndSupport) {
     return (
-      <HelpAndSupport
-        onBack={() => setShowHelpAndSupport(false)}
-        theme={theme}
-      />
+      <View style={{ flex: 1 }}>
+        <HelpAndSupport
+          onBack={() => setShowHelpAndSupport(false)}
+          theme={theme}
+        />
+        <ToastContainer />
+      </View>
     );
   }
 
   // Show Feedback screen
   if (selectedRole === 'teacher' && showFeedback) {
     return (
-      <Feedback
-        onBack={() => setShowFeedback(false)}
-        theme={theme}
-      />
+      <View style={{ flex: 1 }}>
+        <Feedback
+          onBack={() => setShowFeedback(false)}
+          theme={theme}
+        />
+        <ToastContainer />
+      </View>
     );
   }
 
@@ -4729,6 +4799,7 @@ const onRefreshStudent = async () => {
             </View>
           </Animated.View>
         )}
+        <ToastContainer />
       </View>
     );
   }
@@ -4751,6 +4822,7 @@ const onRefreshStudent = async () => {
           theme={theme}
           userRole="teacher"
         />
+        <ToastContainer />
       </View>
     );
   }
@@ -4781,6 +4853,7 @@ const onRefreshStudent = async () => {
           theme={theme}
           userRole="teacher"
         />
+        <ToastContainer />
       </View>
     );
   }
@@ -5337,6 +5410,7 @@ const onRefreshStudent = async () => {
             </View>
           </Modal>
         )}
+        <ToastContainer />
       </View>
     );
   }
@@ -6024,7 +6098,7 @@ const onRefreshStudent = async () => {
               }}>
                 {(() => {
                   // Cap displayed seconds to the lecture duration so timer never shows > period length
-                  const periodSrcDisplay = offlinePeriod || offlineTimerState.currentLecture;
+                  const periodSrcDisplay = offlinePeriod || offlineTimerState.currentLecture || currentClassInfo;
                   const maxSecs = (() => {
                     if (typeof periodSrcDisplay?.startTime === 'string' && typeof periodSrcDisplay?.endTime === 'string') {
                       const [sh, sm] = periodSrcDisplay.startTime.split(':').map(Number);
@@ -6066,10 +6140,10 @@ const onRefreshStudent = async () => {
               {/* Attendance Threshold Progress */}
               {(() => {
                 const pctRequired = offlineTimerState.attendanceThreshold || 75;
-                const periodNum = offlinePeriod?.period || offlineTimerState.currentLecture?.period || null;
+                const periodNum = offlinePeriod?.period || offlineTimerState.currentLecture?.period || currentClassInfo?.period || null;
 
                 // Source of truth for period times
-                const periodSrc = offlinePeriod || offlineTimerState.currentLecture;
+                const periodSrc = offlinePeriod || offlineTimerState.currentLecture || currentClassInfo;
 
                 // Compute total period duration in seconds — NO cap
                 const totalSecs = (() => {
@@ -6125,7 +6199,7 @@ const onRefreshStudent = async () => {
                     {/* Header row */}
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                       <Text style={{ fontSize: 12, color: theme.textSecondary }}>
-                        {periodNum ? `P${periodNum} · ` : ''}{pctRequired}% attendance required
+                        {periodNum ? `P${periodNum}  |  ` : ''}{pctRequired}% attendance required
                       </Text>
                       <Text style={{ fontSize: 12, fontWeight: 'bold', color: reached ? '#22c55e' : '#f59e0b' }}>
                         {reached ? '✅ Present' : `${pct}%`}
@@ -6161,7 +6235,7 @@ const onRefreshStudent = async () => {
                     {/* Period total duration + need to attend */}
                     <Text style={{ fontSize: 11, color: theme.textSecondary, marginBottom: 4 }}>
                       📅 Period: <Text style={{ fontWeight: '600', color: theme.text }}>{totalFmt}</Text>
-                      {'  '}·{'  '}Need <Text style={{ fontWeight: '600', color: theme.text }}>{thresholdFmt}</Text> to be present
+                      {'  '}|{'  '}Need <Text style={{ fontWeight: '600', color: theme.text }}>{thresholdFmt}</Text> to be present
                     </Text>
 
                     {/* Period ends in */}
@@ -6175,11 +6249,11 @@ const onRefreshStudent = async () => {
                     {/* Attended / remaining to mark present */}
                     {reached ? (
                       <Text style={{ fontSize: 11, color: '#22c55e', fontWeight: '600', textAlign: 'center' }}>
-                        ✅ Attended {attendedFmt} — marked present
+                        ✅ Attended {attendedFmt}  |  marked present
                       </Text>
                     ) : (
                       <Text style={{ fontSize: 11, color: '#f59e0b', fontWeight: '600', textAlign: 'center' }}>
-                        ⏱ Attended {attendedFmt} · Need {remainFmt} more to be marked present
+                        ⏱ Attended {attendedFmt}  |  Need {remainFmt} more to be marked present
                       </Text>
                     )}
                   </View>

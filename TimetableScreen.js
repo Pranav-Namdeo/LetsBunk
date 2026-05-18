@@ -6,7 +6,7 @@ import {
 import { BookIcon, CalendarIcon, CoffeeIcon, LocationIcon } from './Icons';
 import { getServerTime } from './ServerTime';
 
-import { GET_SUBJECTS, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TEACHERS, POST_TIMETABLE } from './constants/apiEndpoints';
+import { GET_SUBJECTS, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TEACHERS, POST_TIMETABLE, GET_TIMETABLE_BY_SEMESTER_BRANCH, PUT_TIMETABLE_BY_SEMESTER_BRANCH } from './constants/apiEndpoints';
 export default function TimetableScreen({ 
   theme, 
   semester, 
@@ -170,7 +170,7 @@ export default function TimetableScreen({
   // Get current day index based on available days
   const getCurrentDayIndex = () => {
     try {
-      const dayOfWeek = getServerTime().nowDate().getDay();
+      const dayOfWeek = getServerTime().getISTDate().getUTCDay();
       const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
       const currentDayName = dayNames[dayOfWeek];
 
@@ -224,7 +224,7 @@ export default function TimetableScreen({
           
           // Fetch timetable for current class
           const branchParam = encodeURIComponent(currentClass.branch);
-          const url = POST_TIMETABLE;
+          const url = GET_TIMETABLE_BY_SEMESTER_BRANCH(currentClass.semester, branchParam);
           console.log('Fetching current class timetable from:', url);
           
           const response = await fetch(url, {
@@ -247,7 +247,7 @@ export default function TimetableScreen({
         if (semester && branch) {
           console.log('📋 Using manual selection:', semester, branch);
           const branchParam = encodeURIComponent(branch);
-          const url = POST_TIMETABLE;
+          const url = GET_TIMETABLE_BY_SEMESTER_BRANCH(semester, branchParam);
           console.log('Fetching manual timetable from:', url);
           
           const response = await fetch(url, {
@@ -289,7 +289,7 @@ export default function TimetableScreen({
     setLoading(true);
     try {
       const branchParam = encodeURIComponent(branch);
-      const url = POST_TIMETABLE;
+      const url = GET_TIMETABLE_BY_SEMESTER_BRANCH(semester, branchParam);
       console.log('Fetching from:', url);
 
       const response = await fetch(url, {
@@ -336,7 +336,8 @@ export default function TimetableScreen({
     setSaving(true);
     try {
       const branchParam = encodeURIComponent(branch);
-      const response = await fetch(POST_TIMETABLE, {
+      const url = PUT_TIMETABLE_BY_SEMESTER_BRANCH(semester, branchParam);
+      const response = await fetch(url, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ timetable: timetable.timetable })
@@ -556,8 +557,7 @@ export default function TimetableScreen({
       const periods = timetable?.periods;
       if (!periods || periods.length === 0) return null;
 
-      const now = getServerTime().nowDate();
-      const currentMins = now.getHours() * 60 + now.getMinutes();
+      const currentMins = getServerTime().getCurrentTimeInMinutes();
 
       for (const p of periods) {
         if (!p.startTime || !p.endTime) continue;
@@ -808,12 +808,23 @@ export default function TimetableScreen({
                               {isBreak ? 'Break' : subject.subject || 'Free Period'}
                             </Text>
                           </View>
-                          {!isBreak && subject.room && (
-                            <View style={styles.roomRow}>
-                              <LocationIcon size={12} color={theme.textSecondary} />
-                              <Text style={[styles.roomName, { color: theme.textSecondary, marginLeft: 4 }]}>
-                                {subject.room}
-                              </Text>
+                          {!isBreak && (subject.room || subject.teacher) && (
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 4 }}>
+                              {subject.room ? (
+                                <View style={styles.roomRow}>
+                                  <LocationIcon size={12} color={theme.textSecondary} />
+                                  <Text style={[styles.roomName, { color: theme.textSecondary, marginLeft: 4 }]}>
+                                    {subject.room}
+                                  </Text>
+                                </View>
+                              ) : null}
+                              {subject.teacher ? (
+                                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                  <Text style={{ fontSize: 12, color: theme.textSecondary }}>
+                                    👨‍🏫 {subject.teacher}
+                                  </Text>
+                                </View>
+                              ) : null}
                             </View>
                           )}
                         </>
@@ -1225,6 +1236,10 @@ export default function TimetableScreen({
                   setEditingCell(null);
                   setEditSubject('');
                   setEditRoom('');
+                  setEditTeacher('');
+                  setShowSubjectDropdown(false);
+                  setShowRoomDropdown(false);
+                  setShowTeacherDropdown(false);
                 }}
                 style={{
                   flex: 1,
