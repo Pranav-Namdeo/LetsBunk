@@ -1939,9 +1939,13 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                 ? (timeToMinutes(endTime) - timeToMinutes(startTime)) * 60
                 : 0;
 
-            const attendedSec = pRecord && pRecord.timerSeconds != null
+            let attendedSec = pRecord && pRecord.timerSeconds != null
                 ? Math.floor(pRecord.timerSeconds)
                 : (pRecord && pRecord.status === 'present' ? durationSec : 0);
+
+            if (durationSec > 0 && attendedSec > durationSec) {
+                attendedSec = durationSec;
+            }
 
             const pct = durationSec > 0
                 ? Math.min(100, Math.round((attendedSec / durationSec) * 100))
@@ -3062,6 +3066,61 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             });
         }
 
+        // Retrieve timetable to check period details and cap timerSeconds
+        let resolvedPeriodId = clientPeriodId;
+        const timetable = await Timetable.findOne({
+            semester: student.semester?.toString(),
+            branch: student.branch
+        });
+
+        // Fallback for branch aliases
+        let ttObj = timetable;
+        if (!ttObj && (student.branch === 'Cse' || student.branch === 'CSE')) {
+             ttObj = await Timetable.findOne({ semester: student.semester?.toString(), branch: 'Computer Science' });
+        }
+
+        if (!resolvedPeriodId) {
+            // Detect periodId dynamically from current time if not provided by client
+            const now = new Date();
+            const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
+            if (ttObj && ttObj.periods && ttObj.periods.length > 0) {
+                for (let i = 0; i < ttObj.periods.length; i++) {
+                    const periodInfo = ttObj.periods[i];
+                    const periodStart = timeToMinutes(periodInfo.startTime);
+                    const periodEnd = timeToMinutes(periodInfo.endTime);
+                    if (currentTime >= periodStart && currentTime <= periodEnd) {
+                        resolvedPeriodId = `P${periodInfo.number || (i + 1)}`;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // If still no periodId, fallback to P1
+        if (!resolvedPeriodId) {
+            resolvedPeriodId = 'P1';
+        }
+
+        const pNum = parseInt(resolvedPeriodId.replace(/[^0-9]/g, '')) || 1;
+        let maxSeconds = 3600; // default 1 hour fallback
+        if (ttObj && ttObj.periods) {
+            const pInfo = ttObj.periods[pNum - 1];
+            if (pInfo && pInfo.startTime && pInfo.endTime) {
+                const startMins = timeToMinutes(pInfo.startTime);
+                const endMins = timeToMinutes(pInfo.endTime);
+                const durationMins = endMins - startMins;
+                if (durationMins > 0) {
+                    maxSeconds = durationMins * 60;
+                }
+            }
+        }
+
+        let cappedTimerSeconds = Math.floor(timerSeconds);
+        if (cappedTimerSeconds > maxSeconds) {
+            console.log(`⏱️ [OFFLINE-SYNC] Capping timerSeconds from student ${studentId} at maximum of ${maxSeconds}s (was ${cappedTimerSeconds}s)`);
+            cappedTimerSeconds = maxSeconds;
+        }
+
         // 2b. Guard: reject sync if student has no verified check-in for today
         const syncDate = new Date(timestamp);
         const todayStart = getISTMidnight(syncDate);
@@ -3231,8 +3290,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 name: student.name,
                 semester,
                 branch,
-                attendedSeconds: Math.floor(timerSeconds),
-                timerValue: Math.floor(timerSeconds),
+                attendedSeconds: cappedTimerSeconds,
+                timerValue: cappedTimerSeconds,
                 isRunning: Boolean(isRunning),
                 lectureSubject: lecture?.subject || '',
                 lectureTeacher: lecture?.teacher || '',
@@ -3319,7 +3378,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     },
                     {
                         $max: {
-                            timerSeconds: Math.floor(timerSeconds)
+                            timerSeconds: cappedTimerSeconds
                         },
                         $set: {
                             updatedAt: new Date()
@@ -3366,7 +3425,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                             } else if (Boolean(isRunning)) {
                                 periodStatus = 'active';
                             }
-                        } else if (storedSeconds >= Math.floor(timerSeconds) && computedStatus === 'present') {
+                        } else if (storedSeconds >= cappedTimerSeconds && computedStatus === 'present') {
                             // No period info available but a previous sync already marked present — keep it
                             periodStatus = 'present';
                         }
@@ -3378,7 +3437,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     );
                 }
 
-                console.log(`📊 [OFFLINE-SYNC] Upserted PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Timer: ${Math.floor(timerSeconds)}s`);
+                console.log(`📊 [OFFLINE-SYNC] Upserted PeriodAttendance - Student: ${studentId}, Period: ${periodId}, Timer: ${cappedTimerSeconds}s`);
             }
         } catch (periodError) {
             console.error(`❌ [OFFLINE-SYNC] Error upserting PeriodAttendance:`, periodError);
@@ -3388,7 +3447,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         try {
             const today = new Date();
             today.setHours(0, 0, 0, 0);
-            const attendedMinutes = Math.floor(timerSeconds / 60);
+            const attendedMinutes = Math.floor(cappedTimerSeconds / 60);
 
             // Ensure a base AttendanceRecord exists before syncAttendanceRecord runs
             // (syncAttendanceRecord uses upsert so this is just a safety net for totalClassTime)
@@ -3427,7 +3486,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     totalAttended:  attendedMinutes,
                     totalClassTime: classMinutes,
                     dayPercentage:  classMinutes > 0 ? Math.round((attendedMinutes / classMinutes) * 100) : 0,
-                    timerValue:     Math.floor(timerSeconds),
+                    timerValue:     cappedTimerSeconds,
                     createdAt:      new Date(),
                     updatedAt:      new Date()
                 });
@@ -3449,12 +3508,12 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         }
 
         const duration = Date.now() - startTime;
-        console.log(`✅ [OFFLINE-SYNC] Sync successful - Student: ${studentId}, Timer: ${timerSeconds}s, Duration: ${duration}ms`);
+        console.log(`✅ [OFFLINE-SYNC] Sync successful - Student: ${studentId}, Timer: ${cappedTimerSeconds}s, Duration: ${duration}ms`);
 
         // Emit real-time update to admin panel so calendar refreshes without page reload
         io.emit('student_timer_sync', {
             enrollmentNo: studentId,
-            timerSeconds: Math.floor(timerSeconds),
+            timerSeconds: cappedTimerSeconds,
             isRunning: Boolean(isRunning),
             status: computedStatus,
             activePeriod: periodId, // periodId is available from the logic above
@@ -3464,7 +3523,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         res.json({
             success: true,
             message: 'Timer data synced successfully',
-            syncedSeconds: Math.floor(timerSeconds),
+            syncedSeconds: cappedTimerSeconds,
             serverTime: new Date().toISOString(),
             missedRandomRing: missedRandomRing,
             duration: duration,
