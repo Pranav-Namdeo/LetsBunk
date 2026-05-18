@@ -18,12 +18,12 @@ const fetch = require('node-fetch');
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const SERVER = 'https://letsbunk-uw7g.onrender.com';
-const LOGIN_ID = '1234';
-const LOGIN_PASSWORD = 'aditya';
+const LOGIN_ID = '0000';
+const LOGIN_PASSWORD = 'pranav';
 
 // If you know your WiFi BSSID already, paste it here.
 // Otherwise the script will try to read it via the wifi-name package.
-const MANUAL_BSSID = null; // e.g. 'aa:bb:cc:dd:ee:ff'
+const MANUAL_BSSID = 'fe:9f:1c:92:d7:8b'; // e.g. 'aa:bb:cc:dd:ee:ff'
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ─── HELPERS ─────────────────────────────────────────────────────────────────
@@ -258,7 +258,8 @@ async function verifyAttendanceStatus(enrollmentNo) {
     const wifiBSSID = await getBSSID();
 
     // 4. Check-in
-    const checkInResult = await checkIn(user.enrollmentNo, faceEmbedding, wifiBSSID);
+    const enrollmentNo = user.enrollmentNo || user.id || LOGIN_ID;
+    const checkInResult = await checkIn(enrollmentNo, faceEmbedding, wifiBSSID);
 
     // Build a lecture object for the timer — use check-in response if available,
     // otherwise fall back to a generic placeholder so the timer still runs.
@@ -273,13 +274,13 @@ async function verifyAttendanceStatus(enrollmentNo) {
 
     // 5. Run timer for 3 minutes (syncing every 30s)
     //    Reduce to 10s intervals if you want faster output: runTimer(..., 60, 10)
-    const timerSeconds = await runTimer(user.enrollmentNo, lecture, 180, 30);
+    const timerSeconds = await runTimer(enrollmentNo, lecture, 180, 30);
 
     // 6. Save final attendance record
-    await saveAttendanceRecord(user, lecture, timerSeconds);
+    await saveAttendanceRecord({ ...user, enrollmentNo }, lecture, timerSeconds);
 
     // 7. Verify status
-    await verifyAttendanceStatus(user.enrollmentNo);
+    await verifyAttendanceStatus(enrollmentNo);
 
     console.log('\n' + '='.repeat(60));
     console.log('  Test complete. Review the output above for issues.');
