@@ -4155,7 +4155,8 @@ const onRefreshStudent = async () => {
             try {
               await OfflineTimerService.stopTimer('logout');
               OfflineTimerService.cleanup();
-              console.log('✅ OfflineTimerService stopped and cleaned up');
+              await OfflineTimerService.clearUserData();
+              console.log('✅ OfflineTimerService stopped, cleaned up and user data cleared');
             } catch (e) { console.warn('OfflineTimerService cleanup error:', e.message); }
 
             // 2. Disconnect socket

@@ -2189,6 +2189,69 @@ class OfflineTimerService {
     
     this.listeners = [];
   }
+
+  /**
+   * Clear all user-specific timer state, stored cache, and native redundancy on logout
+   */
+  async clearUserData() {
+    try {
+      console.log('🧹 Clearing all OfflineTimerService user data...');
+      
+      // 1. Reset in-memory properties
+      this.isRunning = false;
+      this.isPaused = false;
+      this.timerSeconds = 0;
+      this.studentId = null;
+      this.serverUrl = null;
+      
+      this.currentLecture = null;
+      this.lectureStartTime = null;
+      this.authorizedBSSID = null;
+      
+      this.wasRunningBeforeDisconnect = false;
+      this.disconnectionTime = null;
+      this.pausedDueToWiFiLoss = false;
+      this.previousLectureData = null;
+      
+      this.wasManuallyStoppedInSameLecture = false;
+      this.wasRunningBeforeLectureEnd = false;
+      this.lastVerifiedLecture = null;
+      this.lastFaceVerificationTime = null;
+      this.verifiedToday = false;
+      this.verifiedTodayDate = null;
+      this._cachedFaceEmbedding = null;
+      this._cachedFaceEmbeddingDate = null;
+      this.syncQueue = [];
+      this.pendingSyncCount = 0;
+      this.syncRetryCount = 0;
+      this.needsUserIntervention = false;
+      this.backgroundStartTime = null;
+
+      // 2. Clear AsyncStorage entries
+      const keysToClear = [
+        OFFLINE_TIMER_KEY,   // '@offline_timer_state'
+        SYNC_QUEUE_KEY,       // '@sync_queue'
+        LECTURE_CONTEXT_KEY   // '@lecture_context'
+      ];
+      await AsyncStorage.multiRemove(keysToClear).catch(() => {});
+
+      // 3. Clear SecureStorage redundancy
+      await SecureStorage.clearTimerStateRedundancy().catch(() => {});
+
+      // 4. Clear Native Hardware Redundancy for timer_state_full
+      if (TimerModule && TimerModule.clearRedundancyData) {
+        await TimerModule.clearRedundancyData('timer_state_full').catch(() => {});
+      } else if (TimerModule && TimerModule.saveRedundancyData) {
+        await TimerModule.saveRedundancyData('timer_state_full', '').catch(() => {});
+      }
+
+      console.log('✅ OfflineTimerService user data cleared successfully');
+      return true;
+    } catch (error) {
+      console.error('❌ Error clearing OfflineTimerService user data:', error);
+      return false;
+    }
+  }
 }
 
 // Export singleton instance
