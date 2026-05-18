@@ -942,6 +942,11 @@ class OfflineTimerService {
     if (extraSeconds > 0) {
       this.timerSeconds += Math.floor(extraSeconds);
     }
+
+    const maxSeconds = this._getLectureDurationSeconds();
+    if (this.timerSeconds > maxSeconds) {
+      this.timerSeconds = maxSeconds;
+    }
     
     this.isPaused = false;
     // Re-anchor timestamp so elapsed calculation starts fresh from current value
@@ -956,6 +961,23 @@ class OfflineTimerService {
       reason: reason,
       timerSeconds: this.timerSeconds
     });
+  }
+
+  _getLectureDurationSeconds() {
+    if (!this.currentLecture || !this.currentLecture.startTime || !this.currentLecture.endTime) {
+      return 3600; // default 1 hour fallback
+    }
+    try {
+      const parseTimeToMinutes = (t) => {
+        const [h, m] = t.split(':').map(Number);
+        return h * 60 + m;
+      };
+      const durationMins = parseTimeToMinutes(this.currentLecture.endTime) - parseTimeToMinutes(this.currentLecture.startTime);
+      return durationMins * 60;
+    } catch (e) {
+      console.warn('⚠️ Error parsing lecture times inside OfflineTimerService:', e);
+      return 3600;
+    }
   }
 
   /**
@@ -1055,6 +1077,13 @@ class OfflineTimerService {
           this.timerSeconds = this._countingBaseSeconds +
             Math.floor((nowMs - this._countingStartedAt) / 1000);
         }
+      }
+
+      // CAPPING LOGIC: Ensure timerSeconds NEVER exceeds total lecture duration in seconds
+      const maxSeconds = this._getLectureDurationSeconds();
+      if (this.timerSeconds > maxSeconds) {
+        console.log(`⏱️ Capping timerSeconds at maximum period duration of ${maxSeconds} seconds (was ${this.timerSeconds}s)`);
+        this.timerSeconds = maxSeconds;
       }
 
       // Save state every 10 seconds
