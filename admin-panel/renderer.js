@@ -1153,6 +1153,14 @@ function openBulkEmailModal(mode) {
     const badge = document.getElementById('bulkEmailTargetBadge');
     const subject = document.getElementById('bulkEmailSubject');
     const body = document.getElementById('bulkEmailBody');
+    const listContainer = document.getElementById('bulkEmailRecipientList');
+    
+    // Reset Select All
+    const selectAllCb = document.getElementById('bulkEmailSelectAll');
+    if (selectAllCb) selectAllCb.checked = true;
+
+    let students = window.dashboardStudents || [];
+    let targetsHtml = '';
 
     if (mode === 'at-risk') {
         badge.textContent = 'At-Risk Students (< 60%)';
@@ -1160,15 +1168,40 @@ function openBulkEmailModal(mode) {
         badge.style.color = '#f59e0b';
         subject.value = 'Important: Attendance Warning';
         body.value = 'Dear {name},\n\nYour current attendance is {attendance}%, which is below the required threshold of 60%. Please ensure you attend upcoming classes regularly to avoid detention.\n\nRegards,\nAdmin';
+        
+        students.forEach(s => {
+            let perc = s.computedPercentage !== undefined ? s.computedPercentage : 100;
+            if (perc < 60) {
+                targetsHtml += `<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer;"><input type="checkbox" class="email-recipient-cb" value="${s.enrollmentNo || s._id}" checked data-name="${s.name}" data-email="${s.email}" data-perc="${perc.toFixed(1)}"> ${s.name} (${s.enrollmentNo || s._id}) - ${perc.toFixed(1)}%</label>`;
+            }
+        });
     } else {
         badge.textContent = 'High Performers (>= 75%)';
         badge.style.background = 'rgba(34,197,94,0.15)';
         badge.style.color = '#22c55e';
         subject.value = 'Appreciation for Excellent Attendance';
         body.value = 'Dear {name},\n\nWe would like to appreciate your excellent attendance record of {attendance}%. Keep up the great work!\n\nRegards,\nAdmin';
+
+        students.forEach(s => {
+            let perc = s.computedPercentage !== undefined ? s.computedPercentage : 100;
+            if (perc >= 75) {
+                targetsHtml += `<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer;"><input type="checkbox" class="email-recipient-cb" value="${s.enrollmentNo || s._id}" checked data-name="${s.name}" data-email="${s.email}" data-perc="${perc.toFixed(1)}"> ${s.name} (${s.enrollmentNo || s._id}) - ${perc.toFixed(1)}%</label>`;
+            }
+        });
+    }
+
+    if(targetsHtml === '') {
+        listContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; font-style: italic;">No students match this criteria.</div>';
+    } else {
+        listContainer.innerHTML = targetsHtml;
     }
 
     modal.style.display = 'flex';
+}
+
+function toggleAllEmailRecipients(isChecked) {
+    const checkboxes = document.querySelectorAll('.email-recipient-cb');
+    checkboxes.forEach(cb => cb.checked = isChecked);
 }
 
 function closeBulkEmailModal() {
@@ -1187,26 +1220,29 @@ async function sendBulkEmail() {
         return;
     }
 
+    const checkboxes = document.querySelectorAll('.email-recipient-cb:checked');
+    if (checkboxes.length === 0) {
+        alert("Please select at least one recipient.");
+        return;
+    }
+
     const btn = document.getElementById('sendBulkEmailBtn');
     btn.innerHTML = '<span>Sending...</span>';
     btn.disabled = true;
     btn.style.opacity = '0.7';
 
-    // Identify Targets
-    let students = window.dashboardStudents || [];
+    // Identify Targets from checked boxes
     let targets = [];
-    
-    students.forEach(s => {
-        let perc = s.computedPercentage !== undefined ? s.computedPercentage : 100;
-        if (currentEmailCohort === 'at-risk' && perc < 60) {
-            targets.push({ name: s.name, email: s.email, attendance: perc.toFixed(1) });
-        } else if (currentEmailCohort === 'good-attendance' && perc >= 75) {
-            targets.push({ name: s.name, email: s.email, attendance: perc.toFixed(1) });
-        }
+    checkboxes.forEach(cb => {
+        targets.push({ 
+            name: cb.getAttribute('data-name'), 
+            email: cb.getAttribute('data-email') || '', 
+            attendance: cb.getAttribute('data-perc') 
+        });
     });
 
     if (targets.length === 0) {
-        alert("No students found matching this criteria.");
+        alert("No valid students found matching this criteria.");
         closeBulkEmailModal();
         return;
     }
@@ -1220,7 +1256,8 @@ async function sendBulkEmail() {
                 target: currentEmailCohort,
                 subject: subject,
                 message: bodyTemplate,
-                count: targets.length
+                count: targets.length,
+                recipients: targets
             })
         });
 
@@ -1269,16 +1306,35 @@ function closeStudentListModal() {
     document.getElementById('dashStudentListModal').style.display = 'none';
 }
 
-function prevDashStudentPage() {
-    if (dashStudentCurrentPage > 1) {
-        dashStudentCurrentPage--;
-        renderDashStudentList(false);
-    }
-}
+function checkDashStudentInfiniteScroll() {
+    const container = document.getElementById('dashStudentScrollContainer');
+    if (!container) return;
+    
+    // Check if scrolled to bottom (within 50px)
+    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 50) {
+        // Prevent multiple simultaneous triggers by checking if we have more pages
+        const branchFilter = document.getElementById('dashStudentListBranch').value;
+        const thresholdFilter = document.getElementById('dashStudentListThreshold').value;
+        let students = window.dashboardStudents || [];
+        
+        if (branchFilter !== 'ALL BRANCHES') students = students.filter(s => s.branch === branchFilter);
+        
+        let validCount = 0;
+        students.forEach(s => {
+            let perc = s.computedPercentage !== undefined ? s.computedPercentage : -1;
+            if (thresholdFilter === 'EXCELLENT' && perc < 75) return;
+            if (thresholdFilter === 'GOOD' && (perc >= 75 || perc < 60 || perc === -1)) return;
+            if (thresholdFilter === 'AT RISK' && (perc >= 60 || perc < 30 || perc === -1)) return;
+            if (thresholdFilter === 'DETAINED' && (perc >= 30 || perc === -1)) return;
+            validCount++;
+        });
 
-function nextDashStudentPage() {
-    dashStudentCurrentPage++;
-    renderDashStudentList(false);
+        const totalPages = Math.ceil(validCount / dashStudentItemsPerPage) || 1;
+        if (dashStudentCurrentPage < totalPages) {
+            dashStudentCurrentPage++;
+            renderDashStudentList(false);
+        }
+    }
 }
 
 function renderDashStudentList(resetPage = true) {
@@ -1287,7 +1343,12 @@ function renderDashStudentList(resetPage = true) {
     const branchFilter = document.getElementById('dashStudentListBranch').value;
     const thresholdFilter = document.getElementById('dashStudentListThreshold').value;
     const tbody = document.getElementById('dashStudentListBody');
-    tbody.innerHTML = '';
+    
+    if (resetPage) {
+        tbody.innerHTML = '';
+        const container = document.getElementById('dashStudentScrollContainer');
+        if (container) container.scrollTop = 0;
+    }
 
     let students = window.dashboardStudents || [];
     
@@ -1333,14 +1394,10 @@ function renderDashStudentList(resetPage = true) {
     const endIndex = startIndex + dashStudentItemsPerPage;
     const paginatedStudents = filteredStudents.slice(startIndex, endIndex);
 
-    // Update UI Controls
-    const prevBtn = document.getElementById('dashStudentPrevBtn');
-    const nextBtn = document.getElementById('dashStudentNextBtn');
-    const pageInfo = document.getElementById('dashStudentPageInfo');
-
-    if (prevBtn) prevBtn.disabled = dashStudentCurrentPage === 1;
-    if (nextBtn) nextBtn.disabled = dashStudentCurrentPage === totalPages;
-    if (pageInfo) pageInfo.textContent = `Page ${dashStudentCurrentPage} of ${totalPages} (${filteredStudents.length} total)`;
+    if (resetPage && paginatedStudents.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color: var(--text-muted); padding: 20px;">No students found matching filters.</td></tr>';
+        return;
+    }
 
     paginatedStudents.forEach(item => {
         const { s, perc, status, statusClass } = item;

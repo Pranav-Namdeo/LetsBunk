@@ -373,7 +373,7 @@
                                         <option value="DETAINED">Detained (<30%)</option>
                                     </select>
                                 </div>
-                                <div class="table-container" style="max-height: 400px; overflow-y: auto;">
+                                <div id="dashStudentScrollContainer" class="table-container" style="max-height: 400px; overflow-y: auto;" onscroll="checkDashStudentInfiniteScroll()">
                                     <table class="data-table">
                                         <thead>
                                             <tr>
@@ -387,11 +387,6 @@
                                         </thead>
                                         <tbody id="dashStudentListBody"></tbody>
                                     </table>
-                                </div>
-                                <div class="pagination-controls" style="display: flex; justify-content: flex-end; align-items: center; gap: 15px; margin-top: 15px; padding-top: 15px; border-top: 1px solid rgba(255,255,255,0.05);">
-                                    <button class="btn btn-secondary" id="dashStudentPrevBtn" onclick="prevDashStudentPage()" style="padding: 6px 12px; font-size: 13px;">Previous</button>
-                                    <span id="dashStudentPageInfo" style="color: var(--text-secondary); font-size: 13px;">Page 1 of 1</span>
-                                    <button class="btn btn-secondary" id="dashStudentNextBtn" onclick="nextDashStudentPage()" style="padding: 6px 12px; font-size: 13px;">Next</button>
                                 </div>
                             </div>
                         </div>
@@ -448,7 +443,14 @@
                             <div class="modal-body" style="display: flex; flex-direction: column; gap: 16px;">
                                 <div>
                                     <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">Target Audience</label>
-                                    <div id="bulkEmailTargetBadge" style="display: inline-block; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500;"></div>
+                                    <div id="bulkEmailTargetBadge" style="display: inline-block; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 500; margin-bottom: 8px;"></div>
+                                    <div style="font-size: 13px; margin-bottom: 6px; display: flex; justify-content: space-between;">
+                                        <span style="color: var(--text-secondary);">Select Recipients:</span>
+                                        <label style="cursor: pointer; color: var(--teal);"><input type="checkbox" id="bulkEmailSelectAll" checked onchange="toggleAllEmailRecipients(this.checked)"> Select All</label>
+                                    </div>
+                                    <div id="bulkEmailRecipientList" style="max-height: 150px; overflow-y: auto; background: rgba(255,255,255,0.02); border: 1px solid var(--border); border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 6px;">
+                                        <!-- Recipient checkboxes will be injected here -->
+                                    </div>
                                 </div>
                                 <div>
                                     <label style="display: block; font-size: 13px; color: var(--text-secondary); margin-bottom: 6px;">Subject</label>
@@ -1627,7 +1629,7 @@
         </div>
     </div>
 
-    <script src="renderer.js?v=12"></script>
+    <script src="renderer.js?v=14"></script>
 </body>
 
 </html>

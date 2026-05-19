@@ -10812,22 +10812,73 @@ app.get('/api/attendance/all', async (req, res) => {
 
 
 
-// Bulk Email Mock Endpoint
+// Resend Email Integration
+const { Resend } = require('resend');
+// In production, please set the RESEND_API_KEY environment variable. Falls back to the user's developer key.
+const resendInstance = new Resend(process.env.RESEND_API_KEY || 're_8cGCbySY_67xSYLSRQiB74s8CAx8XHQ4q');
+
+// Bulk Email Endpoint with Resend API
 app.post('/api/email/bulk', async (req, res) => {
     try {
-        const { target, subject, message, count } = req.body;
-        console.log(📧 Bulk email simulation requested for cohort:  ( students));
-        console.log(Subject: );
+        const { target, subject, message, count, recipients } = req.body;
+        console.log(`📧 Resend bulk email request for cohort: ${target} (${count} students)`);
         
-        // Simulate email sending delay
-        await new Promise(resolve => setTimeout(resolve, 1200));
+        if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
+            return res.status(400).json({ success: false, error: 'No recipients provided.' });
+        }
+
+        const errors = [];
+        const successes = [];
+
+        // Send emails sequentially or in parallel batches
+        for (const recipient of recipients) {
+            const studentEmail = recipient.email;
+            if (!studentEmail) {
+                errors.push({ name: recipient.name, error: 'No email address registered.' });
+                continue;
+            }
+
+            // Replace template tags
+            let personalizedMessage = message
+                .replace(/{name}/g, recipient.name)
+                .replace(/{attendance}/g, recipient.attendance);
+
+            // Convert newlines to HTML line breaks
+            const htmlMessage = personalizedMessage.replace(/\n/g, '<br>');
+
+            try {
+                // If they have verified letsbunk.co (or letsbunk.com) on Resend, they can use it.
+                // Otherwise, Resend will throw a domain verification error.
+                const response = await resendInstance.emails.send({
+                    from: 'LetsBunk <no-reply@letsbunk.co>',
+                    to: studentEmail,
+                    subject: subject,
+                    html: `<div style="font-family: sans-serif; line-height: 1.5; color: #333;">${htmlMessage}</div>`
+                });
+
+                if (response.error) {
+                    errors.push({ name: recipient.name, email: studentEmail, error: response.error.message });
+                } else {
+                    successes.push({ name: recipient.name, email: studentEmail });
+                }
+            } catch (err) {
+                errors.push({ name: recipient.name, email: studentEmail, error: err.message });
+            }
+        }
+
+        console.log(`📧 Resend bulk emails completed. Successes: ${successes.length}, Errors: ${errors.length}`);
         
         res.json({
             success: true,
-            message: Emails successfully queued for  cohort.
+            message: `Successfully processed emails. Sent: ${successes.length}, Failed: ${errors.length}`,
+            details: {
+                successCount: successes.length,
+                errorCount: errors.length,
+                errors: errors
+            }
         });
     } catch (error) {
-        console.error('Error simulating bulk email:', error);
-        res.status(500).json({ success: false, error: 'Failed to queue bulk emails' });
+        console.error('Error sending bulk email:', error);
+        res.status(500).json({ success: false, error: 'Failed to send bulk emails: ' + error.message });
     }
 });
