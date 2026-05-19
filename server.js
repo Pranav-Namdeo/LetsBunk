@@ -10821,17 +10821,62 @@ const resendInstance = new Resend(process.env.RESEND_API_KEY || 're_8cGCbySY_67x
 app.post('/api/email/bulk', async (req, res) => {
     try {
         const { target, subject, message, count, recipients } = req.body;
-        console.log(`📧 Resend bulk email request for cohort: ${target} (${count} students)`);
+        console.log(`📧 Resend bulk email request for cohort: ${target} (${count || 0} students)`);
         
-        if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
-            return res.status(400).json({ success: false, error: 'No recipients provided.' });
+        let targets = recipients;
+
+        // Fallback for older clients that do not pass recipients array
+        if (!targets || !Array.isArray(targets) || targets.length === 0) {
+            console.log(`⚠️ No recipients provided in payload. Resolving cohort "${target}" on backend...`);
+            
+            if (mongoose.connection.readyState !== 1) {
+                return res.status(400).json({ 
+                    success: false, 
+                    error: 'Database not connected and no recipients provided by client.' 
+                });
+            }
+
+            const allStudents = await StudentManagement.find({}).lean();
+            const allDailyAttendance = await DailyAttendance.find({}).lean();
+
+            const studentStats = {};
+            allStudents.forEach(s => {
+                studentStats[s.enrollmentNo] = { present: 0, total: 0, s: s };
+            });
+
+            allDailyAttendance.forEach(record => {
+                if (studentStats[record.enrollmentNo]) {
+                    studentStats[record.enrollmentNo].total++;
+                    if (record.dailyStatus === 'present') {
+                        studentStats[record.enrollmentNo].present++;
+                    }
+                }
+            });
+
+            targets = [];
+            allStudents.forEach(s => {
+                const stat = studentStats[s.enrollmentNo];
+                let perc = stat.total > 0 ? (stat.present / stat.total) * 100 : 100; // default to 100 if no records
+                
+                if (target === 'at-risk' && perc < 60) {
+                    targets.push({ name: s.name, email: s.email, attendance: perc.toFixed(1) });
+                } else if (target === 'good-attendance' && perc >= 75) {
+                    targets.push({ name: s.name, email: s.email, attendance: perc.toFixed(1) });
+                }
+            });
+
+            console.log(`✅ Resolved ${targets.length} targets on backend for cohort "${target}".`);
+        }
+
+        if (!targets || targets.length === 0) {
+            return res.status(400).json({ success: false, error: 'No recipients resolved for this cohort.' });
         }
 
         const errors = [];
         const successes = [];
 
         // Send emails sequentially or in parallel batches
-        for (const recipient of recipients) {
+        for (const recipient of targets) {
             const studentEmail = recipient.email;
             if (!studentEmail) {
                 errors.push({ name: recipient.name, error: 'No email address registered.' });
