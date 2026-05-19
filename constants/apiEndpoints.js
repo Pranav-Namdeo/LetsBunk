@@ -247,9 +247,10 @@ export const POST_DB_RESYNC_ATTENDANCE = `${BASE_URL}/api/db/resync-attendance`;
 export const POST_DB_WIPE_ALL          = `${BASE_URL}/api/db/resync-attendance`;  // ← /wipe-all removed; use scripts/format-database.js for full wipe
 
 // ----------------------------
-// Admin Utilities
+// Admin Utilities & Notifications
 // ----------------------------
 export const POST_ADMIN_PURGE_ORPHAN_SUBJECTS = `${BASE_URL}/api/admin/purge-orphan-subjects`;
+export const POST_EMAIL_BULK                  = `${BASE_URL}/api/email/bulk`;
 
 // ----------------------------
 // Legacy / Deprecated

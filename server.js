@@ -10810,3 +10810,24 @@ app.get('/api/attendance/all', async (req, res) => {
 });
 
 
+
+
+// Bulk Email Mock Endpoint
+app.post('/api/email/bulk', async (req, res) => {
+    try {
+        const { target, subject, message, count } = req.body;
+        console.log(📧 Bulk email simulation requested for cohort:  ( students));
+        console.log(Subject: );
+        
+        // Simulate email sending delay
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        
+        res.json({
+            success: true,
+            message: Emails successfully queued for  cohort.
+        });
+    } catch (error) {
+        console.error('Error simulating bulk email:', error);
+        res.status(500).json({ success: false, error: 'Failed to queue bulk emails' });
+    }
+});
