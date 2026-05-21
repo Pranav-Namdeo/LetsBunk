@@ -8,12 +8,7 @@
 // ============================================
 // SERVER CONFIGURATION
 // ============================================
-// Fetch from environment variable
-<<<<<<< Updated upstream
-export const SERVER_BASE_URL = process.env.SERVER_URL || 'https://letsbunk-uw7g.onrender.com';
-=======
 export const SERVER_BASE_URL = (process.env.SERVER_URL || 'https://letsbunk-server.azurewebsites.net').replace(/\/+$/, '');
->>>>>>> Stashed changes
 
 // Derived URLs (automatically generated from SERVER_BASE_URL)
 export const API_URL = `${SERVER_BASE_URL}/api/config`;
@@ -71,9 +66,9 @@ export const APP_NAME = 'LetsBunk';
 // 2. Rebuild the app: npm run android or BUILD_APK_PROPER_SDK.bat
 // 3. All API calls will automatically use the new URL
 //
-// Current Configuration: PRODUCTION (Render)
-// - App: https://letsbunk-uw7g.onrender.com
-// - Admin Panel: https://letsbunk-uw7g.onrender.com (or update in Settings)
+// Current Configuration: PRODUCTION (Azure)
+// - App: https://letsbunk-server.azurewebsites.net
+// - Admin Panel: https://letsbunk-server.azurewebsites.net (or update in Settings)
 //
 // To switch to local:
 // - Change SERVER_BASE_URL to: http://localhost:3000

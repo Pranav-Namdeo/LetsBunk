@@ -855,8 +855,9 @@ export default function App() {
 
           // Period changed - save attendance to server for admin panel
           // Save even if timer not running, as long as there's attendance data
-          if (prev.timerSeconds > 0 || todayAttendance.lectures.length > 0) {
-            saveAttendanceToServer(prev.timerSeconds, 'attending', prev.currentLecture);
+          const prevLecture = prev.currentLecture || OfflineTimerService.previousLectureData || OfflineTimerService.lastVerifiedLecture;
+          if (prev.timerSeconds > 0 || (todayAttendance && todayAttendance.lectures && todayAttendance.lectures.length > 0)) {
+            saveAttendanceToServer(prev.timerSeconds, 'attending', prevLecture || prev.currentLecture);
           }
 
           const updatedLecture = {
@@ -871,11 +872,31 @@ export default function App() {
 
           // Auto-start timer for period transitions (P1->P2, P2->P3, etc.)
           // First time of day requires manual start, regardless of which period
-          const hasStartedTimerToday = prev.timerSeconds > 0 || prev.isRunning;
-          const wasRunningBeforeLectureEnd = OfflineTimerService.wasRunningBeforeLectureEnd;
+          const hasStartedTimerToday = prev.timerSeconds > 0 || prev.isRunning || OfflineTimerService.verifiedToday;
+          // Robust transition check: Timer was running in the previous period if it is currently running or was flagged as stopped at lecture end
+          const wasRunning = prev.isRunning || OfflineTimerService.wasRunningBeforeLectureEnd;
 
-          if (hasStartedTimerToday && wasRunningBeforeLectureEnd) {
-            console.log('⏱️ Period transition detected - auto-starting timer from 00:00:00');
+          // Enforce room change and break gap checks for auto-start:
+          let isSameRoom = false;
+          let hasNoGap = false;
+          if (prevLecture && period) {
+            isSameRoom = (prevLecture.room || '').trim().toLowerCase() === (period.room || '').trim().toLowerCase();
+            if (prevLecture.endTime && period.startTime) {
+              try {
+                const [prevHour, prevMinute] = prevLecture.endTime.split(':').map(Number);
+                const [nextHour, nextMinute] = period.startTime.split(':').map(Number);
+                const prevTotal = prevHour * 60 + prevMinute;
+                const nextTotal = nextHour * 60 + nextMinute;
+                hasNoGap = nextTotal <= prevTotal;
+              } catch (e) {
+                hasNoGap = false;
+              }
+            }
+          }
+          const canAutoStart = isSameRoom && hasNoGap;
+
+          if (hasStartedTimerToday && wasRunning && canAutoStart) {
+            console.log('⏱️ Period transition detected (same room & continuous) - auto-starting timer from 00:00:00');
             // Use an async IIFE so we can await properly without race conditions
             (async () => {
               try {
@@ -925,7 +946,18 @@ export default function App() {
             OfflineTimerService.thresholdSeconds = null;
             OfflineTimerService.isManuallyMarked = false; // Reset manual mark
           } else {
-            console.log('⏸️ Timer was not running in previous period - requires manual start');
+            console.log('⏸️ Different classrooms or time gap detected (or timer not running) - requires manual start + face verification');
+            // Stop the running timer since we transitioned to a gap or different room
+            if (prev.isRunning) {
+              (async () => {
+                try {
+                  await OfflineTimerService.stopTimer('period_change');
+                  console.log('   Timer stopped because auto-start is not allowed for this transition');
+                } catch (err) {
+                  console.error('❌ Error stopping timer during transition:', err);
+                }
+              })();
+            }
             // Reset stale timer from previous period so new period starts clean
             OfflineTimerService.timerSeconds = 0;
             OfflineTimerService.attendanceStatus = 'absent';
@@ -1459,7 +1491,7 @@ export default function App() {
         if (!pId.startsWith('P')) pId = `P${pId}`;
 
         console.log(`📡 Checking server manual override status for student ${studentId}, period: ${pId}`);
-        const statusResponse = await fetch(`${SERVER_URL}/api/attendance/student/${studentId}/check-manual-mark/${pId}`, {
+        const statusResponse = await fetch(`${SERVER_BASE_URL}/api/attendance/student/${studentId}/check-manual-mark/${pId}`, {
           headers: { 'Content-Type': 'application/json' }
         });
 
