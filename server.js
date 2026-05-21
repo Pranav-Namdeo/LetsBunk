@@ -1736,6 +1736,43 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
     }
 });
 
+// GET /api/teacher/class-status/:semester/:branch - Lightweight 0ms status map for large classes
+app.get('/api/teacher/class-status/:semester/:branch', (req, res) => {
+    try {
+        const { semester, branch } = req.params;
+        const now = Date.now();
+        const SYNC_TIMEOUT_MS = 90 * 1000;
+        
+        const statusMap = {};
+        
+        liveTimerState.forEach((state) => {
+            if (state.semester === semester && state.branch === branch) {
+                const isSyncTimedOut = state.isRunning && state.lastSeen && (now - state.lastSeen) > SYNC_TIMEOUT_MS;
+                const status = isSyncTimedOut ? 'offline' : state.status;
+                const isRunning = isSyncTimedOut ? false : state.isRunning;
+                const timerValue = (status === 'absent') ? 0 : (state.attendedSeconds || 0);
+                
+                statusMap[state.enrollmentNo] = {
+                    timerValue,
+                    isRunning,
+                    status
+                };
+            }
+        });
+        
+        res.json({
+            success: true,
+            statusMap
+        });
+    } catch (error) {
+        console.error('❌ Error in class-status endpoint:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
 // Helper function to convert time string to minutes (single definition)
 // Helper to get start of day in IST (Asia/Kolkata) regardless of server timezone
 function getISTMidnight(date = new Date()) {
@@ -3175,16 +3212,102 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             }
         }
 
-        // 2b. Guard: reject sync if student has no verified check-in for today
+        // 2b. Guard: check if student has a verified check-in for today, auto-recover if missing
         const syncDate = new Date(timestamp);
         const todayStart = getISTMidnight(syncDate);
         const todayEnd = new Date(todayStart.getTime() + 86400000);
 
-        const hasCheckedIn = await PeriodAttendance.exists({
+        let hasCheckedIn = await PeriodAttendance.exists({
             enrollmentNo: studentId,
             date: { $gte: todayStart, $lt: todayEnd },
             verificationType: 'initial'
         });
+
+        if (!hasCheckedIn && !isQueuedSync) {
+            console.log(`⚠️ [OFFLINE-SYNC] Auto-recovering missed check-in for Student: ${studentId}`);
+            try {
+                // Fetch student and timetable info
+                const stud = await StudentManagement.findOne({ enrollmentNo: studentId });
+                if (stud) {
+                    const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+                    const currentDay = days[syncDate.getDay()];
+                    let tt = await Timetable.findOne({ semester: stud.semester?.toString(), branch: stud.branch });
+                    if (!tt && (stud.branch === 'Cse' || stud.branch === 'CSE')) {
+                        tt = await Timetable.findOne({ semester: stud.semester?.toString(), branch: 'Computer Science' });
+                    }
+                    if (tt && tt.timetable[currentDay]) {
+                        const daySchedule = tt.timetable[currentDay];
+                        const serverMinutes = syncDate.getHours() * 60 + syncDate.getMinutes();
+                        
+                        for (let i = 0; i < daySchedule.length; i++) {
+                            const p = daySchedule[i];
+                            const pInfo = tt.periods[i];
+                            if (!p || p.isBreak || !p.subject || !pInfo) continue;
+
+                            const pNumber = i + 1;
+                            const pId     = `P${pNumber}`;
+                            const pStart  = timeToMinutes(pInfo.startTime);
+                            const pEnd    = timeToMinutes(pInfo.endTime);
+
+                            const isCurrentPeriod = serverMinutes >= pStart && serverMinutes < pEnd;
+                            const isPastPeriod    = pEnd <= serverMinutes;
+
+                            if (isCurrentPeriod) {
+                                await PeriodAttendance.findOneAndUpdate(
+                                    { enrollmentNo: studentId, date: todayStart, period: pId },
+                                    {
+                                        enrollmentNo: studentId,
+                                        studentName:  stud.name,
+                                        semester:     stud.semester?.toString() || '',
+                                        branch:       stud.branch || '',
+                                        date:         todayStart,
+                                        period:       pId,
+                                        subject:      p.subject,
+                                        teacher:      p.teacher,
+                                        teacherName:  p.teacherName || p.teacher,
+                                        room:         p.room,
+                                        status:       'present',
+                                        checkInTime:  syncDate,
+                                        verificationType: 'initial',
+                                        wifiVerified: true,
+                                        faceVerified: true,
+                                        wifiBSSID:    stud.attendanceSession?.authorizedWiFiBSSID || ''
+                                    },
+                                    { upsert: true, new: true }
+                                );
+                                console.log(`✅ [OFFLINE-SYNC-RECOVERY] Autocheck-in present - ${studentId} ${pId}`);
+                            } else if (isPastPeriod) {
+                                await PeriodAttendance.findOneAndUpdate(
+                                    { enrollmentNo: studentId, date: todayStart, period: pId },
+                                    {
+                                        $setOnInsert: {
+                                            enrollmentNo: studentId,
+                                            studentName:  stud.name,
+                                            semester:     stud.semester?.toString() || '',
+                                            branch:       stud.branch || '',
+                                            date:         todayStart,
+                                            period:       pId,
+                                            subject:      p.subject,
+                                            teacher:      p.teacher,
+                                            teacherName:  p.teacherName || p.teacher,
+                                            room:         p.room,
+                                            status:       'absent',
+                                            verificationType: 'initial',
+                                            wifiVerified: false,
+                                            faceVerified: false
+                                        }
+                                    },
+                                    { upsert: true, new: true }
+                                );
+                            }
+                        }
+                        hasCheckedIn = true; // Auto-recovery complete!
+                    }
+                }
+            } catch (recoveryError) {
+                console.error(`❌ [OFFLINE-SYNC-RECOVERY] Missed check-in auto-recovery failed for student: ${studentId}`, recoveryError);
+            }
+        }
 
         if (!hasCheckedIn && !isQueuedSync) {
             console.log(`❌ [OFFLINE-SYNC] No verified check-in for today - Student: ${studentId}`);

@@ -348,36 +348,10 @@ class OfflineTimerService {
           this.thresholdSeconds = null;
         }
 
-        // NEW LOGIC: Fetch existing attendance from server if timer is 0 or it's a new lecture
+        // Non-blocking background recovery:
         if (!isSameLecture || this.timerSeconds === 0) {
-          try {
-            console.log('📡 Fetching existing attendance from server for initial state...');
-            const todayStr = this._getISTDateString();
-            const attController = new AbortController();
-            const attTimeout = setTimeout(() => attController.abort(), 5000);
-            const response = await fetch(`${this.serverUrl}/api/attendance/student/${this.studentId}/date/${todayStr}`, {
-              signal: attController.signal
-            });
-            clearTimeout(attTimeout);
-            if (response.ok) {
-              const data = await response.json();
-              if (data.success && data.record && data.record.lectures) {
-                const periodId = lectureInfo.period ? `P${lectureInfo.period}` : (lectureInfo.periodNumber ? `P${lectureInfo.periodNumber}` : 'P1');
-                const existingLecture = data.record.lectures.find(l => l.period === periodId);
-                if (existingLecture) {
-                  const recoveredSeconds = existingLecture.actualAttended != null
-                    ? existingLecture.actualAttended
-                    : (existingLecture.attended || 0);
-                  if (recoveredSeconds > 0) {
-                    this.timerSeconds = recoveredSeconds;
-                    console.log(`✅ Recovered ${this.timerSeconds} actual seconds from server for ${periodId}`);
-                  }
-                }
-              }
-            }
-          } catch (err) {
-            console.log('⚠️ Failed to fetch existing attendance (offline?):', err.message);
-          }
+          const periodId = lectureInfo.period ? `P${lectureInfo.period}` : (lectureInfo.periodNumber ? `P${lectureInfo.periodNumber}` : 'P1');
+          this._recoverAttendanceInBackground(lectureInfo, periodId).catch(() => {});
         }
 
         // Step 3: Set lecture context and start timer
@@ -440,8 +414,67 @@ class OfflineTimerService {
           error: error.message,
           step: 'unknown_error'
         };
-      }
     }
+  }
+
+
+  /**
+   * Recovers existing attendance from the server in the background without blocking startup.
+   */
+  async _recoverAttendanceInBackground(lectureInfo, periodId) {
+    try {
+      console.log(`📡 [BACKGROUND RECOVERY] Fetching existing attendance for ${periodId}...`);
+      const todayStr = this._getISTDateString();
+      const attController = new AbortController();
+      const attTimeout = setTimeout(() => attController.abort(), 6000);
+      const response = await fetch(`${this.serverUrl}/api/attendance/student/${this.studentId}/date/${todayStr}`, {
+        signal: attController.signal
+      });
+      clearTimeout(attTimeout);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.record && data.record.lectures) {
+          const existingLecture = data.record.lectures.find(l => l.period === periodId);
+          if (existingLecture) {
+            const recoveredSeconds = existingLecture.actualAttended != null
+              ? existingLecture.actualAttended
+              : (existingLecture.attended || 0);
+            if (recoveredSeconds > this.timerSeconds) {
+              console.log(`✅ [BACKGROUND RECOVERY] Recovered ${recoveredSeconds}s (current=${this.timerSeconds}s) from server for ${periodId}`);
+              
+              // Only update if the user hasn't switched to a different lecture in the meantime
+              const currentPeriodId = this.currentLecture?.period ? `P${this.currentLecture.period}` : (this.currentLecture?.periodNumber ? `P${this.currentLecture.periodNumber}` : 'P1');
+              if (this.currentLecture && currentPeriodId === periodId) {
+                this.timerSeconds = recoveredSeconds;
+                
+                // Write the new state locally
+                await this.saveState();
+                
+                // If the timer is still actively running, restart native/JS ticking at the recovered base value
+                if (this.isRunning && !this.isPaused) {
+                  console.log(`🔄 [BACKGROUND RECOVERY] Updating running timer to recovered value: ${recoveredSeconds}s`);
+                  this.startCounting();
+                }
+                
+                // Notify listeners of the tick update
+                this.notifyListeners({
+                  type: 'timer_tick',
+                  timerSeconds: this.timerSeconds,
+                  lecture: this.currentLecture
+                });
+              } else {
+                console.log(`⚠️ [BACKGROUND RECOVERY] Found recovered seconds but lecture/period changed from ${periodId} to ${currentPeriodId}`);
+              }
+            } else {
+              console.log(`ℹ️ [BACKGROUND RECOVERY] Server seconds (${recoveredSeconds}s) are not greater than local (${this.timerSeconds}s).`);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.log('⚠️ [BACKGROUND RECOVERY] Failed to fetch existing attendance:', err.message);
+    }
+  }
 
 
   /**
@@ -1451,10 +1484,15 @@ class OfflineTimerService {
   }
 
   /**
-   * Setup sync interval (every 2 minutes)
+   * Setup sync interval (every 30 seconds with random jitter)
    */
   setupSyncInterval() {
-    this.syncInterval = setInterval(async () => {
+    if (this.syncInterval) {
+      clearTimeout(this.syncInterval);
+      this.syncInterval = null;
+    }
+
+    const tick = async () => {
       // 1. If timer is running, perform regular heartbeat sync
       if (this.isRunning) {
         await this.syncToServer();
@@ -1466,7 +1504,15 @@ class OfflineTimerService {
         console.log('🔄 Periodically checking sync queue for non-active period sync...');
         await this.syncPendingData();
       }
-    }, 30000); // 30 seconds — responsive live updates
+
+      // Schedule next tick with 0 to 5 seconds jitter (30s base) to prevent thundering herd spikes at 300+ scale
+      const jitter = Math.floor(Math.random() * 5000);
+      this.syncInterval = setTimeout(tick, 30000 + jitter);
+    };
+
+    // Stagger initial check with a random initial delay so devices do not synchronize start loops
+    const initialDelay = Math.floor(Math.random() * 5000);
+    this.syncInterval = setTimeout(tick, initialDelay);
   }
 
   /**
@@ -2294,7 +2340,7 @@ class OfflineTimerService {
     this.stopCounting();
     
     if (this.syncInterval) {
-      clearInterval(this.syncInterval);
+      clearTimeout(this.syncInterval);
       this.syncInterval = null;
     }
     

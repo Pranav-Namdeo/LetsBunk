@@ -83,48 +83,70 @@ class WifiModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMo
                 return
             }
 
-            // Multiple attempts to get WiFi info (Redmi devices sometimes need retry)
+            // 1. Try modern transportInfo approach first (Android 10+) for instant and reliable BSSID
             var wifiInfo: WifiInfo? = null
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                try {
+                    val network = connectivityManager.activeNetwork
+                    val capabilities = connectivityManager.getNetworkCapabilities(network)
+                    if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                        val transportWifiInfo = capabilities.transportInfo as? WifiInfo
+                        if (transportWifiInfo != null) {
+                            val transportBssid = transportWifiInfo.bssid
+                            if (isValidBSSID(transportBssid)) {
+                                wifiInfo = transportWifiInfo
+                                Log.d(TAG, "Instant transportInfo match: $transportBssid")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Instant transportInfo check failed: ${e.message}")
+                }
+            }
+
+            // 2. Fall back to standard attempts loop if transportInfo is not available or didn't yield a valid BSSID
             var attempts = 0
             val maxAttempts = 5 // Increased attempts for better reliability
             
-            while (wifiInfo == null && attempts < maxAttempts) {
-                attempts++
-                Log.d(TAG, "Attempt $attempts to get WiFi info")
-                
-                try {
-                    // Try different approaches based on attempt number
-                    wifiInfo = when (attempts) {
-                        1 -> wifiManager.connectionInfo
-                        2 -> {
-                            // Force refresh WiFi state
-                            if (wifiManager.isWifiEnabled) {
-                                Thread.sleep(100)
-                                wifiManager.connectionInfo
-                            } else null
-                        }
-                        3 -> getWifiInfoAlternative()
-                        4 -> {
-                            // Try getting info after a longer delay
-                            Thread.sleep(1000)
-                            wifiManager.connectionInfo
-                        }
-                        else -> {
-                            // Last attempt with system service refresh
-                            val freshWifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-                            freshWifiManager.connectionInfo
-                        }
-                    }
+            if (wifiInfo == null) {
+                while (wifiInfo == null && attempts < maxAttempts) {
+                    attempts++
+                    Log.d(TAG, "Attempt $attempts to get WiFi info")
                     
-                    if (wifiInfo == null) {
-                        Thread.sleep(300) // Wait before retry
-                    } else {
-                        Log.d(TAG, "WiFi info obtained on attempt $attempts")
+                    try {
+                        // Try different approaches based on attempt number
+                        wifiInfo = when (attempts) {
+                            1 -> wifiManager.connectionInfo
+                            2 -> {
+                                // Force refresh WiFi state
+                                if (wifiManager.isWifiEnabled) {
+                                    Thread.sleep(50) // Reduced sleep from 100ms
+                                    wifiManager.connectionInfo
+                                } else null
+                            }
+                            3 -> getWifiInfoAlternative()
+                            4 -> {
+                                // Try getting info after a longer delay (reduced from 1000ms to avoid freezing bridge)
+                                Thread.sleep(200)
+                                wifiManager.connectionInfo
+                            }
+                            else -> {
+                                // Last attempt with system service refresh
+                                val freshWifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                                freshWifiManager.connectionInfo
+                            }
+                        }
+                        
+                        if (wifiInfo == null) {
+                            Thread.sleep(50) // Reduced sleep from 300ms
+                        } else {
+                            Log.d(TAG, "WiFi info obtained on attempt $attempts")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Attempt $attempts failed: ${e.message}")
+                        if (attempts == maxAttempts) throw e
+                        Thread.sleep(50) // Reduced sleep from 300ms
                     }
-                } catch (e: Exception) {
-                    Log.w(TAG, "Attempt $attempts failed: ${e.message}")
-                    if (attempts == maxAttempts) throw e
-                    Thread.sleep(300)
                 }
             }
             
@@ -693,23 +715,24 @@ class WifiModule(reactContext: ReactApplicationContext) : ReactContextBaseJavaMo
             Log.w(TAG, "Method 5 direct method failed: ${e.message}")
         }
 
-        // Method 6: For newer Android versions, try network-based approach
+        // Method 6: For newer Android versions, try network-based approach via transportInfo
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             try {
                 val network = connectivityManager.activeNetwork
                 val capabilities = connectivityManager.getNetworkCapabilities(network)
-                if (capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
-                    // Try to get WiFi info through network
-                    val networkWifiInfo = wifiManager.connectionInfo
-                    bssid = networkWifiInfo?.bssid
-                    Log.d(TAG, "Method 6 BSSID (network-based): $bssid")
-                    if (isValidBSSID(bssid)) {
-                        Log.d(TAG, "Method 6 successful: $bssid")
-                        return bssid
+                if (capabilities != null && capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                    val transportWifiInfo = capabilities.transportInfo as? WifiInfo
+                    if (transportWifiInfo != null) {
+                        bssid = transportWifiInfo.bssid
+                        Log.d(TAG, "Method 6 BSSID (transportInfo): $bssid")
+                        if (isValidBSSID(bssid)) {
+                            Log.d(TAG, "Method 6 successful: $bssid")
+                            return bssid
+                        }
                     }
                 }
             } catch (e: Exception) {
-                Log.w(TAG, "Method 6 network-based failed: ${e.message}")
+                Log.w(TAG, "Method 6 transportInfo failed: ${e.message}")
             }
         }
 
