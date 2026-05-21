@@ -270,20 +270,43 @@ class OfflineTimerService {
         const todayStr = this._getISTDateString();
         const isAlreadyVerifiedToday = this.verifiedToday && this.verifiedTodayDate === todayStr;
 
-        // Face verify only needed for: new lecture OR first start of the day (no lastVerifiedLecture)
-        const needsFaceVerification = !isAlreadyVerifiedToday && (!isSameLecture ||
-          (!isWiFiResumeInSameLecture && !isManualRestartInSameLecture && !isSameLectureContinuation));
+        // NEW RULES FOR PERIOD TRANSITION GATING:
+        let periodTransitionRequiresFace = false;
+        let transitionReason = '';
+        if (isAlreadyVerifiedToday && !isSameLecture && this.lastVerifiedLecture) {
+          const roomChanged = (this.lastVerifiedLecture.room || '').trim().toLowerCase() !== (lectureInfo.room || '').trim().toLowerCase();
+          const hasGap = this.hasGapBetweenLectures(this.lastVerifiedLecture, lectureInfo);
+          if (roomChanged) {
+            periodTransitionRequiresFace = true;
+            transitionReason = 'room_changed';
+            console.log(`👤 Different classroom detected (${this.lastVerifiedLecture.room} -> ${lectureInfo.room}) — requiring face verification`);
+          } else if (hasGap) {
+            periodTransitionRequiresFace = true;
+            transitionReason = 'gap_detected';
+            console.log('👤 Break/Gap detected between periods — requiring face verification');
+          }
+        }
+
+        // Face verify only needed for: first start of the day OR different room/gap transition OR new lecture when not verified today
+        const needsFaceVerification = periodTransitionRequiresFace || 
+          (!isAlreadyVerifiedToday && (!isSameLecture ||
+            (!isWiFiResumeInSameLecture && !isManualRestartInSameLecture && !isSameLectureContinuation)));
 
         let faceVerificationResult = { success: true };
 
         if (!needsFaceVerification) {
           // Skip face verification — WiFi resume, manual restart, same lecture, or already verified today
-          const reason = isAlreadyVerifiedToday ? 'already verified today (period transition)'
+          const reason = isAlreadyVerifiedToday ? 'already verified today (same room & continuous period transition)'
             : isWiFiResumeInSameLecture ? 'WiFi resume in same lecture'
             : isManualRestartInSameLecture ? 'manual restart in same lecture'
             : 'same lecture continuation';
           console.log(`🔄 Skipping face verification — ${reason}`);
           console.log('📚 Continuing from timer value:', this.timerSeconds);
+          
+          // Period transition: even though face verification is skipped, update lastVerifiedLecture so subsequent transitions verify against this new lecture room/schedule
+          if (!isSameLecture) {
+            this.lastVerifiedLecture = { ...lectureInfo };
+          }
         } else {
           // Perform face verification: new lecture or first start of the day
           console.log('👤 Step 2: Starting face verification (new lecture or first start)...');
@@ -848,15 +871,15 @@ class OfflineTimerService {
         // this.wasManuallyStoppedInSameLecture remains true
         this.thresholdSeconds = null;  // reset threshold on any stop
         this.attendanceStatus = 'absent';
-      } else if (reason === 'lecture_ended') {
-        // Lecture ended - track that timer was running for auto-start next period
-        console.log('⏰ Lecture period ended - preparing for next period auto-start');
+      } else if (reason === 'lecture_ended' || reason === 'period_change') {
+        // Lecture ended or period changed - track that timer was running for auto-start next period
+        console.log('⏰ Lecture period ended or changed - preparing for next period auto-start');
         this.wasRunningBeforeLectureEnd = true;  // Track for auto-start in next period
         this.wasManuallyStoppedInSameLecture = false;
         this.wasRunningBeforeDisconnect = false;
         this.disconnectionTime = null;
         this.pausedDueToWiFiLoss = false;
-        this.previousLectureData = null;
+        this.previousLectureData = this.currentLecture ? { ...this.currentLecture } : null;
         this.thresholdSeconds = null;  // reset so next period gets fresh threshold
         this.attendanceStatus = 'absent';
       }
@@ -1349,6 +1372,28 @@ class OfflineTimerService {
     });
 
     return isSame;
+  }
+
+  /**
+   * Determine if there is a gap or break in time between two lectures
+   */
+  hasGapBetweenLectures(prevLecture, nextLecture) {
+    if (!prevLecture || !nextLecture || !prevLecture.endTime || !nextLecture.startTime) {
+      return true; // If missing info, assume a gap for safety
+    }
+    try {
+      const [prevHour, prevMinute] = prevLecture.endTime.split(':').map(Number);
+      const [nextHour, nextMinute] = nextLecture.startTime.split(':').map(Number);
+      
+      const prevTotal = prevHour * 60 + prevMinute;
+      const nextTotal = nextHour * 60 + nextMinute;
+      
+      // If there is any positive gap in minutes, return true
+      return nextTotal > prevTotal;
+    } catch (err) {
+      console.warn('⚠️ Error parsing lecture gap times:', err.message);
+      return true; // Default to gap for safety
+    }
   }
 
   /**
@@ -2024,6 +2069,10 @@ class OfflineTimerService {
         pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
         previousLectureData: this.previousLectureData,
         isManuallyMarked: this.isManuallyMarked,
+        lastVerifiedLecture: this.lastVerifiedLecture,
+        lastFaceVerificationTime: this.lastFaceVerificationTime,
+        verifiedToday: this.verifiedToday,
+        verifiedTodayDate: this.verifiedTodayDate,
         timestamp: _getBootMs() || Date.now(),
         bootMs: _getBootMs(),  // spoof-proof anchor for age check on restore
         date: this._getISTDateString() // Add date to discard across midnight
@@ -2109,6 +2158,10 @@ class OfflineTimerService {
           this.attendanceStatus = state.attendanceStatus || 'absent';
           this.thresholdSeconds = state.thresholdSeconds || null;
           this.isManuallyMarked = state.isManuallyMarked || false;
+          this.lastVerifiedLecture = state.lastVerifiedLecture || null;
+          this.lastFaceVerificationTime = state.lastFaceVerificationTime || null;
+          this.verifiedToday = state.verifiedToday || false;
+          this.verifiedTodayDate = state.verifiedTodayDate || null;
           
           console.log('📦 Loaded timer state from storage:', {
             timerSeconds: this.timerSeconds,

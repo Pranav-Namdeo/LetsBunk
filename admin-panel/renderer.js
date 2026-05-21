@@ -277,7 +277,7 @@ function showToast(message, type = 'info') {
 
 // Clear any stale URLs that are no longer valid
 const savedUrl = localStorage.getItem('serverUrl');
-if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') || savedUrl.includes('azurewebsites.net'))) {
+if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') || savedUrl.includes('onrender.com'))) {
     console.log(' Clearing old server URL, switching to current server');
     localStorage.removeItem('serverUrl');
 }
