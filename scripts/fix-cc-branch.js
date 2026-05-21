@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 const mongoose = require("mongoose");
 
 // CC enrollment numbers that were renamed from CS but still have branch="Computer Science"

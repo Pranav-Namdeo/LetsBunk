@@ -2,7 +2,7 @@ const https = require('https');
 const http = require('http');
 
 const urls = [
-  'https://letsbunk-uw7g.onrender.com/api/daily-bssid-schedule?enrollmentNo=0246Cs231021'
+  'https://letsbunk-server.azurewebsites.net//api/daily-bssid-schedule?enrollmentNo=0246Cs231021'
 ];
 
 urls.forEach(url => {

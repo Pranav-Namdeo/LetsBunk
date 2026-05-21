@@ -1,4 +1,4 @@
-﻿require('dotenv').config();
+require('dotenv').config();
 const mongoose = require('mongoose');
 
 const RENAMES = [
@@ -31,6 +31,6 @@ mongoose.connect(process.env.MONGODB_URI).then(async () => {
       console.log(`  attendancerecords.studentId: ${from} -> ${to}  (${r2.modifiedCount} docs)`);
   }
 
-  console.log('\nDone — all attendance references updated.');
+  console.log('\nDone � all attendance references updated.');
   await mongoose.disconnect();
 }).catch(e => { console.error(e.message); process.exit(1); });

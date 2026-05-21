@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 const mongoose = require("mongoose");
 
 // These CS entries have a CC equivalent for the same student - delete the CS ones

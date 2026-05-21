@@ -17,7 +17,7 @@
 const fetch = require('node-fetch');
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
-const SERVER = 'https://letsbunk-uw7g.onrender.com';
+const SERVER = 'https://letsbunk-server.azurewebsites.net/';
 const LOGIN_ID = '0000';
 const LOGIN_PASSWORD = 'pranav';
 

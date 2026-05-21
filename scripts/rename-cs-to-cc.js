@@ -1,8 +1,8 @@
-﻿require('dotenv').config();
+require('dotenv').config();
 const mongoose = require('mongoose');
 
 // CS -> CC renames (same student, branch code changed)
-// CS241013 and CS241030 are NOT in student_check.txt — skip them, don't rename
+// CS241013 and CS241030 are NOT in student_check.txt � skip them, don't rename
 const RENAMES = [
   { from: '0246CS241006', to: '0246CC241006' },
   { from: '0246CS241014', to: '0246CC241014' },
