@@ -855,9 +855,8 @@ export default function App() {
 
           // Period changed - save attendance to server for admin panel
           // Save even if timer not running, as long as there's attendance data
-          const prevLecture = prev.currentLecture || OfflineTimerService.previousLectureData || OfflineTimerService.lastVerifiedLecture;
-          if (prev.timerSeconds > 0 || (todayAttendance && todayAttendance.lectures && todayAttendance.lectures.length > 0)) {
-            saveAttendanceToServer(prev.timerSeconds, 'attending', prevLecture || prev.currentLecture);
+          if (prev.timerSeconds > 0 || todayAttendance.lectures.length > 0) {
+            saveAttendanceToServer(prev.timerSeconds, 'attending', prev.currentLecture);
           }
 
           const updatedLecture = {
@@ -872,31 +871,11 @@ export default function App() {
 
           // Auto-start timer for period transitions (P1->P2, P2->P3, etc.)
           // First time of day requires manual start, regardless of which period
-          const hasStartedTimerToday = prev.timerSeconds > 0 || prev.isRunning || OfflineTimerService.verifiedToday;
-          // Robust transition check: Timer was running in the previous period if it is currently running or was flagged as stopped at lecture end
-          const wasRunning = prev.isRunning || OfflineTimerService.wasRunningBeforeLectureEnd;
+          const hasStartedTimerToday = prev.timerSeconds > 0 || prev.isRunning;
+          const wasRunningBeforeLectureEnd = OfflineTimerService.wasRunningBeforeLectureEnd;
 
-          // Enforce room change and break gap checks for auto-start:
-          let isSameRoom = false;
-          let hasNoGap = false;
-          if (prevLecture && period) {
-            isSameRoom = (prevLecture.room || '').trim().toLowerCase() === (period.room || '').trim().toLowerCase();
-            if (prevLecture.endTime && period.startTime) {
-              try {
-                const [prevHour, prevMinute] = prevLecture.endTime.split(':').map(Number);
-                const [nextHour, nextMinute] = period.startTime.split(':').map(Number);
-                const prevTotal = prevHour * 60 + prevMinute;
-                const nextTotal = nextHour * 60 + nextMinute;
-                hasNoGap = nextTotal <= prevTotal;
-              } catch (e) {
-                hasNoGap = false;
-              }
-            }
-          }
-          const canAutoStart = isSameRoom && hasNoGap;
-
-          if (hasStartedTimerToday && wasRunning && canAutoStart) {
-            console.log('⏱️ Period transition detected (same room & continuous) - auto-starting timer from 00:00:00');
+          if (hasStartedTimerToday && wasRunningBeforeLectureEnd) {
+            console.log('⏱️ Period transition detected - auto-starting timer from 00:00:00');
             // Use an async IIFE so we can await properly without race conditions
             (async () => {
               try {
@@ -946,18 +925,7 @@ export default function App() {
             OfflineTimerService.thresholdSeconds = null;
             OfflineTimerService.isManuallyMarked = false; // Reset manual mark
           } else {
-            console.log('⏸️ Different classrooms or time gap detected (or timer not running) - requires manual start + face verification');
-            // Stop the running timer since we transitioned to a gap or different room
-            if (prev.isRunning) {
-              (async () => {
-                try {
-                  await OfflineTimerService.stopTimer('period_change');
-                  console.log('   Timer stopped because auto-start is not allowed for this transition');
-                } catch (err) {
-                  console.error('❌ Error stopping timer during transition:', err);
-                }
-              })();
-            }
+            console.log('⏸️ Timer was not running in previous period - requires manual start');
             // Reset stale timer from previous period so new period starts clean
             OfflineTimerService.timerSeconds = 0;
             OfflineTimerService.attendanceStatus = 'absent';
@@ -1484,17 +1452,18 @@ export default function App() {
         return;
       }
 
-      // Check if student has been manually marked on the server in the background (non-blocking)
-      const activePeriod = offlinePeriod?.period || currentClassInfo?.period || 'P1';
-      let pId = activePeriod.toString();
-      if (!pId.startsWith('P')) pId = `P${pId}`;
+      // Check if student has been manually marked on the server first
+      try {
+        const activePeriod = offlinePeriod?.period || currentClassInfo?.period || 'P1';
+        let pId = activePeriod.toString();
+        if (!pId.startsWith('P')) pId = `P${pId}`;
 
-      console.log(`📡 Checking server manual override status for student ${studentId}, period: ${pId} (background)...`);
-      fetch(`${SERVER_BASE_URL}/api/attendance/student/${studentId}/check-manual-mark/${pId}`, {
-        headers: { 'Content-Type': 'application/json' }
-      })
-      .then(res => res.json())
-      .then(async (statusResult) => {
+        console.log(`📡 Checking server manual override status for student ${studentId}, period: ${pId}`);
+        const statusResponse = await fetch(`${SERVER_URL}/api/attendance/student/${studentId}/check-manual-mark/${pId}`, {
+          headers: { 'Content-Type': 'application/json' }
+        });
+
+        const statusResult = await statusResponse.json();
         if (statusResult.success && statusResult.isManuallyMarked) {
           console.log(`⚠️ Server confirms student is manually marked ${statusResult.status}! Running Shuttle Relay.`);
           
@@ -1512,11 +1481,9 @@ export default function App() {
             showToast('🏃 Shuttle Relay active — present status guaranteed, let\'s catch up!', 'success', 3000);
           }
         }
-      })
-      .catch(err => {
+      } catch (err) {
         console.warn('⚠️ Server check for manual mark failed, falling back to local state:', err.message);
-      });
-
+      }
 
       // Show loading toast for verification process
       showToast('🔐 Verifying WiFi & face — please wait…', 'info', 8000);
@@ -2849,76 +2816,6 @@ dayKeys.forEach((dayKey) => {
       }
     }
   };
-
-  // Periodically rejoin class room to survive server restarts and silent socket drops
-  useEffect(() => {
-    if (selectedRole === 'student' && semester && branch && !showLogin) {
-      const rejoinInterval = setInterval(() => {
-        if (socketRef.current && socketRef.current.connected) {
-          console.log('📶 Periodic class room rejoin (keep-alive)...');
-          joinClassRoom(semester?.toString(), branch);
-        }
-      }, 60000); // Every 60 seconds
-
-      return () => clearInterval(rejoinInterval);
-    }
-  }, [selectedRole, semester, branch, showLogin]);
-
-  // Teacher lightweight class status polling fallback (every 15 seconds)
-  useEffect(() => {
-    if (selectedRole === 'teacher' && semester && branch && !showLogin) {
-      const pollClassStatus = async () => {
-        try {
-          const response = await fetch(`${SERVER_BASE_URL}/api/teacher/class-status/${encodeURIComponent(semester)}/${encodeURIComponent(branch)}`);
-          const data = await response.json();
-          if (data.success && data.statusMap) {
-            setStudents(prevStudents => {
-              let changed = false;
-              const updated = prevStudents.map(s => {
-                const live = data.statusMap[s.enrollmentNo];
-                if (live) {
-                  const hasTimerValueChange = s.timerValue !== live.timerValue;
-                  const hasIsRunningChange = s.isRunning !== live.isRunning;
-                  const hasStatusChange = s.status !== live.status;
-
-                  if (hasTimerValueChange || hasIsRunningChange || hasStatusChange) {
-                    changed = true;
-                    return {
-                      ...s,
-                      timerValue: live.timerValue,
-                      isRunning: live.isRunning,
-                      status: live.status,
-                      attendanceSession: {
-                        ...(s.attendanceSession || {}),
-                        isRunning: live.isRunning,
-                        status: live.status,
-                        attendedSeconds: live.timerValue,
-                      }
-                    };
-                  }
-                }
-                return s;
-              });
-              return changed ? updated : prevStudents;
-            });
-          }
-        } catch (err) {
-          console.log('⚠️ Error polling teacher class status:', err);
-        }
-      };
-
-      // Poll every 15 seconds
-      const pollInterval = setInterval(pollClassStatus, 15000);
-      
-      // Perform an initial poll after a slight delay
-      const initialTimeout = setTimeout(pollClassStatus, 2000);
-
-      return () => {
-        clearInterval(pollInterval);
-        clearTimeout(initialTimeout);
-      };
-    }
-  }, [selectedRole, semester, branch, showLogin]);
 
   // Auto-refresh timetable every 60 seconds to get period updates
   useEffect(() => {
@@ -4986,7 +4883,7 @@ const onRefreshStudent = async () => {
     // Calculate statistics with safety checks
     const totalStudents = students.length;
     const presentStudents = students.filter(s => s && s.status === 'present').length;
-    const attendingStudents = students.filter(s => s && (s.status === 'active' || s.status === 'attending' || s.status === 'offline')).length;
+    const attendingStudents = students.filter(s => s && s.status === 'attending').length;
     const absentStudents = students.filter(s => s && s.status === 'absent').length;
     const attendancePercentage = totalStudents > 0 ? Math.round((presentStudents / totalStudents) * 100) : 0;
 

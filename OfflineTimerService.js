@@ -270,43 +270,20 @@ class OfflineTimerService {
         const todayStr = this._getISTDateString();
         const isAlreadyVerifiedToday = this.verifiedToday && this.verifiedTodayDate === todayStr;
 
-        // NEW RULES FOR PERIOD TRANSITION GATING:
-        let periodTransitionRequiresFace = false;
-        let transitionReason = '';
-        if (isAlreadyVerifiedToday && !isSameLecture && this.lastVerifiedLecture) {
-          const roomChanged = (this.lastVerifiedLecture.room || '').trim().toLowerCase() !== (lectureInfo.room || '').trim().toLowerCase();
-          const hasGap = this.hasGapBetweenLectures(this.lastVerifiedLecture, lectureInfo);
-          if (roomChanged) {
-            periodTransitionRequiresFace = true;
-            transitionReason = 'room_changed';
-            console.log(`👤 Different classroom detected (${this.lastVerifiedLecture.room} -> ${lectureInfo.room}) — requiring face verification`);
-          } else if (hasGap) {
-            periodTransitionRequiresFace = true;
-            transitionReason = 'gap_detected';
-            console.log('👤 Break/Gap detected between periods — requiring face verification');
-          }
-        }
-
-        // Face verify only needed for: first start of the day OR different room/gap transition OR new lecture when not verified today
-        const needsFaceVerification = periodTransitionRequiresFace || 
-          (!isAlreadyVerifiedToday && (!isSameLecture ||
-            (!isWiFiResumeInSameLecture && !isManualRestartInSameLecture && !isSameLectureContinuation)));
+        // Face verify only needed for: new lecture OR first start of the day (no lastVerifiedLecture)
+        const needsFaceVerification = !isAlreadyVerifiedToday && (!isSameLecture ||
+          (!isWiFiResumeInSameLecture && !isManualRestartInSameLecture && !isSameLectureContinuation));
 
         let faceVerificationResult = { success: true };
 
         if (!needsFaceVerification) {
           // Skip face verification — WiFi resume, manual restart, same lecture, or already verified today
-          const reason = isAlreadyVerifiedToday ? 'already verified today (same room & continuous period transition)'
+          const reason = isAlreadyVerifiedToday ? 'already verified today (period transition)'
             : isWiFiResumeInSameLecture ? 'WiFi resume in same lecture'
             : isManualRestartInSameLecture ? 'manual restart in same lecture'
             : 'same lecture continuation';
           console.log(`🔄 Skipping face verification — ${reason}`);
           console.log('📚 Continuing from timer value:', this.timerSeconds);
-          
-          // Period transition: even though face verification is skipped, update lastVerifiedLecture so subsequent transitions verify against this new lecture room/schedule
-          if (!isSameLecture) {
-            this.lastVerifiedLecture = { ...lectureInfo };
-          }
         } else {
           // Perform face verification: new lecture or first start of the day
           console.log('👤 Step 2: Starting face verification (new lecture or first start)...');
@@ -348,10 +325,36 @@ class OfflineTimerService {
           this.thresholdSeconds = null;
         }
 
-        // Non-blocking background recovery:
+        // NEW LOGIC: Fetch existing attendance from server if timer is 0 or it's a new lecture
         if (!isSameLecture || this.timerSeconds === 0) {
-          const periodId = lectureInfo.period ? `P${lectureInfo.period}` : (lectureInfo.periodNumber ? `P${lectureInfo.periodNumber}` : 'P1');
-          this._recoverAttendanceInBackground(lectureInfo, periodId).catch(() => {});
+          try {
+            console.log('📡 Fetching existing attendance from server for initial state...');
+            const todayStr = this._getISTDateString();
+            const attController = new AbortController();
+            const attTimeout = setTimeout(() => attController.abort(), 5000);
+            const response = await fetch(`${this.serverUrl}/api/attendance/student/${this.studentId}/date/${todayStr}`, {
+              signal: attController.signal
+            });
+            clearTimeout(attTimeout);
+            if (response.ok) {
+              const data = await response.json();
+              if (data.success && data.record && data.record.lectures) {
+                const periodId = lectureInfo.period ? `P${lectureInfo.period}` : (lectureInfo.periodNumber ? `P${lectureInfo.periodNumber}` : 'P1');
+                const existingLecture = data.record.lectures.find(l => l.period === periodId);
+                if (existingLecture) {
+                  const recoveredSeconds = existingLecture.actualAttended != null
+                    ? existingLecture.actualAttended
+                    : (existingLecture.attended || 0);
+                  if (recoveredSeconds > 0) {
+                    this.timerSeconds = recoveredSeconds;
+                    console.log(`✅ Recovered ${this.timerSeconds} actual seconds from server for ${periodId}`);
+                  }
+                }
+              }
+            }
+          } catch (err) {
+            console.log('⚠️ Failed to fetch existing attendance (offline?):', err.message);
+          }
         }
 
         // Step 3: Set lecture context and start timer
@@ -414,67 +417,8 @@ class OfflineTimerService {
           error: error.message,
           step: 'unknown_error'
         };
-    }
-  }
-
-
-  /**
-   * Recovers existing attendance from the server in the background without blocking startup.
-   */
-  async _recoverAttendanceInBackground(lectureInfo, periodId) {
-    try {
-      console.log(`📡 [BACKGROUND RECOVERY] Fetching existing attendance for ${periodId}...`);
-      const todayStr = this._getISTDateString();
-      const attController = new AbortController();
-      const attTimeout = setTimeout(() => attController.abort(), 6000);
-      const response = await fetch(`${this.serverUrl}/api/attendance/student/${this.studentId}/date/${todayStr}`, {
-        signal: attController.signal
-      });
-      clearTimeout(attTimeout);
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.record && data.record.lectures) {
-          const existingLecture = data.record.lectures.find(l => l.period === periodId);
-          if (existingLecture) {
-            const recoveredSeconds = existingLecture.actualAttended != null
-              ? existingLecture.actualAttended
-              : (existingLecture.attended || 0);
-            if (recoveredSeconds > this.timerSeconds) {
-              console.log(`✅ [BACKGROUND RECOVERY] Recovered ${recoveredSeconds}s (current=${this.timerSeconds}s) from server for ${periodId}`);
-              
-              // Only update if the user hasn't switched to a different lecture in the meantime
-              const currentPeriodId = this.currentLecture?.period ? `P${this.currentLecture.period}` : (this.currentLecture?.periodNumber ? `P${this.currentLecture.periodNumber}` : 'P1');
-              if (this.currentLecture && currentPeriodId === periodId) {
-                this.timerSeconds = recoveredSeconds;
-                
-                // Write the new state locally
-                await this.saveState();
-                
-                // If the timer is still actively running, restart native/JS ticking at the recovered base value
-                if (this.isRunning && !this.isPaused) {
-                  console.log(`🔄 [BACKGROUND RECOVERY] Updating running timer to recovered value: ${recoveredSeconds}s`);
-                  this.startCounting();
-                }
-                
-                // Notify listeners of the tick update
-                this.notifyListeners({
-                  type: 'timer_tick',
-                  timerSeconds: this.timerSeconds,
-                  lecture: this.currentLecture
-                });
-              } else {
-                console.log(`⚠️ [BACKGROUND RECOVERY] Found recovered seconds but lecture/period changed from ${periodId} to ${currentPeriodId}`);
-              }
-            } else {
-              console.log(`ℹ️ [BACKGROUND RECOVERY] Server seconds (${recoveredSeconds}s) are not greater than local (${this.timerSeconds}s).`);
-            }
-          }
-        }
       }
-    } catch (err) {
-      console.log('⚠️ [BACKGROUND RECOVERY] Failed to fetch existing attendance:', err.message);
     }
-  }
 
 
   /**
@@ -904,15 +848,15 @@ class OfflineTimerService {
         // this.wasManuallyStoppedInSameLecture remains true
         this.thresholdSeconds = null;  // reset threshold on any stop
         this.attendanceStatus = 'absent';
-      } else if (reason === 'lecture_ended' || reason === 'period_change') {
-        // Lecture ended or period changed - track that timer was running for auto-start next period
-        console.log('⏰ Lecture period ended or changed - preparing for next period auto-start');
+      } else if (reason === 'lecture_ended') {
+        // Lecture ended - track that timer was running for auto-start next period
+        console.log('⏰ Lecture period ended - preparing for next period auto-start');
         this.wasRunningBeforeLectureEnd = true;  // Track for auto-start in next period
         this.wasManuallyStoppedInSameLecture = false;
         this.wasRunningBeforeDisconnect = false;
         this.disconnectionTime = null;
         this.pausedDueToWiFiLoss = false;
-        this.previousLectureData = this.currentLecture ? { ...this.currentLecture } : null;
+        this.previousLectureData = null;
         this.thresholdSeconds = null;  // reset so next period gets fresh threshold
         this.attendanceStatus = 'absent';
       }
@@ -1408,28 +1352,6 @@ class OfflineTimerService {
   }
 
   /**
-   * Determine if there is a gap or break in time between two lectures
-   */
-  hasGapBetweenLectures(prevLecture, nextLecture) {
-    if (!prevLecture || !nextLecture || !prevLecture.endTime || !nextLecture.startTime) {
-      return true; // If missing info, assume a gap for safety
-    }
-    try {
-      const [prevHour, prevMinute] = prevLecture.endTime.split(':').map(Number);
-      const [nextHour, nextMinute] = nextLecture.startTime.split(':').map(Number);
-      
-      const prevTotal = prevHour * 60 + prevMinute;
-      const nextTotal = nextHour * 60 + nextMinute;
-      
-      // If there is any positive gap in minutes, return true
-      return nextTotal > prevTotal;
-    } catch (err) {
-      console.warn('⚠️ Error parsing lecture gap times:', err.message);
-      return true; // Default to gap for safety
-    }
-  }
-
-  /**
    * Setup BSSID monitoring using BSSIDStorage system with enhanced reconnection
    */
   setupBSSIDMonitoring() {
@@ -1484,15 +1406,10 @@ class OfflineTimerService {
   }
 
   /**
-   * Setup sync interval (every 30 seconds with random jitter)
+   * Setup sync interval (every 2 minutes)
    */
   setupSyncInterval() {
-    if (this.syncInterval) {
-      clearTimeout(this.syncInterval);
-      this.syncInterval = null;
-    }
-
-    const tick = async () => {
+    this.syncInterval = setInterval(async () => {
       // 1. If timer is running, perform regular heartbeat sync
       if (this.isRunning) {
         await this.syncToServer();
@@ -1504,15 +1421,7 @@ class OfflineTimerService {
         console.log('🔄 Periodically checking sync queue for non-active period sync...');
         await this.syncPendingData();
       }
-
-      // Schedule next tick with 0 to 5 seconds jitter (30s base) to prevent thundering herd spikes at 300+ scale
-      const jitter = Math.floor(Math.random() * 5000);
-      this.syncInterval = setTimeout(tick, 30000 + jitter);
-    };
-
-    // Stagger initial check with a random initial delay so devices do not synchronize start loops
-    const initialDelay = Math.floor(Math.random() * 5000);
-    this.syncInterval = setTimeout(tick, initialDelay);
+    }, 30000); // 30 seconds — responsive live updates
   }
 
   /**
@@ -2113,10 +2022,6 @@ class OfflineTimerService {
         pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
         previousLectureData: this.previousLectureData,
         isManuallyMarked: this.isManuallyMarked,
-        lastVerifiedLecture: this.lastVerifiedLecture,
-        lastFaceVerificationTime: this.lastFaceVerificationTime,
-        verifiedToday: this.verifiedToday,
-        verifiedTodayDate: this.verifiedTodayDate,
         timestamp: _getBootMs() || Date.now(),
         bootMs: _getBootMs(),  // spoof-proof anchor for age check on restore
         date: this._getISTDateString() // Add date to discard across midnight
@@ -2202,10 +2107,6 @@ class OfflineTimerService {
           this.attendanceStatus = state.attendanceStatus || 'absent';
           this.thresholdSeconds = state.thresholdSeconds || null;
           this.isManuallyMarked = state.isManuallyMarked || false;
-          this.lastVerifiedLecture = state.lastVerifiedLecture || null;
-          this.lastFaceVerificationTime = state.lastFaceVerificationTime || null;
-          this.verifiedToday = state.verifiedToday || false;
-          this.verifiedTodayDate = state.verifiedTodayDate || null;
           
           console.log('📦 Loaded timer state from storage:', {
             timerSeconds: this.timerSeconds,
@@ -2340,7 +2241,7 @@ class OfflineTimerService {
     this.stopCounting();
     
     if (this.syncInterval) {
-      clearTimeout(this.syncInterval);
+      clearInterval(this.syncInterval);
       this.syncInterval = null;
     }
     
