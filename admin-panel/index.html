@@ -1227,6 +1227,20 @@
                         </div>
                     </div>
 
+                    <div class="period-info-card" style="margin-top: 15px; border-left: 4px solid var(--primary); background: var(--bg-card, rgba(30, 41, 59, 0.5));">
+                        <h3 style="display: flex; align-items: center; gap: 8px;">📋 Bulk Paste Period Timings</h3>
+                        <p>Paste a list of start and end times (e.g. <code>9:00 10:00</code> or <code>09:00 - 10:00</code> per line) to automatically set them into the period boxes below.</p>
+                        <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 10px;">
+                            <textarea id="bulkPeriodsInput" class="form-textarea" rows="3" 
+                                      placeholder="9:00 10:00&#10;10:00 11:00&#10;11:00 12:00" 
+                                      style="width: 100%; font-family: monospace; font-size: 14px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 8px; padding: 12px; resize: vertical;"></textarea>
+                            <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+                                <button class="btn btn-primary" id="applyBulkPeriodsBtn" style="padding: 8px 16px; font-size: 14px;">⚡ Apply Timings</button>
+                                <span style="font-size: 12px; color: var(--text-secondary);">Supports multiple lines & various formats (e.g., <code>09:00 10:00</code> or <code>9:00 - 10:00</code>)</span>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="periods-container">
                         <div class="periods-list" id="periodsList">
                             <!-- Periods will be loaded here -->
@@ -1625,6 +1639,49 @@
             <span class="modal-close" onclick="closeDetailedAttendanceModal()">&times;</span>
             <div id="detailedAttendanceModalBody">
                 <!-- Detailed attendance will be rendered here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Analog Clock Modal -->
+    <div id="analogClockModal" class="modal" style="display:none; justify-content: center; align-items: center; z-index: 10000; background: rgba(0,0,0,0.6);">
+        <div class="modal-content" style="max-width: 340px; text-align: center; padding: 24px; border-radius: 20px; background: #1e293b; border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 20px 40px rgba(0,0,0,0.6); position: relative;">
+            <span class="modal-close" id="closeClockModalBtn" style="position: absolute; right: 16px; top: 12px; font-size: 24px; cursor: pointer; color: #94a3b8;">&times;</span>
+            <h3 id="clockModalTitle" style="margin-top: 0; color: #f8fafc; font-size: 18px; margin-bottom: 6px;">Set Start Time</h3>
+            <div id="clockModalSubtitle" style="color: #94a3b8; font-size: 13px; margin-bottom: 12px;">Period 1</div>
+            
+            <div style="font-size: 36px; font-weight: 800; color: #3b82f6; margin: 10px 0; letter-spacing: 1px; font-family: monospace;" id="clockDisplayTime">14:00</div>
+            
+            <!-- SVG Analog Clock -->
+            <div style="position: relative; width: 200px; height: 200px; margin: 20px auto; user-select: none;">
+                <svg id="analogClockSvg" width="200" height="200" viewBox="0 0 200 200" style="overflow: visible;">
+                    <!-- Outer Ring -->
+                    <circle cx="100" cy="100" r="95" fill="#0f172a" stroke="#3b82f6" stroke-width="2" />
+                    <!-- Center Point -->
+                    <circle cx="100" cy="100" r="5" fill="#3b82f6" />
+                    <!-- Number group -->
+                    <g id="clockNumbers" fill="#f8fafc" font-size="13" font-family="sans-serif" font-weight="600" text-anchor="middle" dominant-baseline="middle"></g>
+                    <!-- Hands -->
+                    <line id="hourHand" x1="100" y1="100" x2="100" y2="55" stroke="#f8fafc" stroke-width="5" stroke-linecap="round" />
+                    <line id="minuteHand" x1="100" y1="100" x2="100" y2="40" stroke="#3b82f6" stroke-width="3" stroke-linecap="round" />
+                </svg>
+            </div>
+            
+            <!-- Toggle AM/PM -->
+            <div style="display: flex; justify-content: center; gap: 8px; margin-bottom: 18px; background: rgba(0,0,0,0.2); padding: 4px; border-radius: 8px;">
+                <button type="button" class="btn" id="btnAM" style="flex: 1; padding: 6px; font-size: 13px; font-weight: bold; border-radius: 6px; background: transparent; color: #94a3b8; border: none; cursor: pointer;">AM</button>
+                <button type="button" class="btn" id="btnPM" style="flex: 1; padding: 6px; font-size: 13px; font-weight: bold; border-radius: 6px; background: #3b82f6; color: #ffffff; border: none; cursor: pointer;">PM</button>
+            </div>
+            
+            <!-- Mode Switcher -->
+            <div style="display: flex; justify-content: space-between; gap: 10px; margin-bottom: 20px;">
+                <button type="button" class="btn" id="btnClockHourMode" style="flex: 1; padding: 8px; font-size: 12px; font-weight: bold; border-radius: 8px; background: #3b82f6; color: white; border: none; cursor: pointer;">Hours</button>
+                <button type="button" class="btn" id="btnClockMinMode" style="flex: 1; padding: 8px; font-size: 12px; font-weight: bold; border-radius: 8px; background: #1e293b; color: #94a3b8; border: 1px solid rgba(255,255,255,0.1); cursor: pointer;">Minutes</button>
+            </div>
+            
+            <div style="display: flex; gap: 10px; margin-top: 15px;">
+                <button type="button" class="btn btn-secondary" id="btnClockCancel" style="flex: 1; padding: 10px; font-size: 14px; border-radius: 8px; cursor: pointer;">Cancel</button>
+                <button type="button" class="btn btn-primary" id="btnClockDone" style="flex: 1; padding: 10px; font-size: 14px; border-radius: 8px; cursor: pointer; font-weight: bold;">Confirm & Next ➡️</button>
             </div>
         </div>
     </div>

@@ -1748,25 +1748,20 @@ class OfflineTimerService {
    * so the server can identify the correct period even after currentLecture is cleared.
    */
   async syncToServerWithContext(lecture, timerSeconds, periodId) {
-    // Temporarily override instance values for this sync call
-    const savedLecture   = this.currentLecture;
-    const savedSeconds   = this.timerSeconds;
-    this.currentLecture  = lecture;
-    this.timerSeconds    = timerSeconds;
-    this._finalSyncPeriodId = periodId;  // picked up by syncToServer
     try {
-      await this.syncToServer();
-    } finally {
-      this.currentLecture = savedLecture;
-      this.timerSeconds   = savedSeconds;
-      this._finalSyncPeriodId = null;
+      await this.syncToServer(lecture, timerSeconds, periodId);
+    } catch (e) {
+      console.warn('⚠️ syncToServerWithContext error:', e);
     }
   }
 
   /**
    * Sync timer data to server
+   * @param {Object} overrideLecture - Optional lecture to sync (instead of current state)
+   * @param {number} overrideTimerSeconds - Optional timer value to sync
+   * @param {string} overridePeriodId - Optional period ID to sync
    */
-  async syncToServer() {
+  async syncToServer(overrideLecture = null, overrideTimerSeconds = null, overridePeriodId = null) {
     try {
       this.lastSyncAttempt = _getBootMs() || Date.now();
 
@@ -1779,6 +1774,17 @@ class OfflineTimerService {
       let syncTimestamp;
       try { syncTimestamp = getServerTime().now(); } catch { syncTimestamp = _getBootMs() || Date.now(); }
 
+      // CAPTURE STATE AT THE START TO PREVENT CONCURRENT MODIFICATION BUGS
+      // Use overrides if provided, otherwise use current instance state
+      const capturedTimerSeconds = overrideTimerSeconds !== null ? overrideTimerSeconds : this.timerSeconds;
+      const capturedLecture = overrideLecture !== null ? overrideLecture : this.currentLecture;
+      const capturedIsRunning = this.isRunning;
+      const capturedIsPaused = this.isPaused;
+      const capturedLectureStartTime = this.lectureStartTime;
+      const capturedPeriodId = overridePeriodId !== null ? overridePeriodId : (capturedLecture?.period
+          ? `P${capturedLecture.period}`
+          : (capturedLecture?.periodId || null));
+
       // Enforce a hard 10-second timeout so a slow/sleeping server never blocks the interval
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 10000);
@@ -1790,19 +1796,17 @@ class OfflineTimerService {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             studentId: this.studentId,
-            timerSeconds: this.timerSeconds,
-            lecture: this.currentLecture,
+            timerSeconds: capturedTimerSeconds,
+            lecture: capturedLecture,
             // Include periodId so server can update the right PeriodAttendance record
             // even after the period has ended (set by syncToServerWithContext for final syncs)
-            periodId: this._finalSyncPeriodId || (this.currentLecture?.period
-                ? `P${this.currentLecture.period}`
-                : (this.currentLecture?.periodId || null)),
+            periodId: capturedPeriodId,
             timestamp: syncTimestamp,
-            isRunning: this.isRunning,
-            isPaused: this.isPaused,
+            isRunning: capturedIsRunning,
+            isPaused: capturedIsPaused,
             currentBSSID: currentBSSID,
-            attendedMinutes: Math.floor(this.timerSeconds / 60),
-            sessionStartTime: this.lectureStartTime
+            attendedMinutes: Math.floor(capturedTimerSeconds / 60),
+            sessionStartTime: capturedLectureStartTime
           }),
           signal: controller.signal
         });
@@ -1891,10 +1895,8 @@ class OfflineTimerService {
       }
       
     } catch (error) {
-      const periodId = this._finalSyncPeriodId || (this.currentLecture?.period 
-            ? `P${this.currentLecture.period}` 
-            : (this.currentLecture?.periodId || 'Unknown'));
-      console.warn(`⚠️ Sync failed for ${periodId} (${this.timerSeconds}s), queuing for later:`, error.message);
+      const periodId = capturedPeriodId || 'Unknown';
+      console.warn(`⚠️ Sync failed for ${periodId} (${capturedTimerSeconds}s), queuing for later:`, error.message);
       
       this.hasInternetConnection = false;
       this.isOnline = false;
@@ -1902,13 +1904,13 @@ class OfflineTimerService {
       // Add to sync queue — capture full lecture context including period ID
       const existingIndex = this.syncQueue.findIndex(item => item.periodId === periodId);
       const queueItem = {
-        timerSeconds: this.timerSeconds,
-        lecture: this.currentLecture,
+        timerSeconds: capturedTimerSeconds,
+        lecture: capturedLecture,
         periodId: periodId,
         timestamp: _getBootMs() || Date.now(),
-        isRunning: this.isRunning,
-        isPaused: this.isPaused,
-        attendedMinutes: Math.floor(this.timerSeconds / 60)
+        isRunning: capturedIsRunning,
+        isPaused: capturedIsPaused,
+        attendedMinutes: Math.floor(capturedTimerSeconds / 60)
       };
 
       if (existingIndex !== -1) {

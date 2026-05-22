@@ -50,7 +50,7 @@
     <div class="container">
         <h1>🔧 Admin Panel Connection Reset</h1>
         <p>Current Server URL: <span id="currentUrl">Loading...</span></p>
-        <button onclick="resetToLocalhost()">Reset to Localhost</button>
+        <button onclick="resetToProduction()">Reset to Azure Production</button>
         <button onclick="clearAll()">Clear All Settings</button>
         <button onclick="testConnection()">Test Connection</button>
         <div id="status"></div>
@@ -62,7 +62,7 @@
         const currentUrl = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL + ' (default)';
         document.getElementById('currentUrl').textContent = currentUrl;
 
-        function resetToLocalhost() {
+        function resetToProduction() {
             localStorage.setItem('serverUrl', DEFAULT_SERVER_URL);
             showStatus('✅ Server URL reset to ' + DEFAULT_SERVER_URL, 'success');
             setTimeout(() => {

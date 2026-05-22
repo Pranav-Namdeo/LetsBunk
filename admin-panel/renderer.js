@@ -778,6 +778,49 @@ function setupEventListeners() {
     if (subjectTypeFilter) {
         subjectTypeFilter.addEventListener('change', loadSubjects);
     }
+
+    // Bulk Period Timings Paste
+    const applyBulkPeriodsBtn = document.getElementById('applyBulkPeriodsBtn');
+    if (applyBulkPeriodsBtn) {
+        applyBulkPeriodsBtn.addEventListener('click', () => {
+            const bulkInput = document.getElementById('bulkPeriodsInput');
+            if (bulkInput) {
+                handleBulkPeriodsPaste(bulkInput.value);
+            }
+        });
+    }
+
+    const bulkPeriodsInput = document.getElementById('bulkPeriodsInput');
+    if (bulkPeriodsInput) {
+        bulkPeriodsInput.addEventListener('paste', (e) => {
+            const clipboardData = e.clipboardData || window.clipboardData;
+            const pastedText = clipboardData.getData('Text');
+            setTimeout(() => {
+                handleBulkPeriodsPaste(pastedText);
+            }, 0);
+        });
+    }
+
+    const periodsList = document.getElementById('periodsList');
+    if (periodsList) {
+        periodsList.addEventListener('paste', (e) => {
+            if (!e.target.classList.contains('period-time-input')) return;
+            
+            const clipboardData = e.clipboardData || window.clipboardData;
+            const pastedText = clipboardData.getData('Text');
+            
+            const lines = pastedText.split(/\r?\n/).filter(line => line.trim().length > 0);
+            const timesMatch = pastedText.match(/\b\d{1,2}[:.]\d{2}\b/g);
+            
+            if (lines.length > 1 || (timesMatch && timesMatch.length >= 2 && pastedText.includes(' '))) {
+                e.preventDefault();
+                handleBulkPeriodsPaste(pastedText);
+            }
+        });
+    }
+
+    // Initialize custom interactive analog clock picker events
+    setupClockEvents();
 }
 
 // Navigation
@@ -7860,24 +7903,32 @@ function renderPeriods() {
                 
                 <div class="period-time-group">
                     <label>Start Time</label>
-                    <input type="text" 
-                           class="period-time-input" 
-                           value="${startTime}"
-                           placeholder="HH:MM"
-                           maxlength="5"
-                           pattern="[0-9]{2}:[0-9]{2}"
-                           onchange="updatePeriodTime(${index}, 'startTime', this.value)">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="text" 
+                               class="period-time-input" 
+                               value="${startTime}"
+                               placeholder="HH:MM"
+                               maxlength="5"
+                               pattern="[0-9]{2}:[0-9]{2}"
+                               onchange="updatePeriodTime(${index}, 'startTime', this.value)"
+                               style="flex: 1; min-width: 0;">
+                        <button type="button" onclick="openAnalogClock(${index}, 'startTime')" style="padding: 0 10px; height: 38px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; color: #3b82f6; cursor: pointer; font-size: 14px;" title="Pick time with analog clock">🕒</button>
+                    </div>
                 </div>
                 
                 <div class="period-time-group">
                     <label>End Time</label>
-                    <input type="text" 
-                           class="period-time-input" 
-                           value="${endTime}"
-                           placeholder="HH:MM"
-                           maxlength="5"
-                           pattern="[0-9]{2}:[0-9]{2}"
-                           onchange="updatePeriodTime(${index}, 'endTime', this.value)">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="text" 
+                               class="period-time-input" 
+                               value="${endTime}"
+                               placeholder="HH:MM"
+                               maxlength="5"
+                               pattern="[0-9]{2}:[0-9]{2}"
+                               onchange="updatePeriodTime(${index}, 'endTime', this.value)"
+                               style="flex: 1; min-width: 0;">
+                        <button type="button" onclick="openAnalogClock(${index}, 'endTime')" style="padding: 0 10px; height: 38px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; color: #3b82f6; cursor: pointer; font-size: 14px;" title="Pick time with analog clock">🕒</button>
+                    </div>
                 </div>
                 
                 <div class="period-duration">
@@ -8232,6 +8283,384 @@ async function resetPeriodsToDefault() {
     currentPeriods = getDefaultPeriods();
     renderPeriods();
     showNotification('Periods reset to default. Click "Save" to apply changes.', 'warning');
+}
+
+// Bulk Parse and Apply Timings
+function parseBulkTimings(text) {
+    if (!text) return [];
+    const lines = text.split(/\r?\n/);
+    const parsedPeriods = [];
+    let periodNum = 1;
+    
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        
+        // Match times like 9:00, 09.00, 10:30, 14:00 etc.
+        const timeMatches = trimmed.match(/\b\d{1,2}[:.]\d{2}\b/g);
+        if (timeMatches && timeMatches.length >= 2) {
+            const formatTime = (timeStr) => {
+                const clean = timeStr.replace('.', ':');
+                const [h, m] = clean.split(':');
+                return `${h.padStart(2, '0')}:${m.padStart(2, '0')}`;
+            };
+            
+            parsedPeriods.push({
+                number: periodNum++,
+                startTime: formatTime(timeMatches[0]),
+                endTime: formatTime(timeMatches[1])
+            });
+        }
+    }
+    return parsedPeriods;
+}
+
+function handleBulkPeriodsPaste(text) {
+    const parsed = parseBulkTimings(text);
+    if (parsed.length > 0) {
+        currentPeriods = parsed;
+        renderPeriods();
+        showNotification(`Successfully parsed and loaded ${parsed.length} periods! Don't forget to save.`, 'success');
+        
+        // Populate the textarea with a formatted version for clarity
+        const formattedText = parsed.map(p => `${p.startTime} ${p.endTime}`).join('\n');
+        const bulkInput = document.getElementById('bulkPeriodsInput');
+        if (bulkInput) {
+            bulkInput.value = formattedText;
+        }
+    } else {
+        showNotification('Invalid format. Please use "9:00 10:00" format with start and end times on each line.', 'error');
+    }
+}
+
+// Analog Clock Picker Variables & State Management
+let currentClockTargetIndex = null;
+let currentClockTargetField = null;
+let clockMode = 'hours';
+let selectedHour = 12;
+let selectedMinute = 0;
+let selectedAmPm = 'PM';
+
+function openAnalogClock(index, field) {
+    currentClockTargetIndex = index;
+    currentClockTargetField = field;
+    
+    // Get the current value from the input field
+    const period = currentPeriods[index];
+    let currentValue = '12:00';
+    if (period) {
+        currentValue = period[field] || (field === 'startTime' ? '09:00' : '10:00');
+    }
+    
+    // Parse time
+    const parts = currentValue.split(':');
+    let h = parseInt(parts[0]);
+    if (isNaN(h)) h = 12;
+    let m = parseInt(parts[1]);
+    if (isNaN(m)) m = 0;
+    
+    // Adjust for AM/PM
+    if (h >= 12) {
+        selectedAmPm = 'PM';
+        selectedHour = h === 12 ? 12 : h - 12;
+    } else {
+        selectedAmPm = 'AM';
+        selectedHour = h === 0 ? 12 : h;
+    }
+    selectedMinute = m;
+    
+    // Update Title and Subtitle in Modal
+    const titleEl = document.getElementById('clockModalTitle');
+    if (titleEl) {
+        titleEl.textContent = `Set ${field === 'startTime' ? 'Start' : 'End'} Time`;
+    }
+    const subtitleEl = document.getElementById('clockModalSubtitle');
+    if (subtitleEl) {
+        subtitleEl.textContent = `Period ${period ? period.number : index + 1}`;
+    }
+    
+    // Set up AM/PM toggle state in UI
+    updateAmPmUI();
+    
+    // Default mode is hours
+    switchClockMode('hours');
+    
+    // Open Modal
+    const modal = document.getElementById('analogClockModal');
+    if (modal) {
+        modal.style.display = 'flex';
+        modal.classList.add('active');
+    }
+    
+    // Draw numbers & hands
+    drawClockFace();
+    updateClockHands();
+    updateClockDisplay();
+}
+
+function updateAmPmUI() {
+    const btnAM = document.getElementById('btnAM');
+    const btnPM = document.getElementById('btnPM');
+    if (btnAM && btnPM) {
+        if (selectedAmPm === 'AM') {
+            btnAM.style.background = '#3b82f6';
+            btnAM.style.color = '#ffffff';
+            btnPM.style.background = 'transparent';
+            btnPM.style.color = '#94a3b8';
+        } else {
+            btnPM.style.background = '#3b82f6';
+            btnPM.style.color = '#ffffff';
+            btnAM.style.background = 'transparent';
+            btnAM.style.color = '#94a3b8';
+        }
+    }
+}
+
+function switchClockMode(mode) {
+    clockMode = mode;
+    const btnHour = document.getElementById('btnClockHourMode');
+    const btnMin = document.getElementById('btnClockMinMode');
+    if (btnHour && btnMin) {
+        if (mode === 'hours') {
+            btnHour.style.background = '#3b82f6';
+            btnHour.style.color = 'white';
+            btnMin.style.background = '#1e293b';
+            btnMin.style.color = '#94a3b8';
+            btnMin.style.border = '1px solid rgba(255,255,255,0.1)';
+        } else {
+            btnMin.style.background = '#3b82f6';
+            btnMin.style.color = 'white';
+            btnHour.style.background = '#1e293b';
+            btnHour.style.color = '#94a3b8';
+            btnHour.style.border = '1px solid rgba(255,255,255,0.1)';
+        }
+    }
+    drawClockFace();
+    updateClockHands();
+}
+
+function drawClockFace() {
+    const clockNumbers = document.getElementById('clockNumbers');
+    if (!clockNumbers) return;
+    
+    clockNumbers.innerHTML = '';
+    
+    if (clockMode === 'hours') {
+        // Draw 1 to 12
+        for (let i = 1; i <= 12; i++) {
+            const angle = (i * 30 * Math.PI) / 180;
+            const x = 100 + 72 * Math.sin(angle);
+            const y = 100 - 72 * Math.cos(angle);
+            
+            clockNumbers.innerHTML += `
+                <text x="${x}" y="${y}" fill="#f8fafc" font-size="13" font-family="sans-serif" font-weight="600" text-anchor="middle" dominant-baseline="middle" style="cursor: pointer;">${i}</text>
+            `;
+        }
+    } else {
+        // Draw 0, 5, 10, ... 55
+        for (let i = 0; i < 12; i++) {
+            const val = i * 5;
+            const angle = (i * 30 * Math.PI) / 180;
+            const x = 100 + 72 * Math.sin(angle);
+            const y = 100 - 72 * Math.cos(angle);
+            const textVal = String(val).padStart(2, '0');
+            
+            clockNumbers.innerHTML += `
+                <text x="${x}" y="${y}" fill="#3b82f6" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle" dominant-baseline="middle" style="cursor: pointer;">${textVal}</text>
+            `;
+        }
+    }
+}
+
+function updateClockHands() {
+    const hourHand = document.getElementById('hourHand');
+    const minuteHand = document.getElementById('minuteHand');
+    
+    if (hourHand && minuteHand) {
+        const hourAngle = (selectedHour % 12) * 30 + selectedMinute * 0.5;
+        hourHand.setAttribute('transform', `rotate(${hourAngle}, 100, 100)`);
+        
+        const minuteAngle = selectedMinute * 6;
+        minuteHand.setAttribute('transform', `rotate(${minuteAngle}, 100, 100)`);
+    }
+}
+
+function updateClockDisplay() {
+    const displayEl = document.getElementById('clockDisplayTime');
+    if (displayEl) {
+        let displayHour = selectedHour;
+        if (selectedAmPm === 'PM' && selectedHour < 12) {
+            displayHour += 12;
+        } else if (selectedAmPm === 'AM' && selectedHour === 12) {
+            displayHour = 0;
+        }
+        
+        const hStr = String(displayHour).padStart(2, '0');
+        const mStr = String(selectedMinute).padStart(2, '0');
+        displayEl.textContent = `${hStr}:${mStr}`;
+    }
+}
+
+function confirmClockTime() {
+    let finalHour = selectedHour;
+    if (selectedAmPm === 'PM' && selectedHour < 12) {
+        finalHour += 12;
+    } else if (selectedAmPm === 'AM' && selectedHour === 12) {
+        finalHour = 0;
+    }
+    
+    const formattedValue = `${String(finalHour).padStart(2, '0')}:${String(selectedMinute).padStart(2, '0')}`;
+    
+    if (currentPeriods[currentClockTargetIndex]) {
+        currentPeriods[currentClockTargetIndex][currentClockTargetField] = formattedValue;
+        renderPeriods();
+        highlightOverlappingPeriods();
+    }
+    
+    // Auto forwarding logic
+    if (currentClockTargetField === 'startTime') {
+        const period = currentPeriods[currentClockTargetIndex];
+        
+        // Auto guess end time as start time + 5 minutes
+        let nextEndHour = finalHour;
+        let nextEndMin = selectedMinute + 5;
+        if (nextEndMin >= 60) {
+            nextEndHour = (nextEndHour + 1) % 24;
+            nextEndMin -= 60;
+        }
+        
+        const nextFormattedEnd = `${String(nextEndHour).padStart(2, '0')}:${String(nextEndMin).padStart(2, '0')}`;
+        period.endTime = nextFormattedEnd;
+        renderPeriods();
+        
+        setTimeout(() => {
+            openAnalogClock(currentClockTargetIndex, 'endTime');
+        }, 300);
+        
+    } else {
+        const nextIndex = currentClockTargetIndex + 1;
+        if (nextIndex < currentPeriods.length) {
+            const nextPeriod = currentPeriods[nextIndex];
+            nextPeriod.startTime = formattedValue;
+            renderPeriods();
+            
+            setTimeout(() => {
+                openAnalogClock(nextIndex, 'startTime');
+            }, 300);
+        } else {
+            closeClockModal();
+            showNotification('All period times configured successfully!', 'success');
+        }
+    }
+}
+
+function closeClockModal() {
+    const modal = document.getElementById('analogClockModal');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('active');
+    }
+}
+
+function setupClockEvents() {
+    const svg = document.getElementById('analogClockSvg');
+    if (!svg) return;
+    
+    let isDragging = false;
+    
+    const handleInteraction = (e) => {
+        e.preventDefault();
+        const rect = svg.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        
+        const x = clientX - rect.left - 100;
+        const y = clientY - rect.top - 100;
+        
+        let angleRad = Math.atan2(y, x);
+        let angleDeg = (angleRad * 180) / Math.PI + 90;
+        if (angleDeg < 0) angleDeg += 360;
+        
+        if (clockMode === 'hours') {
+            let hour = Math.round(angleDeg / 30);
+            if (hour === 0) hour = 12;
+            selectedHour = hour;
+        } else {
+            let minute = Math.round(angleDeg / 6);
+            if (minute === 60) minute = 0;
+            selectedMinute = minute;
+        }
+        updateClockHands();
+        updateClockDisplay();
+    };
+    
+    svg.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        handleInteraction(e);
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (isDragging) handleInteraction(e);
+    });
+    
+    document.addEventListener('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            if (clockMode === 'hours') {
+                setTimeout(() => {
+                    switchClockMode('minutes');
+                }, 200);
+            }
+        }
+    });
+    
+    // Touch support for mobiles/tablets
+    svg.addEventListener('touchstart', (e) => {
+        isDragging = true;
+        handleInteraction(e);
+    });
+    
+    svg.addEventListener('touchmove', (e) => {
+        if (isDragging) handleInteraction(e);
+    });
+    
+    svg.addEventListener('touchend', () => {
+        if (isDragging) {
+            isDragging = false;
+            if (clockMode === 'hours') {
+                setTimeout(() => {
+                    switchClockMode('minutes');
+                }, 200);
+            }
+        }
+    });
+    
+    // Toggle AM/PM buttons
+    document.getElementById('btnAM').addEventListener('click', () => {
+        selectedAmPm = 'AM';
+        updateAmPmUI();
+        updateClockDisplay();
+    });
+    
+    document.getElementById('btnPM').addEventListener('click', () => {
+        selectedAmPm = 'PM';
+        updateAmPmUI();
+        updateClockDisplay();
+    });
+    
+    // Mode switcher buttons
+    document.getElementById('btnClockHourMode').addEventListener('click', () => {
+        switchClockMode('hours');
+    });
+    
+    document.getElementById('btnClockMinMode').addEventListener('click', () => {
+        switchClockMode('minutes');
+    });
+    
+    // Actions
+    document.getElementById('btnClockCancel').addEventListener('click', closeClockModal);
+    document.getElementById('closeClockModalBtn').addEventListener('click', closeClockModal);
+    document.getElementById('btnClockDone').addEventListener('click', confirmClockTime);
 }
 
 
