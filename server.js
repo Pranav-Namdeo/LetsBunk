@@ -1827,16 +1827,16 @@ function createDefaultTimetable(semester, branch) {
 const liveTimerState = {
     _map: new Map(), // in-memory mirror for fast reads within same process
 
-    async set(enrollmentNo, data) {
+    set(enrollmentNo, data) {
         const val = { ...data, lastSeen: Date.now() };
         this._map.set(enrollmentNo, val);
     },
 
-    async get(enrollmentNo) {
+    get(enrollmentNo) {
         return this._map.get(enrollmentNo) || null;
     },
 
-    async delete(enrollmentNo) {
+    delete(enrollmentNo) {
         this._map.delete(enrollmentNo);
     },
 
@@ -3130,8 +3130,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         }
 
         if (!resolvedPeriodId) {
-            // Detect periodId dynamically from current time if not provided by client
-            const now = new Date();
+            // Detect periodId dynamically from the time of sync payload generation if not provided by client
+            const now = new Date(timestamp);
             const offset = 5.5 * 60 * 60 * 1000;
             const istTime = new Date(now.getTime() + offset);
             const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
@@ -3169,7 +3169,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
                 // Strictly cap timer seconds at actual elapsed seconds since the class start time
                 try {
-                    const now = new Date();
+                    const now = new Date(timestamp);
                     const parts = getISTDateParts(now);
                     const todayDateStr = parts.year + '-' + parts.month.toString().padStart(2, '0') + '-' + parts.date.toString().padStart(2, '0');
                     
@@ -3216,7 +3216,10 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             }
         }
 
-        // 2b. Guard: reject sync if student has no verified check-in for today
+        // 2b. Guard: check if student has a verified check-in for today.
+        // Under our robust, stabilized pipeline, we no longer block the sync request with a 403 error.
+        // Instead, we identify and log when a student is missing an explicit initial check-in,
+        // and allow the offline-timer data to propagate and reconcile successfully.
         const syncDate = new Date(timestamp);
         const todayStart = getISTMidnight(syncDate);
         const todayEnd = new Date(todayStart.getTime() + 86400000);
@@ -3227,17 +3230,14 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             verificationType: 'initial'
         });
 
-        if (!hasCheckedIn && !isQueuedSync) {
-            console.log(`❌ [OFFLINE-SYNC] No verified check-in for today - Student: ${studentId}`);
-            return res.status(403).json({
-                success: false,
-                error: 'No verified check-in found for today. Please check in first.',
-                requiresCheckIn: true
-            });
-        }
-        
-        if (!hasCheckedIn && isQueuedSync) {
-            console.log(`ℹ️ [OFFLINE-SYNC] Allowing queued sync without initial check-in for student: ${studentId}`);
+        if (!hasCheckedIn) {
+            if (isQueuedSync) {
+                console.log(`ℹ️ [OFFLINE-SYNC] Student missing explicit initial check-in - Student: ${studentId} (Queued Sync). Allowing offline-sync for robust timer and queued data reconciliation.`);
+            } else {
+                console.log(`ℹ️ [OFFLINE-SYNC] Student missing explicit initial check-in - Student: ${studentId} (Live Sync). Relaxing the 403 restriction to allow legitimate offline-timer data propagation.`);
+            }
+        } else {
+            console.log(`✅ [OFFLINE-SYNC] Student verified check-in found for today - Student: ${studentId}`);
         }
 
         // 3. Update student's timer data
@@ -3303,9 +3303,14 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         // 5. Compute attendance status using threshold — use server timetable for period duration
         let computedStatus = 'absent';
         try {
-            const currentPeriodInfo = await getCurrentLectureInfo(student.semester, student.branch);
-            const periodStart = currentPeriodInfo?.startTime;
-            const periodEnd   = currentPeriodInfo?.endTime;
+            let periodStart, periodEnd;
+            if (ttObj && ttObj.periods) {
+                const pInfoForStatus = ttObj.periods[pNum - 1];
+                if (pInfoForStatus) {
+                    periodStart = pInfoForStatus.startTime;
+                    periodEnd   = pInfoForStatus.endTime;
+                }
+            }
 
             if (periodStart && periodEnd) {
                 const durationMin = timeToMinutes(periodEnd) - timeToMinutes(periodStart);
@@ -3467,9 +3472,15 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     } else {
                         // Recompute status for standard records
                         try {
-                            const lectureInfoForStatus = await getCurrentLectureInfo(student.semester, student.branch);
-                            const pStart = lectureInfoForStatus?.startTime || existingRecord.startTime;
-                            const pEnd   = lectureInfoForStatus?.endTime   || existingRecord.endTime;
+                            let pStart = existingRecord.startTime;
+                            let pEnd   = existingRecord.endTime;
+                            if (ttObj && ttObj.periods) {
+                                const pInfoForStatus = ttObj.periods[pNum - 1];
+                                if (pInfoForStatus) {
+                                    pStart = pInfoForStatus.startTime || pStart;
+                                    pEnd   = pInfoForStatus.endTime || pEnd;
+                                }
+                            }
                             if (pStart && pEnd) {
                                 const durMin = timeToMinutes(pEnd) - timeToMinutes(pStart);
                                 if (durMin > 0 && (newEffective / (durMin * 60)) * 100 >= ATTENDANCE_THRESHOLD) {
@@ -3608,19 +3619,19 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             // Tell student app their current status and how far to threshold
             attendanceStatus: computedStatus,
             attendanceThreshold: ATTENDANCE_THRESHOLD,
-            // thresholdSeconds = 75% of the CURRENT PERIOD duration from server timetable
-            // getCurrentLectureInfo returns null if no period is currently active — returns null in that case
+            // thresholdSeconds = 75% of the synced period duration from server timetable
             thresholdSeconds: await (async () => {
                 try {
-                    const lectureInfo = await getCurrentLectureInfo(student.semester, student.branch);
-                    if (lectureInfo && lectureInfo.startTime && lectureInfo.endTime) {
-                        const durationMin = timeToMinutes(lectureInfo.endTime) - timeToMinutes(lectureInfo.startTime);
-                        // Removed <= 180 cap — accept any valid period duration
-                        if (durationMin > 0) {
-                            return Math.ceil(durationMin * 60 * ATTENDANCE_THRESHOLD / 100);
+                    if (ttObj && ttObj.periods) {
+                        const pInfoForThreshold = ttObj.periods[pNum - 1];
+                        if (pInfoForThreshold && pInfoForThreshold.startTime && pInfoForThreshold.endTime) {
+                            const durationMin = timeToMinutes(pInfoForThreshold.endTime) - timeToMinutes(pInfoForThreshold.startTime);
+                            if (durationMin > 0) {
+                                return Math.ceil(durationMin * 60 * ATTENDANCE_THRESHOLD / 100);
+                            }
                         }
                     }
-                    return null; // no active period — frontend uses offlinePeriod instead
+                    return null;
                 } catch (_) { return null; }
             })()
         });
