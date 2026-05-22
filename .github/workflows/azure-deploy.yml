@@ -3,11 +3,7 @@ name: Deploy to Azure
 on:
   push:
     branches:
-      - Trial
-      - 25-03-26
-      - 26-03-26
-      - 01-04-26
-      - 10-may-2026
+      - azury
 
 jobs:
   deploy:
