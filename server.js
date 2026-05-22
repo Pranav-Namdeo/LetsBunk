@@ -1749,6 +1749,20 @@ function getISTMidnight(date = new Date()) {
     return new Date(Date.UTC(y, m, day, 0, 0, 0) - offset);
 }
 
+// Helper to extract IST date parts regardless of server timezone
+function getISTDateParts(date) {
+    const d = new Date(date);
+    const offset = 5.5 * 60 * 60 * 1000; // IST is UTC + 5:30
+    const istTime = new Date(d.getTime() + offset);
+    return {
+        year: istTime.getUTCFullYear(),
+        month: istTime.getUTCMonth() + 1,
+        date: istTime.getUTCDate(),
+        dayIndex: istTime.getUTCDay()
+    };
+}
+
+
 function timeToMinutes(timeStr) {
     if (!timeStr) return 0;
     const [hours, minutes] = timeStr.split(':').map(Number);
@@ -1903,8 +1917,9 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
             console.log(`⚠️ [SYNC] No timetable found for student ${enrollmentNo} (Sem: ${canonicalSemester}, Branch: ${canonicalBranch})`);
         }
 
+        const parts = getISTDateParts(midnight);
         const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-        const dayName = days[midnight.getDay()];
+        const dayName = days[parts.dayIndex];
         const daySchedule = tt ? (tt.timetable[dayName] || []) : [];
         const periodsConfig = tt ? (tt.periods || []) : [];
 
@@ -1967,6 +1982,8 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
             if (isPresent) presentCount++;
             if (pRecord && pRecord.status === 'active') hasActiveTimer = true;
 
+            const dateStr = parts.year + '-' + parts.month.toString().padStart(2, '0') + '-' + parts.date.toString().padStart(2, '0');
+
             lecturesWithTime.push({
                 period:      pId,
                 subject:     pRecord?.subject || subjectName,
@@ -1975,8 +1992,8 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
                 room:        pRecord?.room || roomName,
                 startTime,
                 endTime,
-                lectureStartedAt: new Date(`${midnight.toISOString().split('T')[0]}T${startTime}:00`),
-                lectureEndedAt:   new Date(`${midnight.toISOString().split('T')[0]}T${endTime}:00`),
+                lectureStartedAt: new Date(`${dateStr}T${startTime}:00`),
+                lectureEndedAt:   new Date(`${dateStr}T${endTime}:00`),
                 studentCheckIn:   pRecord?.checkInTime || null,
                 attended:    attendedSec,
                 actualAttended: actualAttendedSec,
@@ -7767,7 +7784,7 @@ app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
 
         let dateFilter = {};
         if (startDate && endDate) {
-            dateFilter = { date: { $gte: new Date(startDate), $lte: new Date(endDate) } };
+            dateFilter = { date: { $gte: getISTMidnight(new Date(startDate)), $lte: getISTMidnight(new Date(endDate)) } };
         }
 
         const records = await AttendanceRecord.find({
@@ -7781,7 +7798,7 @@ app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
         // Deduplicate by midnight date — keep the record with the best status
         const dateMap = new Map();
         for (const r of records) {
-            const midnight = new Date(r.date); midnight.setHours(0,0,0,0);
+            const midnight = getISTMidnight(r.date);
             const key = midnight.toISOString();
             const existing = dateMap.get(key);
             if (!existing ||
@@ -7793,11 +7810,11 @@ app.get('/api/attendance/student/:enrollmentNo/dates', async (req, res) => {
 
         // ── Inject today from PeriodAttendance + live timer state ────────────
         // This ensures today shows on the calendar even before end-of-day sync
-        const todayMidnight = new Date(); todayMidnight.setHours(0,0,0,0);
+        const todayMidnight = getISTMidnight(new Date());
         const todayKey = todayMidnight.toISOString();
         if (!dateMap.has(todayKey)) {
             try {
-                const tomorrow = new Date(todayMidnight); tomorrow.setDate(tomorrow.getDate() + 1);
+                const tomorrow = new Date(todayMidnight.getTime() + 86400000);
                 const todayPeriods = await PeriodAttendance.find({
                     enrollmentNo,
                     date: { $gte: todayMidnight, $lt: tomorrow }
@@ -7872,8 +7889,7 @@ app.get('/api/attendance/student/:enrollmentNo/date/:date', async (req, res) => 
     try {
         const { enrollmentNo, date } = req.params;
 
-        const targetDate = new Date(date);
-        targetDate.setHours(0, 0, 0, 0);
+        const targetDate = getISTMidnight(new Date(date));
 
         const record = await AttendanceRecord.findOne({
             enrollmentNo: enrollmentNo,  // Changed from enrollmentNumber
@@ -7925,8 +7941,7 @@ app.get('/api/attendance/student/:enrollmentNo/date/:date/lecture/:period', asyn
     try {
         const { enrollmentNo, date, period } = req.params;
 
-        const targetDate = new Date(date);
-        targetDate.setHours(0, 0, 0, 0);
+        const targetDate = getISTMidnight(new Date(date));
 
         const record = await AttendanceRecord.findOne({
             enrollmentNo: enrollmentNo,
@@ -8950,13 +8965,13 @@ app.get('/api/attendance/records', async (req, res) => {
         if (year && month) {
             const y = parseInt(year), m = parseInt(month) - 1; // month is 1-based from client
             query.date = {
-                $gte: new Date(y, m, 1),
-                $lt:  new Date(y, m + 1, 1)
+                $gte: getISTMidnight(new Date(Date.UTC(y, m, 1))),
+                $lt:  getISTMidnight(new Date(Date.UTC(y, m + 1, 1)))
             };
         } else if (startDate || endDate) {
             query.date = {};
-            if (startDate) query.date.$gte = new Date(startDate);
-            if (endDate)   query.date.$lte = new Date(endDate);
+            if (startDate) query.date.$gte = getISTMidnight(new Date(startDate));
+            if (endDate)   query.date.$lte = getISTMidnight(new Date(endDate));
         }
 
         if (mongoose.connection.readyState === 1) {
@@ -8982,24 +8997,24 @@ app.get('/api/attendance/records', async (req, res) => {
                         if (tt && tt.timetable) {
                             const recordsByDate = {};
                             records.forEach(r => {
-                                const d = new Date(r.date);
-                                const dStr = d.getFullYear() + '-' + (d.getMonth() + 1).toString().padStart(2, '0') + '-' + d.getDate().toString().padStart(2, '0');
+                                const parts = getISTDateParts(r.date);
+                                const dStr = parts.year + '-' + parts.month.toString().padStart(2, '0') + '-' + parts.date.toString().padStart(2, '0');
                                 recordsByDate[dStr] = true;
                             });
 
-                            const today = new Date();
-                            today.setHours(0, 0, 0, 0);
+                            const todayISTMidnight = getISTMidnight(new Date());
 
-                            let start = query.date && query.date.$gte ? new Date(query.date.$gte) : new Date(today.getFullYear(), today.getMonth(), 1);
-                            let end = query.date && query.date.$lt ? new Date(query.date.$lt) : new Date(today.getFullYear(), today.getMonth() + 1, 1);
+                            let start = query.date && query.date.$gte ? new Date(query.date.$gte) : getISTMidnight(new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), 1)));
+                            let end = query.date && query.date.$lt ? new Date(query.date.$lt) : getISTMidnight(new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth() + 1, 1)));
                             
-                            if (end > today) end = today;
+                            if (end > todayISTMidnight) end = todayISTMidnight;
 
                             const daysOfWeek = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
 
                             for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
-                                const dStr = d.getFullYear() + '-' + (d.getMonth() + 1).toString().padStart(2, '0') + '-' + d.getDate().toString().padStart(2, '0');
-                                const dayName = daysOfWeek[d.getDay()];
+                                const parts = getISTDateParts(d);
+                                const dStr = parts.year + '-' + parts.month.toString().padStart(2, '0') + '-' + parts.date.toString().padStart(2, '0');
+                                const dayName = daysOfWeek[parts.dayIndex];
                                 
                                 const daySchedule = tt.timetable[dayName] || [];
                                 const hasClasses = daySchedule.some(p => p.subject && !p.isBreak);
