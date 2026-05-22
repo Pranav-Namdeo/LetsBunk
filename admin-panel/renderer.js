@@ -8127,10 +8127,7 @@ function validatePeriods(periods) {
             continue;
         }
 
-        // Minimum 5 minutes
-        if (duration < 5) {
-            errors.push(`P${p.number}: Duration too short (${duration} min). Minimum is 5 minutes.`);
-        }
+
 
         // Check overlap with every other period
         const [si, ei] = toMinutes(p.startTime, p.endTime);

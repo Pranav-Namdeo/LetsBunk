@@ -8,7 +8,7 @@
 // ============================================
 // SERVER CONFIGURATION
 // ============================================
-export const SERVER_BASE_URL = (process.env.SERVER_URL || 'https://letsbunk-server.azurewebsites.net').replace(/\/+$/, '');
+export const SERVER_BASE_URL = (process.env.SERVER_URL || 'https://letsbunk-uw7g.onrender.com').replace(/\/+$/, '');
 
 // Derived URLs (automatically generated from SERVER_BASE_URL)
 export const API_URL = `${SERVER_BASE_URL}/api/config`;
