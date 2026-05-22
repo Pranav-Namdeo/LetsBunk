@@ -3162,7 +3162,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         // Skip elapsed capping only if student is currently manually marked present in the DB
         const isManuallyMarkedDb = await PeriodAttendance.exists({
             enrollmentNo: studentId,
-            date: getISTMidnight(new Date(timestamp)),
+            date: getISTMidnight(timestamp ? new Date(timestamp) : new Date()),
             period: resolvedPeriodId,
             verificationType: 'manual',
             status: 'present'
