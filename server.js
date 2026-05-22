@@ -781,8 +781,13 @@ app.get('/api/timetable/current-period', async (req, res) => {
 
         const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
         const now  = new Date();
-        const currentDay  = days[now.getDay()];
-        const currentMins = now.getHours() * 60 + now.getMinutes();
+        const parts = getISTDateParts(now);
+        const currentDay  = days[parts.dayIndex];
+        const offset = 5.5 * 60 * 60 * 1000;
+        const istTime = new Date(now.getTime() + offset);
+        const istHours = istTime.getUTCHours();
+        const istMinutes = istTime.getUTCMinutes();
+        const currentMins = istHours * 60 + istMinutes;
 
         const timetables = await Timetable.find({}).lean();
         const active = [];
@@ -811,7 +816,7 @@ app.get('/api/timetable/current-period', async (req, res) => {
             }
         }
 
-        res.json({ success: true, active, day: currentDay, time: `${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}` });
+        res.json({ success: true, active, day: currentDay, time: `${istHours}:${String(istMinutes).padStart(2,'0')}` });
     } catch (error) {
         console.error('❌ Error fetching current period:', error);
         res.status(500).json({ success: false, error: error.message });
@@ -910,8 +915,14 @@ app.get('/api/teacher/current-lecture/:teacherId', async (req, res) => {
 
         // Get current time
         const now = new Date();
-        const currentDay = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][now.getDay()];
-        const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+        const parts = getISTDateParts(now);
+        const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        const currentDay = days[parts.dayIndex];
+        const offset = 5.5 * 60 * 60 * 1000;
+        const istTime = new Date(now.getTime() + offset);
+        const istHours = istTime.getUTCHours();
+        const istMinutes = istTime.getUTCMinutes();
+        const currentTime = `${String(istHours).padStart(2, '0')}:${String(istMinutes).padStart(2, '0')}`;
 
         console.log(`🔍 Finding current lecture for teacher ${teacherId} at ${currentTime} on ${currentDay}`);
 
@@ -1472,13 +1483,17 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
 
         // Get current day and time in IST (TZ forced to Asia/Kolkata at startup)
         const now = new Date();
+        const parts = getISTDateParts(now);
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDay = days[now.getDay()];
-        const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
+        const currentDay = days[parts.dayIndex];
+        const offset = 5.5 * 60 * 60 * 1000;
+        const istTime = new Date(now.getTime() + offset);
+        const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
 
         const todayMidnight = getISTMidnight();
         const today = todayMidnight;
-        const todayStr = new Date(todayMidnight.getTime() + 5.5 * 60 * 60 * 1000).toISOString().split('T')[0];
+        const partsToday = getISTDateParts(todayMidnight);
+        const todayStr = partsToday.year + '-' + partsToday.month.toString().padStart(2, '0') + '-' + partsToday.date.toString().padStart(2, '0');
         
         const nowMs = Date.now();
         const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
@@ -2078,10 +2093,13 @@ async function syncAttendanceRecord(enrollmentNo, date, studentName, semester, b
 // clientTimestamp param kept for API compat but ignored.
 async function getCurrentLectureInfo(semester, branch, clientTimestamp = null) {
     try {
-        const now = new Date(); // server clock = IST on this Azure instance
+        const now = new Date();
+        const parts = getISTDateParts(now);
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDay  = days[now.getDay()];
-        const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
+        const currentDay  = days[parts.dayIndex];
+        const offset = 5.5 * 60 * 60 * 1000;
+        const istTime = new Date(now.getTime() + offset);
+        const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
 
         const timetable = await Timetable.findOne({ semester, branch });
         if (!timetable) return null;
@@ -2565,10 +2583,8 @@ app.post('/api/attendance/check-in', checkInLimiter, async (req, res) => {
 
         // Check for duplicate check-in today
         console.log(`🔍 [CHECK-IN] Checking for duplicate check-in - Student: ${enrollmentNo}`);
-        const today = new Date(timestamp);
-        today.setHours(0, 0, 0, 0);
-        const tomorrow = new Date(today);
-        tomorrow.setDate(tomorrow.getDate() + 1);
+        const today = getISTMidnight(new Date(timestamp));
+        const tomorrow = new Date(today.getTime() + 86400000);
 
         let existingCheckIn;
         try {
@@ -2644,7 +2660,8 @@ app.post('/api/attendance/check-in', checkInLimiter, async (req, res) => {
         }
 
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const currentDay = days[new Date(timestamp).getDay()];
+        const parts = getISTDateParts(new Date(timestamp));
+        const currentDay = days[parts.dayIndex];
         const daySchedule = timetable.timetable[currentDay];
 
         if (!daySchedule || daySchedule.length === 0) {
@@ -2664,7 +2681,9 @@ app.post('/api/attendance/check-in', checkInLimiter, async (req, res) => {
         const checkInTime = new Date(timestamp);
         // Use server clock (IST) for period matching — period times are stored in IST
         const serverNow     = new Date();
-        const serverMinutes = serverNow.getHours() * 60 + serverNow.getMinutes();
+        const offset = 5.5 * 60 * 60 * 1000;
+        const istTime = new Date(serverNow.getTime() + offset);
+        const serverMinutes = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
         const dbErrors = [];
 
         for (let i = 0; i < daySchedule.length; i++) {
@@ -2841,8 +2860,7 @@ app.post('/api/attendance/record', async (req, res) => {
         }
 
         // Get today's date (server time)
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = getISTMidnight(new Date());
 
         // Find or create attendance record — always key on enrollmentNo
         let record = await AttendanceRecord.findOne({
@@ -3114,7 +3132,9 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         if (!resolvedPeriodId) {
             // Detect periodId dynamically from current time if not provided by client
             const now = new Date();
-            const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
+            const offset = 5.5 * 60 * 60 * 1000;
+            const istTime = new Date(now.getTime() + offset);
+            const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
             if (ttObj && ttObj.periods && ttObj.periods.length > 0) {
                 for (let i = 0; i < ttObj.periods.length; i++) {
                     const periodInfo = ttObj.periods[i];
@@ -3150,9 +3170,12 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 // Strictly cap timer seconds at actual elapsed seconds since the class start time
                 try {
                     const now = new Date();
-                    const todayDateStr = now.toISOString().split('T')[0];
-                    const periodStart = new Date(`${todayDateStr}T${pInfo.startTime}:00`);
-                    const periodEnd = new Date(`${todayDateStr}T${pInfo.endTime}:00`);
+                    const parts = getISTDateParts(now);
+                    const todayDateStr = parts.year + '-' + parts.month.toString().padStart(2, '0') + '-' + parts.date.toString().padStart(2, '0');
+                    
+                    const offset = 5.5 * 60 * 60 * 1000;
+                    const periodStart = new Date(new Date(`${todayDateStr}T${pInfo.startTime}:00Z`).getTime() - offset);
+                    const periodEnd = new Date(new Date(`${todayDateStr}T${pInfo.endTime}:00Z`).getTime() - offset);
                     
                     const currentTime = now.getTime();
                     const elapsedMs = currentTime - periodStart.getTime();
@@ -3308,10 +3331,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 } else {
                     // Look for any 'present' period record today — if one exists, preserve it
                     const syncDate2 = new Date(timestamp);
-                    const todayStart2 = new Date(syncDate2);
-                    todayStart2.setHours(0, 0, 0, 0);
-                    const todayEnd2 = new Date(todayStart2);
-                    todayEnd2.setDate(todayEnd2.getDate() + 1);
+                    const todayStart2 = getISTMidnight(syncDate2);
+                    const todayEnd2 = new Date(todayStart2.getTime() + 86400000);
 
                     const alreadyPresent = await PeriodAttendance.exists({
                         enrollmentNo: studentId,
@@ -3329,10 +3350,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 // Same guard as above — don't overwrite an existing 'present'
                 try {
                     const syncDateE = new Date(timestamp);
-                    const todayStartE = new Date(syncDateE);
-                    todayStartE.setHours(0, 0, 0, 0);
-                    const todayEndE = new Date(todayStartE);
-                    todayEndE.setDate(todayEndE.getDate() + 1);
+                    const todayStartE = getISTMidnight(syncDateE);
+                    const todayEndE = new Date(todayStartE.getTime() + 86400000);
                     const alreadyPresentE = await PeriodAttendance.exists({
                         enrollmentNo: studentId,
                         date: { $gte: todayStartE, $lt: todayEndE },
@@ -3395,7 +3414,9 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         if ((!periodSubject || !periodTeacher) && ttObj) {
             try {
                 const now = new Date();
-                const dayName = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
+                const parts = getISTDateParts(now);
+                const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+                const dayName = days[parts.dayIndex];
                 const schedule = ttObj.timetable?.[dayName] || [];
                 const slot = schedule.find(s => s && s.period === pNum);
                 if (slot) {
@@ -3414,8 +3435,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         if (!periodRoom) periodRoom = 'Unknown';
 
         try {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            const today = getISTMidnight(new Date(timestamp));
 
             const periodId = resolvedPeriodId;
 
@@ -3503,8 +3523,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 7b. Sync AttendanceRecord from PeriodAttendance (now up-to-date from step 7)
         try {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+            const today = getISTMidnight(new Date(timestamp));
             const attendedMinutes = Math.floor(cappedTimerSeconds / 60);
 
             // Ensure a base AttendanceRecord exists before syncAttendanceRecord runs
@@ -3521,7 +3540,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     const tt = await Timetable.findOne({ semester: student.semester, branch: student.branch });
                     if (tt) {
                         const days = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-                        const dayName = days[today.getDay()];
+                        const parts = getISTDateParts(today);
+                        const dayName = days[parts.dayIndex];
                         const sched   = tt.timetable[dayName] || [];
                         for (let i = 0; i < sched.length; i++) {
                             const slot = sched[i];
@@ -3647,8 +3667,7 @@ app.post('/api/attendance/sync-offline', async (req, res) => {
 
         // 3. Get today's date
         const syncDate = offlineEndTime ? new Date(offlineEndTime) : new Date();
-        const todayStart = new Date(syncDate);
-        todayStart.setHours(0, 0, 0, 0);
+        const todayStart = getISTMidnight(syncDate);
         const todayEnd = new Date(todayStart);
         todayEnd.setDate(todayEnd.getDate() + 1);
 
@@ -3931,8 +3950,7 @@ app.post('/api/attendance/period-sync', async (req, res) => {
 
         // Get today's date
         const syncDate = new Date(timestamp || Date.now());
-        const todayStart = new Date(syncDate);
-        todayStart.setHours(0, 0, 0, 0);
+        const todayStart = getISTMidnight(syncDate);
         const todayEnd = new Date(todayStart);
         todayEnd.setDate(todayEnd.getDate() + 1);
 
@@ -4128,12 +4146,12 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         }
 
         // 5. Get the date for marking (use provided timestamp or current date)
-        const markingDate = timestamp ? new Date(timestamp) : new Date();
-        markingDate.setHours(0, 0, 0, 0); // Normalize to start of day
+        const markingDate = getISTMidnight(timestamp ? new Date(timestamp) : new Date());
         
         const now = new Date();
         const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-        const markingDay = days[markingDate.getDay()];
+        const parts = getISTDateParts(markingDate);
+        const markingDay = days[parts.dayIndex];
         
         // Get schedule for the day
         const daySchedule = timetable.timetable[markingDay];
@@ -4159,7 +4177,9 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         if (!normalizedPeriod || !validPeriods.includes(normalizedPeriod) || normalizedPeriod === 'PUNDEFINED') {
             console.log(`ℹ️ [MANUAL-MARK] Period not valid/provided ("${period}"). Detecting dynamically from current local time...`);
             
-            const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
+            const offset = 5.5 * 60 * 60 * 1000;
+            const istTime = new Date(now.getTime() + offset);
+            const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
             let detectedPeriod = null;
             
             if (timetable.periods && timetable.periods.length > 0) {
@@ -4233,9 +4253,13 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         // Check if marking future period
         const periodInfo = timetable.periods[pNum - 1];
         if (periodInfo) {
-            const periodEndTime = timeToMinutes(periodInfo.endTime);
-            const currentTime = now.getHours() * 60 + now.getMinutes();
-            const isSameDay = now.toDateString() === markingDate.toDateString();
+            const offset = 5.5 * 60 * 60 * 1000;
+            const istTime = new Date(now.getTime() + offset);
+            const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
+            
+            const partsNow = getISTDateParts(now);
+            const partsMarking = getISTDateParts(markingDate);
+            const isSameDay = partsNow.year === partsMarking.year && partsNow.month === partsMarking.month && partsNow.date === partsMarking.date;
             
             if (isSameDay && currentTime < periodEndTime) {
                 console.log(`?? [MANUAL-MARK] Warning: Marking future period - Current: ${currentTime}, Period end: ${periodEndTime}`);
@@ -4377,8 +4401,9 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             console.log(`?? [MANUAL-MARK] Audit record created - AuditId: ${auditRecord.auditId}`);
 
             // If the period matches the current active period, update liveTimerState and emit timer_broadcast
-            const now = new Date();
-            const currentTime = now.getHours() * 60 + now.getMinutes(); // IST minutes since midnight
+            const offset = 5.5 * 60 * 60 * 1000;
+            const istTime = new Date(now.getTime() + offset);
+            const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
             let currentPeriod = null;
             if (timetable.periods && timetable.periods.length > 0) {
                 for (let i = 0; i < timetable.periods.length; i++) {
@@ -4867,8 +4892,7 @@ app.post('/api/attendance/start-session', async (req, res) => {
         // TODO: Verify face data against stored photo
         // For now, assume verification successful
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = getISTMidnight(new Date());
 
         // Check if session already exists for today
         let session = await AttendanceSession.findOne({
@@ -4957,7 +4981,7 @@ async function recordTimetableHistory({ date, semester, branch, period, subject,
         return;
     }
     try {
-        const midnight = new Date(date); midnight.setHours(0, 0, 0, 0);
+        const midnight = getISTMidnight(new Date(date));
         await TimetableHistory.findOneAndUpdate(
             { date: midnight, semester: semester.toString(), branch, period },
             { $set: {
@@ -4983,8 +5007,7 @@ app.post('/api/attendance/lecture-start', async (req, res) => {
         const { period, subject, teacher, teacherName, room, startTime, endTime, semester, branch } = req.body;
 
         const now = new Date();
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = getISTMidnight(now);
 
         // Record in TimetableHistory
         await recordTimetableHistory({ date: today, semester, branch, period, subject, teacher, teacherName, room, startTime, endTime });
@@ -5031,8 +5054,7 @@ app.post('/api/attendance/lecture-end', async (req, res) => {
         const { period, subject, semester, branch } = req.body;
 
         const now = new Date();
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = getISTMidnight(now);
 
         // Find all sessions with this lecture
         const sessions = await AttendanceSession.find({
@@ -5104,8 +5126,7 @@ app.post('/api/attendance/add-verification', async (req, res) => {
     try {
         const { studentId, period, verificationType, event } = req.body;
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = getISTMidnight(new Date());
 
         const record = await AttendanceRecord.findOne({
             studentId,
@@ -8006,8 +8027,7 @@ app.get('/api/attendance/student/:enrollmentNo/check-manual-mark/:period', async
             normalizedPeriod = 'P' + normalizedPeriod;
         }
 
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        const today = getISTMidnight(new Date());
 
         const record = await PeriodAttendance.findOne({
             enrollmentNo: enrollmentNo,
@@ -8742,9 +8762,10 @@ cron.schedule('5 0 * * *', async () => {
     console.log('📅 [CRON] Snapshotting today\'s timetable into TimetableHistory...');
     try {
         const now   = new Date();
-        const today = new Date(now); today.setHours(0, 0, 0, 0);
+        const today = getISTMidnight(now);
+        const parts = getISTDateParts(now);
         const days  = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
-        const dayName = days[now.getDay()];
+        const dayName = days[parts.dayIndex];
 
         const timetables = await Timetable.find({}).lean();
         let count = 0;
@@ -9103,8 +9124,7 @@ app.post('/api/attendance/history/period', async (req, res) => {
             return res.json({ success: true, message: 'Database not connected' });
         }
 
-        const dateObj = new Date(date);
-        dateObj.setHours(0, 0, 0, 0);
+        const dateObj = getISTMidnight(new Date(date));
 
         // Find or create attendance record for the day
         let attendance = await AttendanceHistory.findOne({
@@ -9247,12 +9267,12 @@ app.get('/api/attendance/summary/:enrollmentNo', async (req, res) => {
         const dailyRecords = await DailyAttendance.find(dailyQuery).lean();
 
         // ── Always merge today's AttendanceRecord (intra-day, not yet in DailyAttendance) ──
-        const todayMidnight = new Date(); todayMidnight.setHours(0, 0, 0, 0);
-        const todayEnd      = new Date(); todayEnd.setHours(23, 59, 59, 999);
+        const todayMidnight = getISTMidnight(new Date());
+        const todayEnd      = new Date(todayMidnight.getTime() + 86400000 - 1);
         // Only merge today if it's within the requested date range (or no date filter)
         const todayInRange = !hasDateFilter ||
-            ((!startDate || new Date(startDate) <= todayMidnight) &&
-             (!endDate   || new Date(endDate)   >= todayMidnight));
+            ((!startDate || getISTMidnight(new Date(startDate)) <= todayMidnight) &&
+             (!endDate   || getISTMidnight(new Date(endDate))   >= todayMidnight));
 
         let totalDays = 0, presentDays = 0, totalAttendedMinutes = 0, totalClassMinutes = 0;
 
@@ -9275,7 +9295,7 @@ app.get('/api/attendance/summary/:enrollmentNo', async (req, res) => {
             // Merge today's intra-day AttendanceRecord if not already in DailyAttendance
             if (todayInRange) {
                 const todayInDaily = dailyRecords.some(r => {
-                    const d = new Date(r.date); d.setHours(0,0,0,0);
+                    const d = getISTMidnight(r.date);
                     return d.getTime() === todayMidnight.getTime();
                 });
                 if (!todayInDaily) {
