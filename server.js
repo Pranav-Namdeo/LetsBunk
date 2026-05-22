@@ -2254,10 +2254,11 @@ async function broadcastBSSIDUpdateForRoom(roomNumber) {
         // Get today's date
         const today = new Date();
         const dayName = today.toLocaleDateString('en-US', { weekday: 'long' });
+        const dayNameLower = dayName.toLowerCase();
         
         // Find all timetables that use this room today
-        const timetables = await TimetableTable.find({
-            [`timetable.schedule.${dayName}`]: {
+        const timetables = await Timetable.find({
+            [`timetable.${dayNameLower}`]: {
                 $elemMatch: { room: roomNumber }
             }
         });
@@ -2280,7 +2281,7 @@ async function broadcastBSSIDUpdateForRoom(roomNumber) {
                 console.log(`   Found ${students.length} students in ${timetable.branch} Semester ${timetable.semester}`);
                 
                 // Get today's schedule
-                const todaySchedule = timetable.timetable.schedule[dayName] || [];
+                const todaySchedule = timetable.timetable[dayNameLower] || [];
                 
                 // Fetch classroom BSSIDs for each period
                 const scheduleWithBSSID = await Promise.all(
