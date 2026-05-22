@@ -49,13 +49,11 @@ class LivenessDetector {
         val brightnessVariation = analyzeBrightnessVariation(bitmap)
         
         val isLive = (blinkCount >= requiredBlinks || headMovementDetected) && 
-                     textureScore > 0.2f &&  // Reduced from 0.3 to 0.2 (more lenient)
-                     brightnessVariation > 0.02f  // Reduced from 0.05 to 0.02 (more lenient)
-        
+                     textureScore > 0.2f  // Reduced from 0.3 to 0.2 (more lenient)
+         
         val message = when {
             blinkCount < requiredBlinks && !headMovementDetected -> "Please move your head slightly"
             textureScore <= 0.2f -> "Image quality issue detected"
-            brightnessVariation <= 0.02f -> "Suspicious lighting detected"
             else -> "Liveness verified"
         }
         
