@@ -66,9 +66,9 @@ export const APP_NAME = 'LetsBunk';
 // 2. Rebuild the app: npm run android or BUILD_APK_PROPER_SDK.bat
 // 3. All API calls will automatically use the new URL
 //
-// Current Configuration: PRODUCTION (Render)
-// - App: https://letsbunk-uw7g.onrender.com
-// - Admin Panel: https://letsbunk-uw7g.onrender.com (or update in Settings)
+// Current Configuration: PRODUCTION (Azure)
+// - App: https://letsbunk-server.azurewebsites.net
+// - Admin Panel: https://letsbunk-server.azurewebsites.net (or update in Settings)
 //
 // To switch to local:
 // - Change SERVER_BASE_URL to: http://localhost:3000

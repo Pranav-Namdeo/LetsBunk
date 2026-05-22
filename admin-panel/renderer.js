@@ -282,7 +282,7 @@ if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') 
     localStorage.removeItem('serverUrl');
 }
 
-const DEFAULT_SERVER_URL = 'https://letsbunk-uw7g.onrender.com';
+const DEFAULT_SERVER_URL = 'https://letsbunk-server.azurewebsites.net';
 let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
 // Auto-sanitize SERVER_URL to ensure it has http/https protocol prefix and no trailing slash
