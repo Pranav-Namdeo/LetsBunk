@@ -1980,9 +1980,13 @@ class OfflineTimerService {
                 return;
               }
 
-              // Step 2: Native timer still running — sync elapsed seconds
-              this.timerSeconds = Math.floor(seconds);
-              console.log(`⏱️ Synced from native timer: ${this.timerSeconds}s`);
+              // Step 2: Native timer still running or recently stopped — sync elapsed seconds safely
+              if (seconds > this.timerSeconds) {
+                this.timerSeconds = Math.floor(seconds);
+                console.log(`⏱️ Synced from native timer: ${this.timerSeconds}s`);
+              } else {
+                console.log(`ℹ️ Preserved JS timer (${this.timerSeconds}s), ignored native (${seconds}s)`);
+              }
             } catch (e) {
               console.warn('⚠️ Could not sync from native timer:', e);
             }

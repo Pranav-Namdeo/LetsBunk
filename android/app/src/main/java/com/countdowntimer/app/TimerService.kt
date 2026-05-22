@@ -180,9 +180,8 @@ class TimerService : Service() {
         Log.d(TAG, "Timer stopped at ${elapsedSeconds}s")
 
         // Reset static companion object variables to prevent cross-session leaks
-        elapsedSeconds = 0L
+        // NOTE: We no longer clear elapsedSeconds or stoppedDueToWifiInvalid here!
         lectureSubject = ""
-        stoppedDueToWifiInvalid = false
         authorizedBSSID = ""
         periodId = ""
     }
@@ -436,9 +435,8 @@ class TimerService : Service() {
         wakeLock?.let { if (it.isHeld) it.release() }
         
         // Reset static companion object variables to prevent cross-session leaks
-        elapsedSeconds = 0L
+        // NOTE: We no longer clear elapsedSeconds or stoppedDueToWifiInvalid here!
         lectureSubject = ""
-        stoppedDueToWifiInvalid = false
         authorizedBSSID = ""
         periodId = ""
         

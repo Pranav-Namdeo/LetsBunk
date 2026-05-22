@@ -3131,13 +3131,18 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
                 // Strictly cap timer seconds at actual elapsed seconds since the class start time
                 try {
-                    const now = new Date();
-                    const todayDateStr = now.toISOString().split('T')[0];
-                    const periodStart = new Date(`${todayDateStr}T${pInfo.startTime}:00`);
-                    const periodEnd = new Date(`${todayDateStr}T${pInfo.endTime}:00`);
+                    // Use the timestamp of the offline sync, fallback to now
+                    const eventTime = timestamp ? new Date(timestamp) : new Date();
                     
-                    const currentTime = now.getTime();
-                    const elapsedMs = currentTime - periodStart.getTime();
+                    // Format the date strictly in IST to prevent UTC rollover issues on next-day syncs
+                    const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
+                    const todayDateStr = formatter.format(eventTime); // e.g., "2026-05-23"
+                    
+                    // Construct explicit IST date strings and parse them
+                    const periodStart = new Date(`${todayDateStr}T${pInfo.startTime}:00+05:30`);
+                    const periodEnd = new Date(`${todayDateStr}T${pInfo.endTime}:00+05:30`);
+                    
+                    const elapsedMs = eventTime.getTime() - periodStart.getTime();
                     
                     if (elapsedMs > 0) {
                         const elapsedSec = Math.floor(elapsedMs / 1000);
