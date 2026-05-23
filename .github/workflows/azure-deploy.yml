@@ -28,10 +28,10 @@ jobs:
         run: npm install --production
 
       - name: Zip artifact for deployment
-        run: zip -r release.zip . -x "*.git*" ".github/*" "android/*" "ios/*" "assets/*" ".expo/*" "backups/*" "LogFiles/*" "*.log" "current_logcat.txt" "*.md"
+        run: zip -r release.zip server.js package.json package-lock.json constants/ services/ config.js check_db.js node_modules/
 
       - name: Deploy to Azure Web App
-        uses: azure/webapps-deploy@v3
+        uses: azure/webapps-deploy@v2
         with:
           app-name: letsbunk-server
           publish-profile: ${{ secrets.AZURE_PUBLISH_PROFILE }}
