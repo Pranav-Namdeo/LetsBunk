@@ -1585,6 +1585,9 @@ class OfflineTimerService {
    * Sync all pending data when internet is restored
    */
   async syncPendingData() {
+    // Reconcile queue item for active period before flushing the queue
+    await this.reconcileActivePeriodQueueItem();
+
     if (!this.hasInternetConnection || this.syncQueue.length === 0) {
       return;
     }
@@ -1706,6 +1709,9 @@ class OfflineTimerService {
   async forceSyncTimerData() {
     console.log('🔄 Force syncing timer data...');
 
+    // Reconcile queue item for active period before syncing
+    await this.reconcileActivePeriodQueueItem();
+
     // Check internet connectivity (any network — WiFi or mobile data)
     await this.checkInternetConnectivity();
 
@@ -1741,6 +1747,58 @@ class OfflineTimerService {
       pendingSyncs: this.pendingSyncCount,
       lastSyncTime: this.lastSyncTime
     };
+  }
+
+  /**
+   * Reconciles the active period's queue item with the highest available timer value
+   * from either JS memory (this.timerSeconds) or Native memory (TimerModule).
+   */
+  async reconcileActivePeriodQueueItem() {
+    try {
+      const activePeriodId = this.currentLecture?.period 
+        ? `P${this.currentLecture.period}` 
+        : (this.currentLecture?.periodId || null);
+      
+      if (!activePeriodId) return;
+
+      let highestSeconds = this.timerSeconds || 0;
+
+      // Try to query the Native layer
+      const { NativeModules } = require('react-native');
+      const TimerModule = NativeModules.TimerModule;
+      if (TimerModule) {
+        try {
+          const { seconds } = await TimerModule.getElapsedSeconds();
+          const nativeSec = Math.floor(seconds);
+          if (nativeSec > highestSeconds) {
+            console.log(`🛡️ [RECONCILE] Native timer (${nativeSec}s) is higher than JS timer (${highestSeconds}s).`);
+            highestSeconds = nativeSec;
+            this.timerSeconds = nativeSec; // sync JS memory too
+          }
+        } catch (nativeErr) {
+          console.warn('⚠️ [RECONCILE] Could not query native timer:', nativeErr.message);
+        }
+      }
+
+      // Check if there is an item in the syncQueue for this activePeriodId
+      const existingIndex = this.syncQueue.findIndex(item => item.periodId === activePeriodId);
+      if (existingIndex !== -1) {
+        const currentQueuedSeconds = this.syncQueue[existingIndex].timerSeconds || 0;
+        if (highestSeconds > currentQueuedSeconds) {
+          console.log(`🛡️ [RECONCILE] Updating queued item for ${activePeriodId} from ${currentQueuedSeconds}s to ${highestSeconds}s`);
+          this.syncQueue[existingIndex].timerSeconds = highestSeconds;
+          this.syncQueue[existingIndex].attendedMinutes = Math.floor(highestSeconds / 60);
+          
+          // Ensure running state parameters are preserved
+          this.syncQueue[existingIndex].isRunning = this.isRunning;
+          this.syncQueue[existingIndex].isPaused = this.isPaused;
+          
+          await this.saveSyncQueue();
+        }
+      }
+    } catch (err) {
+      console.error('❌ [RECONCILE] Error during active period queue reconciliation:', err);
+    }
   }
 
   /**
@@ -1958,6 +2016,9 @@ class OfflineTimerService {
       if (this.appState.match(/inactive|background/) && nextAppState === 'active') {
         // App came to foreground
         console.log('📱 App resumed from background');
+
+        // Reconcile queue item for active period immediately on foreground
+        await this.reconcileActivePeriodQueueItem();
 
         if (this.isRunning || TimerService?.isRunning) {
           // Step 1: Check if native service stopped the timer due to WiFi mismatch
@@ -2178,6 +2239,9 @@ class OfflineTimerService {
             pausedDueToWiFiLoss: this.pausedDueToWiFiLoss,
             lecture: this.currentLecture?.subject
           });
+
+          // Reconcile queue item for active period immediately on loading state
+          await this.reconcileActivePeriodQueueItem();
 
           // If was running, try to get the latest timerSeconds from the native module
           // (it may have kept counting while the app was killed)
