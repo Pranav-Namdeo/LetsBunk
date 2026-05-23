@@ -797,6 +797,12 @@ class OfflineTimerService {
       console.log('   Previous lecture:', this.previousLectureData.lecture?.subject);
       console.log('   Timer seconds:', this.previousLectureData.timerSeconds);
       
+      // Derive periodId from previous lecture context so server writes to the correct period
+      const prevLecture = this.previousLectureData.lecture;
+      const prevPeriodId = prevLecture?.period
+        ? `P${prevLecture.period}`
+        : (prevLecture?.periodId || null);
+
       // Perform final sync with previous lecture data
       const response = await fetch(POST_ATTENDANCE_OFFLINE_SYNC, {
         method: 'POST',
@@ -804,10 +810,12 @@ class OfflineTimerService {
         body: JSON.stringify({
           studentId: this.studentId,
           timerSeconds: this.previousLectureData.timerSeconds,
-          lecture: this.previousLectureData.lecture,
-          timestamp: this.previousLectureData.disconnectionTime || _getBootMs() || Date.now(),
+          lecture: prevLecture,
+          periodId: prevPeriodId,
+          timestamp: Date.now(),
           isRunning: false, // Mark as stopped since we're switching lectures
           isPaused: false,
+          isQueuedSync: true, // Historical data — don't touch live state
           finalSync: true, // Flag to indicate this is a final sync
           reason: 'lecture_change'
         }),
@@ -1789,9 +1797,13 @@ class OfflineTimerService {
           this.syncQueue[existingIndex].timerSeconds = highestSeconds;
           this.syncQueue[existingIndex].attendedMinutes = Math.floor(highestSeconds / 60);
           
-          // Ensure running state parameters are preserved
+          // Always reflect the CURRENT timer state so queued items don't carry
+          // stale isRunning=true after the timer has stopped (prevents 'active' ghost status)
           this.syncQueue[existingIndex].isRunning = this.isRunning;
           this.syncQueue[existingIndex].isPaused = this.isPaused;
+          
+          // Update timestamp to epoch time (never boot-relative) for server compatibility
+          try { this.syncQueue[existingIndex].timestamp = getServerTime().now(); } catch { this.syncQueue[existingIndex].timestamp = Date.now(); }
           
           await this.saveSyncQueue();
         }
@@ -1830,7 +1842,7 @@ class OfflineTimerService {
 
       // Use server-synced time for the timestamp sent to server (spoof-proof)
       let syncTimestamp;
-      try { syncTimestamp = getServerTime().now(); } catch { syncTimestamp = _getBootMs() || Date.now(); }
+      try { syncTimestamp = getServerTime().now(); } catch { syncTimestamp = Date.now(); }
 
       // CAPTURE STATE AT THE START TO PREVENT CONCURRENT MODIFICATION BUGS
       // Use overrides if provided, otherwise use current instance state
@@ -1965,12 +1977,16 @@ class OfflineTimerService {
       this.isOnline = false;
       
       // Add to sync queue — capture full lecture context including period ID
+      // CRITICAL: timestamp MUST be epoch (Date.now()), never boot-relative (_getBootMs()),
+      // because the server parses it with `new Date(timestamp)` for date/period calculations.
+      let queueTimestamp;
+      try { queueTimestamp = getServerTime().now(); } catch { queueTimestamp = Date.now(); }
       const existingIndex = this.syncQueue.findIndex(item => item.periodId === periodId);
       const queueItem = {
         timerSeconds: capturedTimerSeconds,
         lecture: capturedLecture,
         periodId: periodId,
-        timestamp: _getBootMs() || Date.now(),
+        timestamp: queueTimestamp,
         isRunning: capturedIsRunning,
         isPaused: capturedIsPaused,
         attendedMinutes: Math.floor(capturedTimerSeconds / 60)

@@ -3084,7 +3084,15 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
     const startTime = Date.now();
     const { studentId, timerSeconds, lecture, timestamp, isRunning, isPaused, periodId: clientPeriodId } = req.body;
     const isQueuedSync = Boolean(req.body.isQueuedSync);
-    const eventTime = timestamp ? new Date(timestamp) : new Date();
+    // Guard: detect boot-relative timestamps (e.g. 543210 ms since boot, not epoch).
+    // These produce dates in January 1970 and corrupt all date-based calculations.
+    // If the parsed date is before 2020, it's clearly not an epoch timestamp — use server time.
+    const MIN_VALID_EPOCH = new Date('2020-01-01').getTime(); // 1577836800000
+    let eventTime = timestamp ? new Date(timestamp) : new Date();
+    if (eventTime.getTime() < MIN_VALID_EPOCH) {
+        console.warn(`⚠️ [OFFLINE-SYNC] Invalid timestamp detected (${timestamp}) — appears to be boot-relative, not epoch. Falling back to server time.`);
+        eventTime = new Date();
+    }
     
     console.log(`🔄 [OFFLINE-SYNC] Sync request - Student: ${studentId}, Timer: ${timerSeconds}s, IP: ${req.ip}`);
     
@@ -3264,7 +3272,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 {
                     $set: updateData,
                     // Only update totalAttendedSeconds if the new value is higher
-                    $max: { 'attendanceSession.totalAttendedSeconds': Math.max(0, Math.floor(timerSeconds)) }
+                    $max: { 'attendanceSession.totalAttendedSeconds': Math.max(0, cappedTimerSeconds) }
                 }
             );
         }
@@ -3317,7 +3325,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 // Removed <= 180 cap — periods can be any valid duration
                 if (durationMin > 0) {
                     const lectureDurationSeconds = durationMin * 60;
-                    const attendedPct = (timerSeconds / lectureDurationSeconds) * 100;
+                    const attendedPct = (cappedTimerSeconds / lectureDurationSeconds) * 100;
                     if (attendedPct >= ATTENDANCE_THRESHOLD) {
                         computedStatus = 'present';
                     } else if (Boolean(isRunning)) {
