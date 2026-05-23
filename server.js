@@ -3084,6 +3084,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
     const startTime = Date.now();
     const { studentId, timerSeconds, lecture, timestamp, isRunning, isPaused, periodId: clientPeriodId } = req.body;
     const isQueuedSync = Boolean(req.body.isQueuedSync);
+    const eventTime = timestamp ? new Date(timestamp) : new Date();
     
     console.log(`🔄 [OFFLINE-SYNC] Sync request - Student: ${studentId}, Timer: ${timerSeconds}s, IP: ${req.ip}`);
     
@@ -3131,7 +3132,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         if (!resolvedPeriodId) {
             // Detect periodId dynamically from the time of sync payload generation if not provided by client
-            const now = new Date(timestamp);
+            const now = eventTime;
             const offset = 5.5 * 60 * 60 * 1000;
             const istTime = new Date(now.getTime() + offset);
             const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
@@ -3169,9 +3170,6 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
                 // Strictly cap timer seconds at actual elapsed seconds since the class start time
                 try {
-                    // Use the timestamp of the offline sync, fallback to now
-                    const eventTime = timestamp ? new Date(timestamp) : new Date();
-                    
                     // Format the date strictly in IST to prevent UTC rollover issues on next-day syncs
                     const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' });
                     const todayDateStr = formatter.format(eventTime); // e.g., "2026-05-23"
@@ -3222,7 +3220,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         // Under our robust, stabilized pipeline, we no longer block the sync request with a 403 error.
         // Instead, we identify and log when a student is missing an explicit initial check-in,
         // and allow the offline-timer data to propagate and reconcile successfully.
-        const syncDate = new Date(timestamp);
+        const syncDate = eventTime;
         const todayStart = getISTMidnight(syncDate);
         const todayEnd = new Date(todayStart.getTime() + 86400000);
 
@@ -3242,34 +3240,34 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             console.log(`✅ [OFFLINE-SYNC] Student verified check-in found for today - Student: ${studentId}`);
         }
 
-        // 3. Update student's timer data
-        // Use $max for totalAttendedSeconds so queued syncs from old periods
-        // never overwrite a higher value from a more recent sync
-        const updateData = {
-            'attendanceSession.lastSyncTime': new Date(timestamp),
-            'attendanceSession.isRunning': Boolean(isRunning),
-            'attendanceSession.isPaused': Boolean(isPaused),
-            'attendanceSession.lastActivity': new Date()
-        };
-
-        // Add lecture info only for live syncs (not queued old-period syncs)
-        if (lecture && !isQueuedSync) {
-            updateData['attendanceSession.currentLecture'] = {
-                subject: lecture.subject,
-                teacher: lecture.teacher,
-                room: lecture.room,
-                startTime: lecture.startTime || new Date().toISOString()
+        // 3. Update student's timer data (only for live syncs to avoid corrupting current state with old queued states)
+        if (!isQueuedSync) {
+            const updateData = {
+                'attendanceSession.lastSyncTime': eventTime,
+                'attendanceSession.isRunning': Boolean(isRunning),
+                'attendanceSession.isPaused': Boolean(isPaused),
+                'attendanceSession.lastActivity': new Date()
             };
-        }
 
-        await StudentManagement.updateOne(
-            { enrollmentNo: studentId },
-            {
-                $set: updateData,
-                // Only update totalAttendedSeconds if the new value is higher
-                $max: { 'attendanceSession.totalAttendedSeconds': Math.max(0, Math.floor(timerSeconds)) }
+            // Add lecture info only for live syncs (not queued old-period syncs)
+            if (lecture) {
+                updateData['attendanceSession.currentLecture'] = {
+                    subject: lecture.subject,
+                    teacher: lecture.teacher,
+                    room: lecture.room,
+                    startTime: lecture.startTime || new Date().toISOString()
+                };
             }
-        );
+
+            await StudentManagement.updateOne(
+                { enrollmentNo: studentId },
+                {
+                    $set: updateData,
+                    // Only update totalAttendedSeconds if the new value is higher
+                    $max: { 'attendanceSession.totalAttendedSeconds': Math.max(0, Math.floor(timerSeconds)) }
+                }
+            );
+        }
 
         // 4. Check for missed random rings
         let missedRandomRing = null;
@@ -3337,7 +3335,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     computedStatus = 'active';
                 } else {
                     // Look for any 'present' period record today — if one exists, preserve it
-                    const syncDate2 = new Date(timestamp);
+                    const syncDate2 = eventTime;
                     const todayStart2 = getISTMidnight(syncDate2);
                     const todayEnd2 = new Date(todayStart2.getTime() + 86400000);
 
@@ -3356,7 +3354,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             else {
                 // Same guard as above — don't overwrite an existing 'present'
                 try {
-                    const syncDateE = new Date(timestamp);
+                    const syncDateE = eventTime;
                     const todayStartE = getISTMidnight(syncDateE);
                     const todayEndE = new Date(todayStartE.getTime() + 86400000);
                     const alreadyPresentE = await PeriodAttendance.exists({
@@ -3381,37 +3379,39 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             );
         }
 
-        // 6. Update liveTimerState + broadcast to targeted class room
-        try {
-            const semester = student.semester || '';
-            const branch = student.branch || '';
-            const broadcastData = {
-                studentId: student.enrollmentNo,
-                enrollmentNo: student.enrollmentNo,
-                name: student.name,
-                semester,
-                branch,
-                attendedSeconds: cappedTimerSeconds,
-                timerValue: cappedTimerSeconds,
-                isRunning: Boolean(isRunning),
-                lectureSubject: lecture?.subject || '',
-                lectureTeacher: lecture?.teacher || '',
-                lectureRoom: lecture?.room || '',
-                lastSyncTime: new Date(timestamp).toISOString(),
-                status: computedStatus
-            };
+        // 6. Update liveTimerState + broadcast to targeted class room (only for live syncs)
+        if (!isQueuedSync) {
+            try {
+                const semester = student.semester || '';
+                const branch = student.branch || '';
+                const broadcastData = {
+                    studentId: student.enrollmentNo,
+                    enrollmentNo: student.enrollmentNo,
+                    name: student.name,
+                    semester,
+                    branch,
+                    attendedSeconds: cappedTimerSeconds,
+                    timerValue: cappedTimerSeconds,
+                    isRunning: Boolean(isRunning),
+                    lectureSubject: lecture?.subject || '',
+                    lectureTeacher: lecture?.teacher || '',
+                    lectureRoom: lecture?.room || '',
+                    lastSyncTime: eventTime.toISOString(),
+                    status: computedStatus
+                };
 
-            // Update in-memory live state
-            await liveTimerState.set(student.enrollmentNo, {
-                ...broadcastData,
-                lastSeen: Date.now()
-            });
+                // Update in-memory live state
+                await liveTimerState.set(student.enrollmentNo, {
+                    ...broadcastData,
+                    lastSeen: Date.now()
+                });
 
-            // Emit to targeted class room only
-            const room = `class:${semester}:${branch}`;
-            io.to(room).emit('timer_broadcast', broadcastData);
-        } catch (broadcastError) {
-            console.error(`❌ [OFFLINE-SYNC] Error broadcasting timer data:`, broadcastError);
+                // Emit to targeted class room only
+                const room = `class:${semester}:${branch}`;
+                io.to(room).emit('timer_broadcast', broadcastData);
+            } catch (broadcastError) {
+                console.error(`❌ [OFFLINE-SYNC] Error broadcasting timer data:`, broadcastError);
+            }
         }
 
         // 7. Upsert timer progress into the current period's PeriodAttendance record FIRST
@@ -3445,7 +3445,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         if (!periodRoom) periodRoom = 'Unknown';
 
         try {
-            const today = getISTMidnight(new Date(timestamp));
+            const today = getISTMidnight(eventTime);
 
             const periodId = resolvedPeriodId;
 
@@ -3533,7 +3533,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                         verificationType: 'timer_sync',
                         wifiVerified:     true,
                         faceVerified:     false,
-                        checkInTime:      new Date(),
+                        checkInTime:      eventTime,
                         createdAt:        new Date()
                     });
                     console.log(`📊 [OFFLINE-SYNC] Fresh PeriodAttendance Created — Student: ${studentId}, Period: ${periodId}, Timer: ${cappedTimerSeconds}s`);
@@ -3545,7 +3545,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
 
         // 7b. Sync AttendanceRecord from PeriodAttendance (now up-to-date from step 7)
         try {
-            const today = getISTMidnight(new Date(timestamp));
+            const today = getISTMidnight(eventTime);
             const attendedMinutes = Math.floor(cappedTimerSeconds / 60);
 
             // Ensure a base AttendanceRecord exists before syncAttendanceRecord runs
