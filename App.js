@@ -1488,36 +1488,49 @@ export default function App() {
       showToast('🔐 Verifying WiFi & face — please wait…', 'info', 8000);
 
       // Check if student has been manually marked on the server first
-      try {
-        const activePeriod = offlinePeriod?.period || currentClassInfo?.period || 'P1';
-        let pId = activePeriod.toString();
-        if (!pId.startsWith('P')) pId = `P${pId}`;
+      // Skip if app knows it's offline to prevent long fetch hangs
+      if (!isOffline) {
+        try {
+          const activePeriod = offlinePeriod?.period || currentClassInfo?.period || 'P1';
+          let pId = activePeriod.toString();
+          if (!pId.startsWith('P')) pId = `P${pId}`;
 
-        console.log(`📡 Checking server manual override status for student ${studentId}, period: ${pId}`);
-        const statusResponse = await fetch(`${SERVER_BASE_URL}/api/attendance/student/${studentId}/check-manual-mark/${pId}`, {
-          headers: { 'Content-Type': 'application/json' }
-        });
-
-        const statusResult = await statusResponse.json();
-        if (statusResult.success && statusResult.isManuallyMarked) {
-          console.log(`⚠️ Server confirms student is manually marked ${statusResult.status}! Running Shuttle Relay.`);
+          console.log(`📡 Checking server manual override status for student ${studentId}, period: ${pId}`);
           
-          // Sync with the server's manual mark state locally
-          OfflineTimerService.isManuallyMarked = (statusResult.status === 'present');
-          OfflineTimerService.attendanceStatus = statusResult.status;
-          await OfflineTimerService.saveState();
+          // Use AbortController with 3s timeout to prevent UI hang on spotty connections
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 3000);
+          
+          const statusResponse = await fetch(`${SERVER_BASE_URL}/api/attendance/student/${studentId}/check-manual-mark/${pId}`, {
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal
+          });
+          
+          clearTimeout(timeoutId);
 
-          setOfflineTimerState(prev => ({
-            ...prev,
-            attendanceStatus: statusResult.status
-          }));
+          const statusResult = await statusResponse.json();
+          if (statusResult.success && statusResult.isManuallyMarked) {
+            console.log(`⚠️ Server confirms student is manually marked ${statusResult.status}! Running Shuttle Relay.`);
+            
+            // Sync with the server's manual mark state locally
+            OfflineTimerService.isManuallyMarked = (statusResult.status === 'present');
+            OfflineTimerService.attendanceStatus = statusResult.status;
+            await OfflineTimerService.saveState();
 
-          if (statusResult.status === 'present') {
-            showToast('🏃 Shuttle Relay active — present status guaranteed, let\'s catch up!', 'success', 3000);
+            setOfflineTimerState(prev => ({
+              ...prev,
+              attendanceStatus: statusResult.status
+            }));
+
+            if (statusResult.status === 'present') {
+              showToast('🏃 Shuttle Relay active — present status guaranteed, let\'s catch up!', 'success', 3000);
+            }
           }
+        } catch (err) {
+          console.warn('⚠️ Server check for manual mark failed or timed out, falling back to local state:', err.message);
         }
-      } catch (err) {
-        console.warn('⚠️ Server check for manual mark failed, falling back to local state:', err.message);
+      } else {
+        console.log('📱 App is offline, skipping manual mark check');
       }
 
       // Extract current lecture info — prefer offline schedule (BSSIDStorage) as source of truth
