@@ -1536,7 +1536,7 @@ class OfflineTimerService {
       try {
         // Try to reach the server with a quick ping
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout to allow for slow connections/cold starts
         
         const response = await fetch(GET_HEALTH, {
           method: 'GET',
@@ -1546,7 +1546,11 @@ class OfflineTimerService {
         
         clearTimeout(timeoutId);
         this.hasInternetConnection = response.ok;
+        if (!response.ok) {
+           console.log(`⚠️ Health check returned non-OK status: ${response.status}`);
+        }
       } catch (error) {
+        console.log(`❌ Health check fetch failed:`, error.message);
         this.hasInternetConnection = false;
       }
       
