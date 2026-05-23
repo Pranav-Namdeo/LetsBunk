@@ -162,11 +162,11 @@ class OfflineTimerService {
           .catch(() => {});
       }
       
-      // Load saved state
-      await this.loadState();
-      
       // Load sync queue
       await this.loadSyncQueue();
+
+      // Load saved state
+      await this.loadState();
       
       // Setup app state listener
       this.setupAppStateListener();

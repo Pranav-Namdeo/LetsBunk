@@ -3463,57 +3463,62 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 const thresholdSec = Math.ceil(maxSeconds * (ATTENDANCE_THRESHOLD / 100));
 
                 if (existingRecord) {
-                    const isManuallyMarkedDb = (existingRecord.verificationType === 'manual' && existingRecord.status === 'present');
-                    const isAlreadyPresent = (existingRecord.status === 'present');
-                    
-                    // actualTimerSeconds tracks the student's physical device timer accumulation
-                    const newActual = Math.max(existingRecord.actualTimerSeconds || 0, cappedTimerSeconds);
-                    
-                    // Effective timerSeconds is the higher of their actual time or the manual baseline
-                    let newEffective = newActual;
-                    if (isManuallyMarkedDb) {
-                        const baseManualSeconds = Math.max(existingRecord.timerSeconds || 0, thresholdSec);
-                        newEffective = Math.max(baseManualSeconds, newActual);
-                        periodStatus = 'present'; // Stay Present guaranteed
-                    } else if (isAlreadyPresent) {
-                        // Guard: Once a student is marked present automatically or otherwise, keep present!
-                        // Prevent downgrading to absent due to subsequent/queued stale syncs.
-                        newEffective = Math.max(newEffective, existingRecord.timerSeconds || thresholdSec);
-                        periodStatus = 'present';
+                    const currentMax = Math.max(existingRecord.actualTimerSeconds || 0, existingRecord.timerSeconds || 0);
+                    if (cappedTimerSeconds <= currentMax) {
+                        console.log(`🛡️ [OFFLINE-SYNC] Guard: Incoming timer (${cappedTimerSeconds}s) is <= DB max timer (${currentMax}s). Skipping update to prevent overwriting.`);
                     } else {
-                        // Recompute status for standard records
-                        try {
-                            let pStart = existingRecord.startTime;
-                            let pEnd   = existingRecord.endTime;
-                            if (ttObj && ttObj.periods) {
-                                const pInfoForStatus = ttObj.periods[pNum - 1];
-                                if (pInfoForStatus) {
-                                    pStart = pInfoForStatus.startTime || pStart;
-                                    pEnd   = pInfoForStatus.endTime || pEnd;
+                        const isManuallyMarkedDb = (existingRecord.verificationType === 'manual' && existingRecord.status === 'present');
+                        const isAlreadyPresent = (existingRecord.status === 'present');
+                        
+                        // actualTimerSeconds tracks the student's physical device timer accumulation
+                        const newActual = Math.max(existingRecord.actualTimerSeconds || 0, cappedTimerSeconds);
+                        
+                        // Effective timerSeconds is the higher of their actual time or the manual baseline
+                        let newEffective = newActual;
+                        if (isManuallyMarkedDb) {
+                            const baseManualSeconds = Math.max(existingRecord.timerSeconds || 0, thresholdSec);
+                            newEffective = Math.max(baseManualSeconds, newActual);
+                            periodStatus = 'present'; // Stay Present guaranteed
+                        } else if (isAlreadyPresent) {
+                            // Guard: Once a student is marked present automatically or otherwise, keep present!
+                            // Prevent downgrading to absent due to subsequent/queued stale syncs.
+                            newEffective = Math.max(newEffective, existingRecord.timerSeconds || thresholdSec);
+                            periodStatus = 'present';
+                        } else {
+                            // Recompute status for standard records
+                            try {
+                                let pStart = existingRecord.startTime;
+                                let pEnd   = existingRecord.endTime;
+                                if (ttObj && ttObj.periods) {
+                                    const pInfoForStatus = ttObj.periods[pNum - 1];
+                                    if (pInfoForStatus) {
+                                        pStart = pInfoForStatus.startTime || pStart;
+                                        pEnd   = pInfoForStatus.endTime || pEnd;
+                                    }
                                 }
-                            }
-                            if (pStart && pEnd) {
-                                const durMin = timeToMinutes(pEnd) - timeToMinutes(pStart);
-                                if (durMin > 0 && (newEffective / (durMin * 60)) * 100 >= ATTENDANCE_THRESHOLD) {
+                                if (pStart && pEnd) {
+                                    const durMin = timeToMinutes(pEnd) - timeToMinutes(pStart);
+                                    if (durMin > 0 && (newEffective / (durMin * 60)) * 100 >= ATTENDANCE_THRESHOLD) {
+                                        periodStatus = 'present';
+                                    } else if (Boolean(isRunning)) {
+                                        periodStatus = 'active';
+                                    } else {
+                                        periodStatus = 'absent';
+                                    }
+                                } else if (newEffective >= thresholdSec) {
                                     periodStatus = 'present';
-                                } else if (Boolean(isRunning)) {
-                                    periodStatus = 'active';
-                                } else {
-                                    periodStatus = 'absent';
                                 }
-                            } else if (newEffective >= thresholdSec) {
-                                periodStatus = 'present';
-                            }
-                        } catch (_) {}
+                            } catch (_) {}
+                        }
+
+                        existingRecord.actualTimerSeconds = newActual;
+                        existingRecord.timerSeconds = newEffective;
+                        existingRecord.status = periodStatus;
+                        existingRecord.updatedAt = new Date();
+
+                        await existingRecord.save();
+                        console.log(`📊 [OFFLINE-SYNC] Shuttle Relay Update — Student: ${studentId}, Period: ${periodId}, Actual: ${newActual}s, Effective: ${newEffective}s, Status: ${periodStatus}`);
                     }
-
-                    existingRecord.actualTimerSeconds = newActual;
-                    existingRecord.timerSeconds = newEffective;
-                    existingRecord.status = periodStatus;
-                    existingRecord.updatedAt = new Date();
-
-                    await existingRecord.save();
-                    console.log(`📊 [OFFLINE-SYNC] Shuttle Relay Update — Student: ${studentId}, Period: ${periodId}, Actual: ${newActual}s, Effective: ${newEffective}s, Status: ${periodStatus}`);
                 } else {
                     // Create fresh record
                     await PeriodAttendance.create({
