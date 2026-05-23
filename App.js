@@ -1484,6 +1484,9 @@ export default function App() {
         return;
       }
 
+      // Show loading toast immediately to provide instant UI feedback
+      showToast('🔐 Verifying WiFi & face — please wait…', 'info', 8000);
+
       // Check if student has been manually marked on the server first
       try {
         const activePeriod = offlinePeriod?.period || currentClassInfo?.period || 'P1';
@@ -1516,9 +1519,6 @@ export default function App() {
       } catch (err) {
         console.warn('⚠️ Server check for manual mark failed, falling back to local state:', err.message);
       }
-
-      // Show loading toast for verification process
-      showToast('🔐 Verifying WiFi & face — please wait…', 'info', 8000);
 
       // Extract current lecture info — prefer offline schedule (BSSIDStorage) as source of truth
       // offlinePeriod has the correct subject/teacher/room/time for the current period
