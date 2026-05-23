@@ -1862,11 +1862,16 @@ class OfflineTimerService {
           });
         }
         
-        // Clear sync queue on successful sync — save empty queue first, then clear in memory
-        await this.saveSyncQueue();
-        this.syncQueue = [];
-        await this.saveSyncQueue();
-        this.pendingSyncCount = 0;
+        // Filter out only the successfully synced active period from the queue
+        if (capturedPeriodId) {
+          const previousLength = this.syncQueue.length;
+          this.syncQueue = this.syncQueue.filter(item => item.periodId !== capturedPeriodId);
+          if (this.syncQueue.length !== previousLength) {
+            await this.saveSyncQueue();
+            this.pendingSyncCount = this.syncQueue.length;
+            console.log(`✅ Removed active period ${capturedPeriodId} from the sync queue. Queue size: ${this.pendingSyncCount}`);
+          }
+        }
         
         console.log('✅ Sync successful - Duration updated in MongoDB');
         

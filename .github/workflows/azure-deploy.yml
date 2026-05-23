@@ -9,6 +9,7 @@ on:
       - 01-04-26
       - 10-may-2026
       - azure
+      - azury
 
 jobs:
   deploy:
