@@ -3195,16 +3195,21 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             }
         }
 
+        const today = getISTMidnight(timestamp ? new Date(timestamp) : new Date());
+        const periodId = resolvedPeriodId;
+        let existingRecord = null;
+        if (periodId) {
+            existingRecord = await PeriodAttendance.findOne({
+                enrollmentNo: student.enrollmentNo,
+                date: today,
+                period: periodId
+            });
+        }
+
         let cappedTimerSeconds = Math.floor(timerSeconds);
         
         // Skip elapsed capping only if student is currently manually marked present in the DB
-        const isManuallyMarkedDb = await PeriodAttendance.exists({
-            enrollmentNo: studentId,
-            date: getISTMidnight(timestamp ? new Date(timestamp) : new Date()),
-            period: resolvedPeriodId,
-            verificationType: 'manual',
-            status: 'present'
-        });
+        const isManuallyMarkedDb = existingRecord ? (existingRecord.verificationType === 'manual' && existingRecord.status === 'present') : false;
 
         if (isManuallyMarkedDb) {
             console.log(`👨‍🏫 [OFFLINE-SYNC] Bypassing elapsed time cap for manual-marked student ${studentId}`);
@@ -3217,6 +3222,10 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 cappedTimerSeconds = elapsedSecondsCap;
             }
         }
+
+        const dbTimerSeconds = existingRecord ? (existingRecord.actualTimerSeconds || existingRecord.timerSeconds || 0) : 0;
+        const highestTimerSeconds = Math.max(cappedTimerSeconds, dbTimerSeconds);
+        console.log(`📊 [OFFLINE-SYNC] Capped Payload: ${cappedTimerSeconds}s, Existing DB: ${dbTimerSeconds}s -> Highest: ${highestTimerSeconds}s`);
 
         // 2b. Guard: check if student has a verified check-in for today.
         // Under our robust, stabilized pipeline, we no longer block the sync request with a 403 error.
@@ -3267,7 +3276,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             {
                 $set: updateData,
                 // Only update totalAttendedSeconds if the new value is higher
-                $max: { 'attendanceSession.totalAttendedSeconds': Math.max(0, Math.floor(timerSeconds)) }
+                $max: { 'attendanceSession.totalAttendedSeconds': Math.max(0, Math.floor(highestTimerSeconds)) }
             }
         );
 
@@ -3319,7 +3328,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 // Removed <= 180 cap — periods can be any valid duration
                 if (durationMin > 0) {
                     const lectureDurationSeconds = durationMin * 60;
-                    const attendedPct = (timerSeconds / lectureDurationSeconds) * 100;
+                    const attendedPct = (highestTimerSeconds / lectureDurationSeconds) * 100;
                     if (attendedPct >= ATTENDANCE_THRESHOLD) {
                         computedStatus = 'present';
                     } else if (Boolean(isRunning)) {
@@ -3388,8 +3397,8 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 name: student.name,
                 semester,
                 branch,
-                attendedSeconds: cappedTimerSeconds,
-                timerValue: cappedTimerSeconds,
+                attendedSeconds: highestTimerSeconds,
+                timerValue: highestTimerSeconds,
                 isRunning: Boolean(isRunning),
                 lectureSubject: lecture?.subject || '',
                 lectureTeacher: lecture?.teacher || '',
@@ -3447,13 +3456,6 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             const periodId = resolvedPeriodId;
 
             if (periodId) {
-                // Find existing record to preserve and calculate manual mark relay (Shuttle Relay)
-                let existingRecord = await PeriodAttendance.findOne({
-                    enrollmentNo: student.enrollmentNo,
-                    date: today,
-                    period: periodId
-                });
-
                 let periodStatus = computedStatus;
 
                 // Determine base threshold seconds for manual override (75%)
@@ -3463,7 +3465,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     const isManuallyMarkedDb = (existingRecord.verificationType === 'manual' && existingRecord.status === 'present');
                     
                     // actualTimerSeconds tracks the student's physical device timer accumulation
-                    const newActual = Math.max(existingRecord.actualTimerSeconds || 0, cappedTimerSeconds);
+                    const newActual = Math.max(existingRecord.actualTimerSeconds || existingRecord.timerSeconds || 0, cappedTimerSeconds);
                     
                     // Effective timerSeconds is the higher of their actual time or the manual baseline
                     let newEffective = newActual;
@@ -3537,7 +3539,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
         // 7b. Sync AttendanceRecord from PeriodAttendance (now up-to-date from step 7)
         try {
             const today = getISTMidnight(new Date(timestamp));
-            const attendedMinutes = Math.floor(cappedTimerSeconds / 60);
+            const attendedMinutes = Math.floor(highestTimerSeconds / 60);
 
             // Ensure a base AttendanceRecord exists before syncAttendanceRecord runs
             // (syncAttendanceRecord uses upsert so this is just a safety net for totalClassTime)
@@ -3577,7 +3579,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     totalAttended:  attendedMinutes,
                     totalClassTime: classMinutes,
                     dayPercentage:  classMinutes > 0 ? Math.round((attendedMinutes / classMinutes) * 100) : 0,
-                    timerValue:     cappedTimerSeconds,
+                    timerValue:     highestTimerSeconds,
                     createdAt:      new Date(),
                     updatedAt:      new Date()
                 });
