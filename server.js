@@ -1695,6 +1695,18 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                     isRunning = false;
                 }
 
+                // If the student's active session is for a DIFFERENT class/lecture, they are NOT
+                // attending this class. Reset their displayed status for this teacher's view.
+                const studentLecture = effectiveLive 
+                    ? effectiveLive.lectureSubject 
+                    : (session.lectureSubject || null);
+                
+                if (studentLecture && currentClass.subject && studentLecture !== currentClass.subject) {
+                    timerSecs = 0;
+                    status = 'absent';
+                    isRunning = false;
+                }
+
                 // Zero timer only for genuinely absent students (never attended today),
                 // NOT for offline students (they have a real accumulated value to show).
                 const displayTimer = (status === 'absent') ? 0 : timerSecs;
