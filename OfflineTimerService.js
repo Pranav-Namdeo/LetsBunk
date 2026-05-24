@@ -333,7 +333,13 @@ class OfflineTimerService {
 
           // Reset timer only for new lecture
           if (!isSameLecture) {
-            console.log('📚 New lecture detected - resetting timer to 0');
+            console.log('📚 New lecture detected - saving final state before resetting timer to 0');
+            if (this.currentLecture && this.timerSeconds > 0) {
+               const prevPeriodId = this.currentLecture.period ? `P${this.currentLecture.period}` : (this.currentLecture.periodId || null);
+               if (prevPeriodId) {
+                  await this.reconcileActivePeriodQueueItem(prevPeriodId); // Force queue update for previous period
+               }
+            }
             this.timerSeconds = 0;
           } else {
             console.log('📚 First start of day — continuing from:', this.timerSeconds);
@@ -342,7 +348,13 @@ class OfflineTimerService {
 
         // For period transitions (already verified today, different lecture) — always reset timer to 0
         if (isAlreadyVerifiedToday && !isSameLecture) {
-          console.log('📚 Period transition — resetting timer to 0 for new period');
+          console.log('📚 Period transition — saving final state before resetting timer to 0 for new period');
+          if (this.currentLecture && this.timerSeconds > 0) {
+             const prevPeriodId = this.currentLecture.period ? `P${this.currentLecture.period}` : (this.currentLecture.periodId || null);
+             if (prevPeriodId) {
+                await this.reconcileActivePeriodQueueItem(prevPeriodId); // Force queue update for previous period
+             }
+          }
           this.timerSeconds = 0;
           this.attendanceStatus = 'absent';
           this.thresholdSeconds = null;
@@ -887,7 +899,11 @@ class OfflineTimerService {
         this.wasRunningBeforeDisconnect = false;
         this.disconnectionTime = null;
         this.pausedDueToWiFiLoss = false;
-        this.previousLectureData = this.currentLecture ? { ...this.currentLecture } : null;
+        this.previousLectureData = this.currentLecture ? {
+          lecture: { ...this.currentLecture },
+          timerSeconds: this.timerSeconds,
+          disconnectionTime: this.disconnectionTime
+        } : null;
         this.thresholdSeconds = null;  // reset so next period gets fresh threshold
         this.attendanceStatus = 'absent';
       }
@@ -905,6 +921,11 @@ class OfflineTimerService {
       // Reset running state BEFORE syncing
       this.isRunning = false;
       this.isPaused = false;
+
+      // Persist the completed period before clearing currentLecture or attempting
+      // network sync. This guarantees P1, P2, P3... survive a fully-offline run
+      // and can be flushed later when internet returns.
+      await this.queueCompletedPeriodForSync(finalLecture, finalSeconds, finalPeriodId, reason);
       
       // Clear lecture context for lecture_ended, preserve for manual/WiFi stops
       if (reason === 'lecture_ended') {
@@ -1811,6 +1832,26 @@ class OfflineTimerService {
           
           await this.saveSyncQueue();
         }
+      } else if (highestSeconds > 0) {
+        // BUG FIX: If the app was backgrounded for the entire period, the interval never ran, so the queue is empty.
+        // We MUST create a new queue item here to prevent complete loss of the period's data.
+        console.log(`🛡️ [RECONCILE] Creating MISSING queued item for ${activePeriodId} with ${highestSeconds}s`);
+        let timestampToUse;
+        try { timestampToUse = getServerTime().now(); } catch { timestampToUse = Date.now(); }
+        
+        this.syncQueue.push({
+          periodId: activePeriodId,
+          timerSeconds: highestSeconds,
+          attendedMinutes: Math.floor(highestSeconds / 60),
+          lecture: this.currentLecture,
+          timestamp: timestampToUse,
+          isRunning: this.isRunning,
+          isPaused: this.isPaused,
+          isQueuedSync: true, // Historical data — don't touch live state
+          finalSync: true,
+          reason: 'background_reconciliation'
+        });
+        await this.saveSyncQueue();
       }
     } catch (err) {
       console.error('❌ [RECONCILE] Error during active period queue reconciliation:', err);
@@ -1826,6 +1867,55 @@ class OfflineTimerService {
       await this.syncToServer(lecture, timerSeconds, periodId);
     } catch (e) {
       console.warn('⚠️ syncToServerWithContext error:', e);
+    }
+  }
+
+  /**
+   * Store a completed period in the durable sync queue before any network call.
+   * If the immediate sync succeeds, syncToServer removes this period from the
+   * queue. If it fails or the app is killed, the queued item remains and will be
+   * synced later by syncPendingData().
+   */
+  async queueCompletedPeriodForSync(lecture, timerSeconds, periodId, reason = 'period_completed') {
+    try {
+      const completedSeconds = Math.floor(Number(timerSeconds) || 0);
+      if (!lecture || !periodId || completedSeconds <= 0) return;
+
+      let queueTimestamp;
+      try { queueTimestamp = getServerTime().now(); } catch { queueTimestamp = Date.now(); }
+
+      const queueItem = {
+        studentId: this.studentId,
+        timerSeconds: completedSeconds,
+        lecture,
+        periodId,
+        timestamp: queueTimestamp,
+        isRunning: false,
+        isPaused: false,
+        attendedMinutes: Math.floor(completedSeconds / 60),
+        isQueuedSync: true,
+        finalSync: true,
+        reason: reason || 'period_completed'
+      };
+
+      const existingIndex = this.syncQueue.findIndex(item => item.periodId === periodId);
+      if (existingIndex !== -1) {
+        const existingSeconds = Math.floor(Number(this.syncQueue[existingIndex].timerSeconds) || 0);
+        if (completedSeconds >= existingSeconds) {
+          this.syncQueue[existingIndex] = queueItem;
+          console.log(`💾 [OFFLINE QUEUE] Updated completed ${periodId}: ${completedSeconds}s`);
+        } else {
+          console.log(`💾 [OFFLINE QUEUE] Keeping higher existing ${periodId}: ${existingSeconds}s >= ${completedSeconds}s`);
+        }
+      } else {
+        this.syncQueue.push(queueItem);
+        console.log(`💾 [OFFLINE QUEUE] Saved completed ${periodId}: ${completedSeconds}s`);
+      }
+
+      await this.saveSyncQueue();
+      this.pendingSyncCount = this.syncQueue.length;
+    } catch (error) {
+      console.error('❌ Failed to queue completed period:', error);
     }
   }
 
