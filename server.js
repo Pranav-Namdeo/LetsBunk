@@ -1691,6 +1691,8 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                     : null;
                 if (lastSyncDate && lastSyncDate !== todayStr) {
                     timerSecs = 0;
+                    status = 'absent';
+                    isRunning = false;
                 }
 
                 // Zero timer only for genuinely absent students (never attended today),
@@ -7064,16 +7066,30 @@ app.get('/api/view-records/students', async (req, res) => {
                     const live = liveTimerState.get(student.enrollmentNo);
                     const session = student.attendanceSession || {};
                     
+                    const lastUpdated = live ? live.lastSyncTime : (session.lastSyncTime || null);
+                    const todayStr = new Date(getISTMidnight()).toISOString().split('T')[0];
+                    const lastSyncDate = lastUpdated ? new Date(lastUpdated).toISOString().split('T')[0] : null;
+                    
+                    let isRunning = live ? live.isRunning : (session.isRunning || false);
+                    let timerValue = live ? live.attendedSeconds : (session.totalAttendedSeconds || 0);
+                    let status = live ? live.status : (session.status || 'absent');
+                    
+                    if (lastSyncDate && lastSyncDate !== todayStr) {
+                        timerValue = 0;
+                        status = 'absent';
+                        isRunning = false;
+                    }
+                    
                     return {
                         ...student.toObject(),
                         attendancePercentage,
                         totalDays: total,
                         presentDays: present,
-                        isRunning: live ? live.isRunning : (session.isRunning || false),
-                        timerValue: live ? live.attendedSeconds : (session.totalAttendedSeconds || 0),
-                        status: live ? live.status : (session.status || 'absent'),
-                        lastUpdated: live ? live.lastSyncTime : (session.lastSyncTime || null),
-                        totalAttendedSeconds: live ? live.attendedSeconds : (session.totalAttendedSeconds || 0),
+                        isRunning,
+                        timerValue,
+                        status,
+                        lastUpdated,
+                        totalAttendedSeconds: timerValue,
                         _id: sid
                     };
                 } catch (error) {

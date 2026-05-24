@@ -589,20 +589,6 @@ export default function App() {
     }
   }, [semester, branch, selectedRole, showLogin]);
 
-  // Force refetch if current day is missing from timetable (handles old timetables without Sunday)
-  useEffect(() => {
-    if (timetable?.schedule && currentDay) {
-      if (!timetable.schedule[currentDay]) {
-        console.warn(`⚠️ Current day "${currentDay}" not found in timetable!`);
-        console.warn('  Available days:', Object.keys(timetable.schedule).join(', '));
-        console.warn('  Force refetching timetable...');
-        if (semester && branch) {
-          fetchTimetable(semester, branch);
-        }
-      }
-    }
-  }, [currentDay, timetable?.schedule]);
-
   // Check if today is a leave day (no classes scheduled)
   const isLeaveDay = () => {
     try {
