@@ -1686,9 +1686,7 @@ app.get('/api/teacher/current-class-students/:teacherId', async (req, res) => {
                 const lastSync = effectiveLive
                     ? effectiveLive.lastSyncTime
                     : (session.lastSyncTime || null);
-                const lastSyncDate = lastSync
-                    ? new Date(lastSync).toISOString().split('T')[0]
-                    : null;
+                const lastSyncDate = lastSync ? getISTDateString(lastSync) : null;
                 if (lastSyncDate && lastSyncDate !== todayStr) {
                     timerSecs = 0;
                     status = 'absent';
@@ -1791,6 +1789,11 @@ function getISTDateParts(date) {
     };
 }
 
+function getISTDateString(date = new Date()) {
+    const parts = getISTDateParts(date);
+    return `${parts.year}-${parts.month.toString().padStart(2, '0')}-${parts.date.toString().padStart(2, '0')}`;
+}
+
 
 function timeToMinutes(timeStr) {
     if (!timeStr) return 0;
@@ -1877,15 +1880,13 @@ io.on('connection', (socket) => {
         const STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
         const SYNC_TIMEOUT_MS    =      90 * 1000; // 90 seconds — missed sync = student offline
         const now = Date.now();
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = getISTDateString();
         const classStudents = [];
         liveTimerState.forEach((state) => {
             if (state.semester === semester && state.branch === branch) {
                 const isStale = state.lastSeen && (now - state.lastSeen) > STALE_THRESHOLD_MS;
                 // Also check if the last sync was from a previous day
-                const lastSyncDate = state.lastSyncTime
-                    ? new Date(state.lastSyncTime).toISOString().split('T')[0]
-                    : null;
+                const lastSyncDate = state.lastSyncTime ? getISTDateString(state.lastSyncTime) : null;
                 const isFromPreviousDay = lastSyncDate && lastSyncDate !== todayStr;
                 // Student hasn't synced in 90s but marked running → offline
                 const isSyncTimedOut = state.isRunning && state.lastSeen && (now - state.lastSeen) > SYNC_TIMEOUT_MS;
@@ -7117,8 +7118,8 @@ app.get('/api/view-records/students', async (req, res) => {
                     const session = student.attendanceSession || {};
                     
                     const lastUpdated = live ? live.lastSyncTime : (session.lastSyncTime || null);
-                    const todayStr = new Date(getISTMidnight()).toISOString().split('T')[0];
-                    const lastSyncDate = lastUpdated ? new Date(lastUpdated).toISOString().split('T')[0] : null;
+                    const todayStr = getISTDateString();
+                    const lastSyncDate = lastUpdated ? getISTDateString(lastUpdated) : null;
                     
                     let isRunning = live ? live.isRunning : (session.isRunning || false);
                     let timerValue = live ? live.attendedSeconds : (session.totalAttendedSeconds || 0);
@@ -9798,7 +9799,7 @@ app.post('/api/random-ring', async (req, res) => {
         // Use liveTimerState to find students who are currently ACTIVE (timer running, not yet present)
         // Also include 'offline' students — they were attending and just lost WiFi temporarily
         // Feature: also include students who had their timer running at any point today (wasActiveToday)
-        const today = new Date().toISOString().split('T')[0];
+        const today = getISTDateString();
         const activeStudents = [];
         const wasActiveTodayStudents = [];
 
@@ -9806,9 +9807,7 @@ app.post('/api/random-ring', async (req, res) => {
             if (state.semester !== semester || state.branch !== branch) return;
 
             const isCurrentlyActive = state.status === 'active' || state.status === 'offline';
-            const lastSyncDate = state.lastSyncTime
-                ? new Date(state.lastSyncTime).toISOString().split('T')[0]
-                : null;
+            const lastSyncDate = state.lastSyncTime ? getISTDateString(state.lastSyncTime) : null;
             const hadTimerToday = lastSyncDate === today && (state.attendedSeconds || 0) > 0;
 
             if (isCurrentlyActive) {
