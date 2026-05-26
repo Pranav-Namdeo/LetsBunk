@@ -4337,7 +4337,9 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             // Mark ALL non-break periods of the day regardless of which period teacher is in
             for (let i = 1; i <= 8; i++) {
                 const lec = daySchedule.find(l => l.period === i);
-                if (lec && !lec.isBreak) periodsToMark.push(`P${i}`);
+                if (lec && !lec.isBreak && lec.subject && lec.subject.trim() !== '') {
+                    periodsToMark.push(`P${i}`);
+                }
             }
             console.log(`📋 [MANUAL-MARK] All-day scope - Marking periods: ${periodsToMark.join(', ')}`);
         } else if (scope === 'current') {
@@ -4348,7 +4350,9 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             // Legacy: current period + all future periods
             for (let i = pNum; i <= 8; i++) {
                 const futureLecture = daySchedule.find(l => l.period === i);
-                if (futureLecture && !futureLecture.isBreak) periodsToMark.push(`P${i}`);
+                if (futureLecture && !futureLecture.isBreak && futureLecture.subject && futureLecture.subject.trim() !== '') {
+                    periodsToMark.push(`P${i}`);
+                }
             }
             console.log(`📋 [MANUAL-MARK] Legacy present scope - Marking periods: ${periodsToMark.join(', ')}`);
         } else {
@@ -4365,6 +4369,11 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
             const pLecture = daySchedule.find(l => l.period === pNum);
             
             if (!pLecture || pLecture.isBreak) continue;
+
+            const finalSubject = pLecture.subject && pLecture.subject.trim() !== '' ? pLecture.subject : 'Manual Mark';
+            const finalTeacher = pLecture.teacher && pLecture.teacher.trim() !== '' ? pLecture.teacher : teacherId;
+            const finalTeacherName = pLecture.teacherName && pLecture.teacherName.trim() !== '' ? pLecture.teacherName : (teacherName || teacher.name || 'Teacher');
+            const finalRoom = pLecture.room && pLecture.room.trim() !== '' ? pLecture.room : 'Manual';
 
             // Check if record already exists
             const existingRecord = await PeriodAttendance.findOne({
@@ -4403,6 +4412,11 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
                 existingRecord.markedBy = teacherId;
                 existingRecord.markedByName = teacherName || teacher.name;
                 existingRecord.reason = reason || 'Manual marking by teacher';
+                existingRecord.subject = finalSubject;
+                existingRecord.teacher = finalTeacher;
+                existingRecord.teacherName = finalTeacherName;
+                existingRecord.room = finalRoom;
+                
                 if (status === 'present') {
                     // Populate actualTimerSeconds if not set already
                     if (!existingRecord.actualTimerSeconds || existingRecord.actualTimerSeconds === 0) {
@@ -4422,10 +4436,10 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
                     branch:       student.branch || '',
                     date:         markingDate,
                     period:       p,
-                    subject:      pLecture.subject,
-                    teacher:      pLecture.teacher,
-                    teacherName:  pLecture.teacherName,
-                    room:         pLecture.room,
+                    subject:      finalSubject,
+                    teacher:      finalTeacher,
+                    teacherName:  finalTeacherName,
+                    room:         finalRoom,
                     status,
                     timerSeconds: status === 'present' ? periodTimerSeconds : 0,
                     actualTimerSeconds: 0, // start at 0 actual until the student runs the timer to catch up!
