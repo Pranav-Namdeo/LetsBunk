@@ -4314,6 +4314,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         // Check if marking future period
         const periodInfo = timetable.periods[pNum - 1];
         if (periodInfo) {
+            const periodEndTime = timeToMinutes(periodInfo.endTime);
             const offset = 5.5 * 60 * 60 * 1000;
             const istTime = new Date(now.getTime() + offset);
             const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
