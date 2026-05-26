@@ -50,7 +50,7 @@ import { showToast, ToastContainer } from './Toast';
 // Configuration - Import from centralized config
 import { SERVER_BASE_URL, API_URL as CONFIG_API_URL, SOCKET_URL as CONFIG_SOCKET_URL } from './config';
 
-import { GET_ATTENDANCE_RECORDS, GET_ATTENDANCE_STATS, GET_CONFIG_APP, GET_DAILY_BSSID_SCHEDULE, GET_HEALTH, GET_STUDENT_MANAGEMENT, GET_STUDENT_VALIDATE, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TIMETABLE_BY_SEMESTER_BRANCH, GET_VIEW_RECORDS_STUDENTS, POST_ATTENDANCE_MANUAL_MARK, POST_ATTENDANCE_OFFLINE_SYNC, POST_ATTENDANCE_PERIOD_SYNC, POST_ATTENDANCE_RANDOM_RING_RESPONSE, POST_ATTENDANCE_RECORD, POST_LOGIN, POST_RANDOM_RING, POST_RANDOM_RING_TEACHER_ACTION, POST_RANDOM_RING_VERIFY_AFTER_REJECTION, POST_RANDOM_RING_VERIFY_DIRECT, POST_REFRESH_PROFILE, POST_TIMETABLE } from './constants/apiEndpoints';
+import { GET_ATTENDANCE_RECORDS, GET_ATTENDANCE_STATS, GET_CONFIG_APP, GET_DAILY_BSSID_SCHEDULE, GET_HEALTH, GET_STUDENT_MANAGEMENT, GET_STUDENT_VALIDATE, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TIMETABLE_BY_SEMESTER_BRANCH, GET_VIEW_RECORDS_STUDENTS, POST_ATTENDANCE_MANUAL_MARK, POST_ATTENDANCE_OFFLINE_SYNC, POST_ATTENDANCE_PERIOD_SYNC, POST_ATTENDANCE_RANDOM_RING_RESPONSE, POST_ATTENDANCE_RECORD, POST_LOGIN, POST_RANDOM_RING, POST_RANDOM_RING_TEACHER_ACTION, POST_RANDOM_RING_VERIFY_AFTER_REJECTION, POST_RANDOM_RING_VERIFY_DIRECT, POST_REFRESH_PROFILE, POST_TIMETABLE, POST_TIMETABLE_UPDATE_ROOM } from './constants/apiEndpoints';
 // Use Constants.expoConfig.extra for environment variables in Expo SDK 51
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL || CONFIG_API_URL;
 const SOCKET_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_SOCKET_URL || CONFIG_SOCKET_URL;
@@ -269,6 +269,155 @@ export default function App() {
   const [showSemesterSelector, setShowSemesterSelector] = useState(false);
   const [manualSelection, setManualSelection] = useState({ semester: 'auto', branch: null });
   const [selectedSemesterForTimetable] = useState(null);
+
+  // Manual Class Details Setup States
+  const [assignedRoom, setAssignedRoom] = useState(null);
+  const [assignedPeriod, setAssignedPeriod] = useState(null);
+  const [isPeriodManuallySet, setIsPeriodManuallySet] = useState(false);
+  const [showClassSetupModal, setShowClassSetupModal] = useState(false);
+  const [tempPeriod, setTempPeriod] = useState(1);
+  const [tempRoom, setTempRoom] = useState('Room 201');
+  const [tempManualSet, setTempManualSet] = useState(false);
+  const [showPeriodSelector, setShowPeriodSelector] = useState(false);
+  const [isRoomDropdownExpanded, setIsRoomDropdownExpanded] = useState(false);
+
+  // Room Options
+  const ROOM_OPTIONS = [
+    'Room 201 (Cse)',
+    'Room 304 (Lab)',
+    'Hall A',
+    'Room 101',
+    'Room 102',
+    'Room 202',
+    'Room 203',
+    'Room 301',
+    'Room 302',
+  ];
+
+  const getAutoTrackedPeriod = () => {
+    // 1. Get current time in minutes since midnight in IST
+    const now = new Date();
+    const offset = 5.5 * 60 * 60 * 1000;
+    const istTime = new Date(now.getTime() + offset);
+    const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
+
+    // 2. If we have timetable.periods, find which period contains the current time
+    if (timetable && timetable.periods && timetable.periods.length > 0) {
+      for (let i = 0; i < timetable.periods.length; i++) {
+        const periodInfo = timetable.periods[i];
+        if (periodInfo && periodInfo.startTime && periodInfo.endTime) {
+          const [startHour, startMin] = periodInfo.startTime.split(':').map(Number);
+          const [endHour, endMin] = periodInfo.endTime.split(':').map(Number);
+          const startMinutes = (startHour || 0) * 60 + (startMin || 0);
+          const endMinutes = (endHour || 0) * 60 + (endMin || 0);
+          if (currentTime >= startMinutes && currentTime < endMinutes) {
+            return periodInfo.number || (i + 1);
+          }
+        }
+      }
+    }
+    return 1;
+  };
+
+  const getTimetableRoomForPeriod = (periodNum) => {
+    if (!timetable || !timetable.timetable) return 'Room 201';
+    const dayIndex = new Date(Date.now() + 5.5 * 60 * 60 * 1000).getUTCDay();
+    const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+    const todayName = dayNames[dayIndex];
+    const daySchedule = timetable.timetable[todayName];
+    if (daySchedule) {
+      const periodObj = daySchedule.find(p => p.period === periodNum);
+      if (periodObj && periodObj.room) {
+        return periodObj.room;
+      }
+    }
+    return 'Room 201';
+  };
+
+  const getDisplaySubject = () => {
+    if (!currentClassInfo) return '';
+    if (currentClassInfo.isManual) {
+      if (assignedRoom && assignedPeriod) {
+        return `Manual Selection (${assignedRoom}, Period ${assignedPeriod})`;
+      } else {
+        return 'Manual Selection (Assign Classroom)';
+      }
+    }
+    return currentClassInfo.subject;
+  };
+
+  const getDisplaySubtext = () => {
+    if (!currentClassInfo) return '';
+    let text = `${currentClassInfo.branch} • Sem ${currentClassInfo.semester}`;
+    if (currentClassInfo.isManual) {
+      if (assignedRoom && assignedPeriod) {
+        text += ' (Saved)';
+      }
+    } else if (currentClassInfo.startTime && currentClassInfo.endTime) {
+      text += ` • ${currentClassInfo.startTime}-${currentClassInfo.endTime}`;
+    }
+    return text;
+  };
+
+  const handleSaveClassSetup = async () => {
+    if (!currentClassInfo) return;
+    try {
+      const getISTDayName = () => {
+        const now = new Date();
+        const offset = 5.5 * 60 * 60 * 1000;
+        const istTime = new Date(now.getTime() + offset);
+        const dayNames = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+        return dayNames[istTime.getUTCDay()];
+      };
+
+      const dayName = getISTDayName();
+      console.log(`📡 Sending room update: Sem ${currentClassInfo.semester}, Branch ${currentClassInfo.branch}, Day ${dayName}, Period ${tempPeriod}, Room ${tempRoom}`);
+
+      const response = await fetch(POST_TIMETABLE_UPDATE_ROOM, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          semester: currentClassInfo.semester,
+          branch: currentClassInfo.branch,
+          day: dayName,
+          period: tempPeriod,
+          room: tempRoom
+        })
+      });
+
+      const data = await response.json();
+      if (data.success) {
+        console.log('✅ Timetable room updated successfully on server:', data);
+        
+        // Save to local state
+        setAssignedRoom(tempRoom);
+        setAssignedPeriod(tempPeriod);
+        setIsPeriodManuallySet(tempManualSet);
+
+        // Persist to AsyncStorage
+        await AsyncStorage.setItem('@assigned_room', tempRoom);
+        await AsyncStorage.setItem('@assigned_period', tempPeriod.toString());
+        await AsyncStorage.setItem('@is_period_manually_set', tempManualSet ? 'true' : 'false');
+
+        // Close modal
+        setShowClassSetupModal(false);
+
+        // Show toast notification
+        showToast(`Timetable Successfully Updated for ${tempRoom}, Period ${tempPeriod}`, 'success');
+
+        // Fetch student list again to sync state
+        fetchStudents({ semester: currentClassInfo.semester, branch: currentClassInfo.branch });
+      } else {
+        console.warn('❌ Failed to update room on server:', data.error);
+        showToast(`Error: ${data.error || 'Failed to update classroom'}`, 'error');
+      }
+    } catch (err) {
+      console.error('❌ Network error updating room:', err);
+      showToast('Network error updating room details', 'error');
+    }
+  };
 
   // Login states
   const [showLogin, setShowLogin] = useState(true); // start with login until session is verified
@@ -2424,18 +2573,35 @@ export default function App() {
             // Check if teacher has stored semester/branch preferences
             const storedSemester = await AsyncStorage.getItem(SEMESTER_KEY);
             const storedBranch = await AsyncStorage.getItem(BRANCH_KEY);
+            const storedRoom = await AsyncStorage.getItem('@assigned_room');
+            const storedPeriodStr = await AsyncStorage.getItem('@assigned_period');
+            const storedManualSet = await AsyncStorage.getItem('@is_period_manually_set');
             
             if (storedSemester) {
               console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch || 'No Branch');
               setSemester(storedSemester);
               setBranch(storedBranch);
               setManualSelection({ semester: storedSemester, branch: storedBranch });
-              setCurrentClassInfo({
-                subject: storedBranch ? 'Manual Selection' : 'Select Branch',
-                branch: storedBranch,
-                semester: storedSemester,
-                isManual: true
-              });
+              
+              const storedPeriod = storedPeriodStr ? parseInt(storedPeriodStr) : null;
+              if (storedRoom && storedPeriod) {
+                setAssignedRoom(storedRoom);
+                setAssignedPeriod(storedPeriod);
+                setIsPeriodManuallySet(storedManualSet === 'true');
+                setCurrentClassInfo({
+                  subject: `Manual Selection (${storedRoom}, Period ${storedPeriod})`,
+                  branch: storedBranch,
+                  semester: storedSemester,
+                  isManual: true
+                });
+              } else {
+                setCurrentClassInfo({
+                  subject: storedBranch ? 'Manual Selection (Assign Classroom)' : 'Select Branch',
+                  branch: storedBranch,
+                  semester: storedSemester,
+                  isManual: true
+                });
+              }
             }
             
             fetchStudents();
@@ -3777,18 +3943,35 @@ dayKeys.forEach((dayKey) => {
           // Teachers can manually select semester/branch via the selector, but we try to restore preferences
           const storedSemester = await AsyncStorage.getItem(SEMESTER_KEY);
           const storedBranch = await AsyncStorage.getItem(BRANCH_KEY);
+          const storedRoom = await AsyncStorage.getItem('@assigned_room');
+          const storedPeriodStr = await AsyncStorage.getItem('@assigned_period');
+          const storedManualSet = await AsyncStorage.getItem('@is_period_manually_set');
           
           if (storedSemester) {
             console.log('📚 Restoring teacher preferences:', storedSemester, storedBranch || 'No Branch');
             setSemester(storedSemester);
             setBranch(storedBranch);
             setManualSelection({ semester: storedSemester, branch: storedBranch });
-            setCurrentClassInfo({
-              subject: storedBranch ? 'Manual Selection' : 'Select Branch',
-              branch: storedBranch,
-              semester: storedSemester,
-              isManual: true
-            });
+            
+            const storedPeriod = storedPeriodStr ? parseInt(storedPeriodStr) : null;
+            if (storedRoom && storedPeriod) {
+              setAssignedRoom(storedRoom);
+              setAssignedPeriod(storedPeriod);
+              setIsPeriodManuallySet(storedManualSet === 'true');
+              setCurrentClassInfo({
+                subject: `Manual Selection (${storedRoom}, Period ${storedPeriod})`,
+                branch: storedBranch,
+                semester: storedSemester,
+                isManual: true
+              });
+            } else {
+              setCurrentClassInfo({
+                subject: storedBranch ? 'Manual Selection (Assign Classroom)' : 'Select Branch',
+                branch: storedBranch,
+                semester: storedSemester,
+                isManual: true
+              });
+            }
           }
           
           // Fetch students after a short delay to ensure socket is connecting
@@ -4535,11 +4718,10 @@ const onRefreshStudent = async () => {
                     {currentClassInfo.isManual ? '📌 Manual Selection' : '📚 Current Lecture'}
                   </Text>
                   <Text style={[styles.bannerTitle, { color: theme.text }]} numberOfLines={1}>
-                    {currentClassInfo.subject}
+                    {getDisplaySubject()}
                   </Text>
                   <Text style={[styles.bannerSubtext, { color: theme.textSecondary }]}>
-                    {currentClassInfo.branch} • Sem {currentClassInfo.semester}
-                    {!currentClassInfo.isManual && ` • ${currentClassInfo.startTime}-${currentClassInfo.endTime}`}
+                    {getDisplaySubtext()}
                   </Text>
                 </View>
                 <TouchableOpacity
@@ -4554,22 +4736,27 @@ const onRefreshStudent = async () => {
           </View>
         )}
 
-        {/* WiFi Status Display (Development/Testing) */}
-        {(__DEV__ || selectedRole === 'teacher') && currentClassInfo && (
-          <View style={styles.wifiWrapper}>
-            <View style={[styles.wifiContainer, { 
-              backgroundColor: wifiDebugInfo.status.includes('AUTHORIZED') ? '#10b981' + '15' : '#ef4444' + '15',
-              borderColor: wifiDebugInfo.status.includes('AUTHORIZED') ? '#10b981' + '30' : '#ef4444' + '30',
-            }]}>
-              <Text style={[styles.wifiText, { color: wifiDebugInfo.status.includes('AUTHORIZED') ? '#10b981' : '#ef4444' }]}>
-                📶 WiFi: {wifiDebugInfo.status} • BSSID: {wifiDebugInfo.currentBSSID}
-              </Text>
-              {wifiDebugInfo.reason && (
-                <Text style={[styles.wifiReason, { color: theme.textSecondary }]}>
-                  {wifiDebugInfo.reason} • {wifiDebugInfo.lastChecked}
-                </Text>
-              )}
-            </View>
+        {/* Set Class Button (only for Manual Mode) */}
+        {currentClassInfo && currentClassInfo.isManual && (
+          <View style={styles.setClassBtnWrapper}>
+            <TouchableOpacity 
+              style={[styles.setClassBtn, { backgroundColor: '#10b981' + '15', borderColor: '#10b981' + '40' }]} 
+              onPress={() => {
+                const autoPer = getAutoTrackedPeriod();
+                setTempPeriod(assignedPeriod || autoPer);
+                setTempManualSet(isPeriodManuallySet);
+                setTempRoom(assignedRoom || getTimetableRoomForPeriod(assignedPeriod || autoPer));
+                setShowPeriodSelector(false);
+                setIsRoomDropdownExpanded(false);
+                setShowClassSetupModal(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <View style={styles.setClassBtnContent}>
+                <Text style={{ fontSize: 16, marginRight: 6 }}>🏫</Text>
+                <Text style={[styles.setClassBtnText, { color: '#059669' }]}>Set Class</Text>
+              </View>
+            </TouchableOpacity>
           </View>
         )}
 
@@ -4777,6 +4964,150 @@ const onRefreshStudent = async () => {
           teacherData={userData}
           onLogout={handleLogout}
         />
+        {/* Class Details Setup Modal */}
+        <Modal
+          visible={showClassSetupModal}
+          transparent={true}
+          animationType="fade"
+          onRequestClose={() => setShowClassSetupModal(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.classSetupContainer, { backgroundColor: theme.cardBackground }]}>
+              {/* Header */}
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.text }]}>Classroom Setup</Text>
+                <TouchableOpacity onPress={() => setShowClassSetupModal(false)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                  <Text style={{ fontSize: 20, color: theme.textSecondary }}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Main Content scrollable to avoid keyboard overlapping */}
+              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 16 }}>
+                {/* Period Section */}
+                <Text style={[styles.sectionLabel, { color: theme.textSecondary }]}>Period Selection</Text>
+                
+                {/* Auto-track vs Manual Switcher */}
+                <View style={[styles.switcherContainer, { backgroundColor: theme.background }]}>
+                  <TouchableOpacity 
+                    style={[styles.switcherButton, !tempManualSet && [styles.switcherActive, { backgroundColor: theme.primary }]]}
+                    onPress={() => {
+                      setTempManualSet(false);
+                      const autoPer = getAutoTrackedPeriod();
+                      setTempPeriod(autoPer);
+                      setTempRoom(getTimetableRoomForPeriod(autoPer));
+                    }}
+                  >
+                    <Text style={[styles.switcherText, { color: !tempManualSet ? '#ffffff' : theme.textSecondary }]}>Auto-Tracked</Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={[styles.switcherButton, tempManualSet && [styles.switcherActive, { backgroundColor: theme.primary }]]}
+                    onPress={() => setTempManualSet(true)}
+                  >
+                    <Text style={[styles.switcherText, { color: tempManualSet ? '#ffffff' : theme.textSecondary }]}>Manually Set</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Period Number Display/Selector */}
+                <View style={styles.periodSelectRow}>
+                  <Text style={[styles.periodValueText, { color: theme.text }]}>
+                    Period {tempPeriod}
+                  </Text>
+
+                  {tempManualSet ? (
+                    <TouchableOpacity 
+                      style={[styles.dropdownTrigger, { borderColor: theme.border, backgroundColor: theme.background }]}
+                      onPress={() => setShowPeriodSelector(!showPeriodSelector)}
+                    >
+                      <Text style={{ color: theme.text }}>Change Period ▾</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <Text style={[styles.autoPeriodBadge, { color: theme.primary, backgroundColor: theme.primary + '15' }]}>
+                      Auto Mode
+                    </Text>
+                  )}
+                </View>
+
+                {/* Period Manual Selection Grid */}
+                {tempManualSet && showPeriodSelector && (
+                  <View style={[styles.periodGrid, { borderColor: theme.border }]}>
+                    {[1, 2, 3, 4, 5, 6, 7].map((num) => (
+                      <TouchableOpacity
+                        key={num}
+                        style={[
+                          styles.periodGridItem,
+                          { borderColor: theme.border },
+                          tempPeriod === num && { backgroundColor: theme.primary, borderColor: theme.primary }
+                        ]}
+                        onPress={() => {
+                          setTempPeriod(num);
+                          setTempRoom(getTimetableRoomForPeriod(num));
+                          setShowPeriodSelector(false);
+                        }}
+                      >
+                        <Text style={{ color: tempPeriod === num ? '#ffffff' : theme.text, fontWeight: '600' }}>
+                          P{num}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+
+                {/* Room Section */}
+                <Text style={[styles.sectionLabel, { color: theme.textSecondary, marginTop: 20 }]}>Classroom Room</Text>
+                
+                <TouchableOpacity 
+                  style={[styles.roomDropdownTrigger, { borderColor: theme.border, backgroundColor: theme.background }]}
+                  onPress={() => setIsRoomDropdownExpanded(!isRoomDropdownExpanded)}
+                >
+                  <Text style={{ color: theme.text, fontSize: 16 }}>{tempRoom}</Text>
+                  <Text style={{ color: theme.textSecondary, fontSize: 14 }}>▾</Text>
+                </TouchableOpacity>
+
+                {/* Room Options Dropdown List */}
+                {isRoomDropdownExpanded && (
+                  <View style={[styles.roomDropdownList, { borderColor: theme.border, backgroundColor: theme.cardBackground }]}>
+                    {ROOM_OPTIONS.map((roomOpt) => (
+                      <TouchableOpacity
+                        key={roomOpt}
+                        style={[
+                          styles.roomDropdownItem,
+                          { borderBottomColor: theme.border + '30' },
+                          tempRoom === roomOpt && { backgroundColor: theme.primary + '10' }
+                        ]}
+                        onPress={() => {
+                          setTempRoom(roomOpt);
+                          setIsRoomDropdownExpanded(false);
+                        }}
+                      >
+                        <Text style={{ color: tempRoom === roomOpt ? theme.primary : theme.text, fontWeight: tempRoom === roomOpt ? '600' : '400' }}>
+                          {roomOpt}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </ScrollView>
+
+              {/* Action Buttons */}
+              <View style={styles.modalActions}>
+                <TouchableOpacity 
+                  style={[styles.cancelBtn, { borderColor: theme.border }]} 
+                  onPress={() => setShowClassSetupModal(false)}
+                >
+                  <Text style={{ color: theme.textSecondary, fontWeight: '600' }}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={[styles.saveBtn, { backgroundColor: theme.primary }]} 
+                  onPress={handleSaveClassSetup}
+                >
+                  <Text style={{ color: '#ffffff', fontWeight: '600' }}>Save Settings</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
         {/* Semester Selector - Only for Teachers */}
         {selectedRole === 'teacher' && (
           <SemesterSelector
@@ -4791,11 +5122,19 @@ const onRefreshStudent = async () => {
                 console.log(`📝 Manual selection: ${selection.branch} Semester ${selection.semester}`);
                 setSemester(selection.semester);
                 setBranch(selection.branch);
+                // Clear previous manual details when changing semesters/branches
+                setAssignedRoom(null);
+                setAssignedPeriod(null);
+                setIsPeriodManuallySet(false);
+                AsyncStorage.removeItem('@assigned_room').catch(() => {});
+                AsyncStorage.removeItem('@assigned_period').catch(() => {});
+                AsyncStorage.removeItem('@is_period_manually_set').catch(() => {});
+
                 // Persist so it survives app restarts
                 AsyncStorage.setItem(SEMESTER_KEY, selection.semester).catch(() => {});
                 AsyncStorage.setItem(BRANCH_KEY, selection.branch).catch(() => {});
                 setCurrentClassInfo({
-                  subject: 'Manual Selection',
+                  subject: 'Manual Selection (Assign Classroom)',
                   branch: selection.branch,
                   semester: selection.semester,
                   isManual: true
@@ -4806,6 +5145,13 @@ const onRefreshStudent = async () => {
                 console.log(`🔄 Switched to auto mode - will use current class from timetable`);
                 setSemester(null);
                 setBranch(null);
+                setAssignedRoom(null);
+                setAssignedPeriod(null);
+                setIsPeriodManuallySet(false);
+                AsyncStorage.removeItem('@assigned_room').catch(() => {});
+                AsyncStorage.removeItem('@assigned_period').catch(() => {});
+                AsyncStorage.removeItem('@is_period_manually_set').catch(() => {});
+
                 // Clear persisted manual selection when switching back to auto
                 AsyncStorage.removeItem(SEMESTER_KEY).catch(() => {});
                 AsyncStorage.removeItem(BRANCH_KEY).catch(() => {});
@@ -7548,5 +7894,167 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '500',
     marginTop: 2,
+  },
+  setClassBtnWrapper: {
+    paddingHorizontal: 20,
+    paddingBottom: 10,
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: 768,
+  },
+  setClassBtn: {
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  setClassBtnContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  setClassBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  classSetupContainer: {
+    width: '90%',
+    maxWidth: 400,
+    borderRadius: 24,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8,
+  },
+  switcherContainer: {
+    flexDirection: 'row',
+    borderRadius: 12,
+    padding: 4,
+    marginBottom: 16,
+  },
+  switcherButton: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: 'center',
+    borderRadius: 9,
+  },
+  switcherActive: {
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  switcherText: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  periodSelectRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  periodValueText: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  dropdownTrigger: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  autoPeriodBadge: {
+    fontSize: 12,
+    fontWeight: '700',
+    borderRadius: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+  },
+  periodGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  periodGridItem: {
+    width: '22%',
+    aspectRatio: 1.2,
+    borderWidth: 1,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  roomDropdownTrigger: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+  },
+  roomDropdownList: {
+    borderWidth: 1,
+    borderRadius: 12,
+    marginTop: 8,
+    maxHeight: 180,
+    overflow: 'hidden',
+  },
+  roomDropdownItem: {
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 24,
+  },
+  cancelBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  saveBtn: {
+    flex: 2,
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: 'center',
   },
 });

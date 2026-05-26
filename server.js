@@ -908,6 +908,93 @@ app.put('/api/timetable/:semester/:branch', async (req, res) => {
     }
 });
 
+// POST endpoint for updating the room of a specific period in the timetable
+app.post('/api/timetable/update-room', async (req, res) => {
+    try {
+        const { semester, branch, day, period, room } = req.body;
+
+        if (!semester || !branch || !day || !period || !room) {
+            return res.status(400).json({ success: false, error: 'Missing required parameters' });
+        }
+
+        console.log(`📝 Room update request: Sem ${semester}, Branch ${branch}, Day ${day}, Period ${period} → Room ${room}`);
+
+        const dayKey = day.toLowerCase();
+        let updatedTimetable = null;
+
+        if (mongoose.connection.readyState === 1) {
+            let existingTimetable = await Timetable.findOne({ semester, branch });
+            if (!existingTimetable) {
+                return res.status(404).json({ success: false, error: 'Timetable not found' });
+            }
+
+            // Ensure the timetable day array exists
+            if (!existingTimetable.timetable || !existingTimetable.timetable[dayKey]) {
+                return res.status(400).json({ success: false, error: `No timetable schedule for day: ${day}` });
+            }
+
+            // Find the slot for the given period
+            const slots = existingTimetable.timetable[dayKey];
+            const targetPeriod = Number(period);
+            const periodSlot = slots.find(s => Number(s.period) === targetPeriod);
+
+            if (!periodSlot) {
+                slots.push({
+                    period: targetPeriod,
+                    subject: 'Manual Mark',
+                    room: room,
+                    teacher: 'Unknown',
+                    isBreak: false
+                });
+            } else {
+                periodSlot.room = room;
+            }
+
+            // Mark modified for mongoose mixed type
+            existingTimetable.markModified('timetable');
+            existingTimetable.lastUpdated = new Date();
+            await existingTimetable.save();
+            
+            updatedTimetable = existingTimetable;
+
+            // Broadcast BSSID and timetable update
+            try {
+                io.emit('timetable_updated', { semester, branch });
+                await broadcastBSSIDScheduleUpdate(semester, branch);
+            } catch (notifyErr) {
+                console.warn('⚠️ Timetable notify error (non-fatal):', notifyErr.message);
+            }
+        } else {
+            // Memory fallback
+            const key = `${semester}_${branch}`;
+            if (!timetableMemory[key]) {
+                return res.status(404).json({ success: false, error: 'Timetable not found in memory' });
+            }
+            const slots = timetableMemory[key].timetable[dayKey];
+            const targetPeriod = Number(period);
+            const periodSlot = slots.find(s => Number(s.period) === targetPeriod);
+            if (periodSlot) {
+                periodSlot.room = room;
+            } else {
+                slots.push({
+                    period: targetPeriod,
+                    subject: 'Manual Mark',
+                    room: room,
+                    teacher: 'Unknown',
+                    isBreak: false
+                });
+            }
+            timetableMemory[key].lastUpdated = new Date();
+            updatedTimetable = timetableMemory[key];
+        }
+
+        res.json({ success: true, message: `Room updated to ${room} for period ${period}`, timetable: updatedTimetable });
+    } catch (error) {
+        console.error('❌ Error in /api/timetable/update-room:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Get current lecture for a teacher based on time and timetable
 app.get('/api/teacher/current-lecture/:teacherId', async (req, res) => {
     try {

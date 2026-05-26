@@ -94,6 +94,7 @@ export const GET_TIMETABLE_BY_SEMESTER_BRANCH  = (semester, branch) => `${BASE_U
 export const GET_TIMETABLE_CURRENT_PERIOD      = `${BASE_URL}/api/timetable/current-period`;
 export const POST_TIMETABLE                    = `${BASE_URL}/api/timetable`;
 export const PUT_TIMETABLE_BY_SEMESTER_BRANCH  = (semester, branch) => `${BASE_URL}/api/timetable/${semester}/${branch}`;
+export const POST_TIMETABLE_UPDATE_ROOM        = `${BASE_URL}/api/timetable/update-room`;
 
 // ----------------------------
 // Periods
