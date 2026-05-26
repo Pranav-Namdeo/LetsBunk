@@ -50,7 +50,7 @@ import { showToast, ToastContainer } from './Toast';
 // Configuration - Import from centralized config
 import { SERVER_BASE_URL, API_URL as CONFIG_API_URL, SOCKET_URL as CONFIG_SOCKET_URL } from './config';
 
-import { GET_ATTENDANCE_RECORDS, GET_ATTENDANCE_STATS, GET_CONFIG_APP, GET_DAILY_BSSID_SCHEDULE, GET_HEALTH, GET_STUDENT_MANAGEMENT, GET_STUDENT_VALIDATE, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TIMETABLE_BY_SEMESTER_BRANCH, GET_VIEW_RECORDS_STUDENTS, POST_ATTENDANCE_MANUAL_MARK, POST_ATTENDANCE_OFFLINE_SYNC, POST_ATTENDANCE_PERIOD_SYNC, POST_ATTENDANCE_RANDOM_RING_RESPONSE, POST_ATTENDANCE_RECORD, POST_LOGIN, POST_RANDOM_RING, POST_RANDOM_RING_TEACHER_ACTION, POST_RANDOM_RING_VERIFY_AFTER_REJECTION, POST_RANDOM_RING_VERIFY_DIRECT, POST_REFRESH_PROFILE, POST_TIMETABLE, POST_TIMETABLE_UPDATE_ROOM } from './constants/apiEndpoints';
+import { GET_ATTENDANCE_RECORDS, GET_ATTENDANCE_STATS, GET_CONFIG_APP, GET_DAILY_BSSID_SCHEDULE, GET_HEALTH, GET_STUDENT_MANAGEMENT, GET_STUDENT_VALIDATE, GET_TEACHER_CURRENT_CLASS_STUDENTS, GET_TIMETABLE_BY_SEMESTER_BRANCH, GET_VIEW_RECORDS_STUDENTS, POST_ATTENDANCE_MANUAL_MARK, POST_ATTENDANCE_OFFLINE_SYNC, POST_ATTENDANCE_PERIOD_SYNC, POST_ATTENDANCE_RANDOM_RING_RESPONSE, POST_ATTENDANCE_RECORD, POST_LOGIN, POST_RANDOM_RING, POST_RANDOM_RING_TEACHER_ACTION, POST_RANDOM_RING_VERIFY_AFTER_REJECTION, POST_RANDOM_RING_VERIFY_DIRECT, POST_REFRESH_PROFILE, POST_TIMETABLE, POST_TIMETABLE_UPDATE_ROOM, GET_CLASSROOMS } from './constants/apiEndpoints';
 // Use Constants.expoConfig.extra for environment variables in Expo SDK 51
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_API_URL || CONFIG_API_URL;
 const SOCKET_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_SOCKET_URL || CONFIG_SOCKET_URL;
@@ -281,42 +281,87 @@ export default function App() {
   const [showPeriodSelector, setShowPeriodSelector] = useState(false);
   const [isRoomDropdownExpanded, setIsRoomDropdownExpanded] = useState(false);
 
-  // Room Options
-  const ROOM_OPTIONS = [
-    'Room 201 (Cse)',
-    'Room 304 (Lab)',
-    'Hall A',
-    'Room 101',
-    'Room 102',
-    'Room 202',
-    'Room 203',
-    'Room 301',
-    'Room 302',
-  ];
+  // Real Classrooms and Pagination States
+  const [realClassrooms, setRealClassrooms] = useState([]);
+  const [classroomsPage, setClassroomsPage] = useState(0);
+  const CLASSROOMS_PER_PAGE = 5;
+
+  const fetchRealClassrooms = async () => {
+    try {
+      console.log('📡 Fetching real classrooms from:', GET_CLASSROOMS);
+      const response = await fetch(GET_CLASSROOMS);
+      const data = await response.json();
+      if (data.success && data.classrooms) {
+        const rooms = data.classrooms
+          .filter(c => c.isActive !== false)
+          .map(c => c.roomNumber);
+        const uniqueRooms = Array.from(new Set(rooms)).sort();
+        setRealClassrooms(uniqueRooms);
+        console.log(`🏫 Loaded ${uniqueRooms.length} real classrooms from server`);
+      }
+    } catch (err) {
+      console.warn('⚠️ Error fetching classrooms from server:', err.message);
+    }
+  };
+
+  useEffect(() => {
+    if (selectedRole === 'teacher' && showClassSetupModal) {
+      fetchRealClassrooms();
+      setClassroomsPage(0); // Reset page selection
+    }
+  }, [selectedRole, showClassSetupModal]);
+
+  const getPaginatedClassrooms = () => {
+    const list = realClassrooms.length > 0 ? realClassrooms : [
+      'Room 201', 'Room 304 (Lab)', 'Hall A', 'Room 101', 'Room 102', 'Room 202', 'Room 203', 'Room 301', 'Room 302'
+    ];
+    const startIndex = classroomsPage * CLASSROOMS_PER_PAGE;
+    return list.slice(startIndex, startIndex + CLASSROOMS_PER_PAGE);
+  };
+
+  const getTotalClassroomPages = () => {
+    const list = realClassrooms.length > 0 ? realClassrooms : [
+      'Room 201', 'Room 304 (Lab)', 'Hall A', 'Room 101', 'Room 102', 'Room 202', 'Room 203', 'Room 301', 'Room 302'
+    ];
+    return Math.ceil(list.length / CLASSROOMS_PER_PAGE);
+  };
 
   const getAutoTrackedPeriod = () => {
-    // 1. Get current time in minutes since midnight in IST
     const now = new Date();
     const offset = 5.5 * 60 * 60 * 1000;
     const istTime = new Date(now.getTime() + offset);
     const currentTime = istTime.getUTCHours() * 60 + istTime.getUTCMinutes();
 
-    // 2. If we have timetable.periods, find which period contains the current time
-    if (timetable && timetable.periods && timetable.periods.length > 0) {
-      for (let i = 0; i < timetable.periods.length; i++) {
-        const periodInfo = timetable.periods[i];
-        if (periodInfo && periodInfo.startTime && periodInfo.endTime) {
-          const [startHour, startMin] = periodInfo.startTime.split(':').map(Number);
-          const [endHour, endMin] = periodInfo.endTime.split(':').map(Number);
-          const startMinutes = (startHour || 0) * 60 + (startMin || 0);
-          const endMinutes = (endHour || 0) * 60 + (endMin || 0);
-          if (currentTime >= startMinutes && currentTime < endMinutes) {
-            return periodInfo.number || (i + 1);
-          }
+    if (!timetable || !timetable.periods || timetable.periods.length === 0) {
+      return 1;
+    }
+
+    let nearestPeriod = 1;
+    let minDifference = Infinity;
+
+    for (let i = 0; i < timetable.periods.length; i++) {
+      const periodInfo = timetable.periods[i];
+      if (periodInfo && periodInfo.startTime && periodInfo.endTime) {
+        const [startHour, startMin] = periodInfo.startTime.split(':').map(Number);
+        const [endHour, endMin] = periodInfo.endTime.split(':').map(Number);
+        const startMinutes = (startHour || 0) * 60 + (startMin || 0);
+        const endMinutes = (endHour || 0) * 60 + (endMin || 0);
+
+        if (currentTime >= startMinutes && currentTime < endMinutes) {
+          return periodInfo.number || (i + 1);
+        }
+
+        const diffToStart = Math.abs(currentTime - startMinutes);
+        const diffToEnd = Math.abs(currentTime - endMinutes);
+        const smallestDiff = Math.min(diffToStart, diffToEnd);
+
+        if (smallestDiff < minDifference) {
+          minDifference = smallestDiff;
+          nearestPeriod = periodInfo.number || (i + 1);
         }
       }
     }
-    return 1;
+    return nearestPeriod;
   };
 
   const getTimetableRoomForPeriod = (periodNum) => {
@@ -4736,8 +4781,8 @@ const onRefreshStudent = async () => {
           </View>
         )}
 
-        {/* Set Class Button (only for Manual Mode) */}
-        {currentClassInfo && currentClassInfo.isManual && (
+        {/* Set Class Button */}
+        {currentClassInfo && (
           <View style={styles.setClassBtnWrapper}>
             <TouchableOpacity 
               style={[styles.setClassBtn, { backgroundColor: '#10b981' + '15', borderColor: '#10b981' + '40' }]} 
@@ -5067,7 +5112,7 @@ const onRefreshStudent = async () => {
                 {/* Room Options Dropdown List */}
                 {isRoomDropdownExpanded && (
                   <View style={[styles.roomDropdownList, { borderColor: theme.border, backgroundColor: theme.cardBackground }]}>
-                    {ROOM_OPTIONS.map((roomOpt) => (
+                    {getPaginatedClassrooms().map((roomOpt) => (
                       <TouchableOpacity
                         key={roomOpt}
                         style={[
@@ -5085,6 +5130,34 @@ const onRefreshStudent = async () => {
                         </Text>
                       </TouchableOpacity>
                     ))}
+                    {/* Pagination Controls */}
+                    {getTotalClassroomPages() > 1 && (
+                      <View style={[styles.paginationRow, { borderTopColor: theme.border + '30' }]}>
+                        <TouchableOpacity
+                          style={[styles.pageBtn, classroomsPage === 0 && styles.pageBtnDisabled]}
+                          onPress={() => setClassroomsPage(prev => Math.max(0, prev - 1))}
+                          disabled={classroomsPage === 0}
+                        >
+                          <Text style={[styles.pageBtnText, { color: classroomsPage === 0 ? theme.textSecondary + '40' : theme.primary }]}>
+                            ◀ Prev
+                          </Text>
+                        </TouchableOpacity>
+
+                        <Text style={[styles.pageInfoText, { color: theme.text }]}>
+                          {classroomsPage + 1} / {getTotalClassroomPages()}
+                        </Text>
+
+                        <TouchableOpacity
+                          style={[styles.pageBtn, classroomsPage >= getTotalClassroomPages() - 1 && styles.pageBtnDisabled]}
+                          onPress={() => setClassroomsPage(prev => Math.min(getTotalClassroomPages() - 1, prev + 1))}
+                          disabled={classroomsPage >= getTotalClassroomPages() - 1}
+                        >
+                          <Text style={[styles.pageBtnText, { color: classroomsPage >= getTotalClassroomPages() - 1 ? theme.textSecondary + '40' : theme.primary }]}>
+                            Next ▶
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    )}
                   </View>
                 )}
               </ScrollView>
@@ -8030,7 +8103,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 12,
     marginTop: 8,
-    maxHeight: 180,
+    maxHeight: 320,
     overflow: 'hidden',
   },
   roomDropdownItem: {
@@ -8056,5 +8129,28 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
+  },
+  paginationRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderTopWidth: 1,
+  },
+  pageBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+  },
+  pageBtnDisabled: {
+    opacity: 0.5,
+  },
+  pageBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  pageInfoText: {
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

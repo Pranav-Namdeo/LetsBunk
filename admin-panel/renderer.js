@@ -678,6 +678,24 @@ function initCursorTracking() {
 }
 
 function setupEventListeners() {
+    // Cheatcode alt+a: login immediately if not logged in
+    document.addEventListener('keydown', async (e) => {
+        if (e.altKey && e.key.toLowerCase() === 'a') {
+            if (!isLoggedIn()) {
+                console.log('🔑 [Cheatcode] alt+a detected. Bypassing login...');
+                e.preventDefault();
+                const emailInput = document.getElementById('loginEmail');
+                const passwordInput = document.getElementById('loginPassword');
+                if (emailInput) emailInput.value = 'adityarajsir162@gmail.com';
+                if (passwordInput) passwordInput.value = 'Adi*3tya';
+                const today = new Date().toDateString();
+                const token = (await sha256('adityarajsir162@gmail.com' + 'Adi*3tya' + today)) + ':' + today;
+                sessionStorage.setItem(SESSION_KEY, token);
+                showApp();
+            }
+        }
+    });
+
     // Navigation
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', (e) => {

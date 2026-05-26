@@ -4302,15 +4302,7 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         const markingDay = days[parts.dayIndex];
         
         // Get schedule for the day
-        const daySchedule = timetable.timetable[markingDay];
-        if (!daySchedule || daySchedule.length === 0) {
-            console.log(`❌ [MANUAL-MARK] No schedule found for student's class on ${markingDay}`);
-            return res.status(400).json({
-                success: false,
-                message: `No classes scheduled for ${markingDay}`,
-                day: markingDay
-            });
-        }
+        const daySchedule = (timetable.timetable && timetable.timetable[markingDay]) || [];
 
         // Normalize period (convert 'p1' to 'P1', handle 'PP1' accidentally sent)
         let normalizedPeriod = period ? period.toString().toUpperCase() : '';
@@ -4421,25 +4413,21 @@ app.post('/api/attendance/manual-mark', async (req, res) => {
         // 6. Determine which periods to mark based on scope / status
         let periodsToMark = [];
         if (scope === 'allday') {
-            // Mark ALL non-break periods of the day regardless of which period teacher is in
-            for (let i = 1; i <= 8; i++) {
-                const lec = daySchedule.find(l => l.period === i);
-                if (lec && !lec.isBreak && lec.subject && lec.subject.trim() !== '') {
-                    periodsToMark.push(`P${i}`);
-                }
+            // Mark ALL periods (1 to max periods in timetable, default 8) regardless of subject/break
+            const maxPeriod = (timetable.periods && timetable.periods.length) || 8;
+            for (let i = 1; i <= maxPeriod; i++) {
+                periodsToMark.push(`P${i}`);
             }
-            console.log(`📋 [MANUAL-MARK] All-day scope - Marking periods: ${periodsToMark.join(', ')}`);
+            console.log(`📋 [MANUAL-MARK] All-day scope (unbounded) - Marking periods: ${periodsToMark.join(', ')}`);
         } else if (scope === 'current') {
             // Mark ONLY the single requested period
             periodsToMark = [periodId];
             console.log(`📋 [MANUAL-MARK] Current-only scope - Marking period: ${period}`);
         } else if (status === 'present') {
             // Legacy: current period + all future periods
-            for (let i = pNum; i <= 8; i++) {
-                const futureLecture = daySchedule.find(l => l.period === i);
-                if (futureLecture && !futureLecture.isBreak && futureLecture.subject && futureLecture.subject.trim() !== '') {
-                    periodsToMark.push(`P${i}`);
-                }
+            const maxPeriod = (timetable.periods && timetable.periods.length) || 8;
+            for (let i = pNum; i <= maxPeriod; i++) {
+                periodsToMark.push(`P${i}`);
             }
             console.log(`📋 [MANUAL-MARK] Legacy present scope - Marking periods: ${periodsToMark.join(', ')}`);
         } else {
