@@ -3501,7 +3501,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                         console.log(`🛡️ [OFFLINE-SYNC] Guard: Incoming timer (${cappedTimerSeconds}s) is <= DB max timer (${currentMax}s). Skipping update to prevent overwriting.`);
                     } else {
                         const isManuallyMarkedDb = (existingRecord.verificationType === 'manual' && existingRecord.status === 'present');
-                        const isAlreadyPresent = (existingRecord.status === 'present');
+                        const isAlreadyPresent = (existingRecord.status === 'present' && existingRecord.timerSeconds >= thresholdSec);
                         
                         // actualTimerSeconds tracks the student's physical device timer accumulation
                         const newActual = Math.max(existingRecord.actualTimerSeconds || 0, cappedTimerSeconds);
