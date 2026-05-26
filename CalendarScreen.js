@@ -94,11 +94,20 @@ export default function CalendarScreen({
                 setSelectedDateDetails(prev => {
                     if (!prev) return prev;
                     
-                    // Update the active lecture in the lectures array
+                    // Update the incoming period, but never downgrade a persisted/synced value
+                    // with a stale live socket payload. Final Mongo data remains canonical.
                     const updatedLectures = (prev.lectures || []).map(lec => {
-                        // Match either already active or matches the incoming activePeriod
-                        if (lec.status === 'active' || (data.status === 'active' && lec.period === data.activePeriod)) {
-                            return { ...lec, attended: data.timerSeconds, status: data.status };
+                        const isTargetPeriod = data.activePeriod && lec.period === data.activePeriod;
+                        const isCurrentActive = lec.status === 'active';
+                        if (isTargetPeriod || isCurrentActive) {
+                            const incomingSeconds = Number(data.timerSeconds) || 0;
+                            const currentSeconds = Number(lec.attended) || 0;
+                            return {
+                                ...lec,
+                                attended: Math.max(currentSeconds, incomingSeconds),
+                                actualAttended: Math.max(Number(lec.actualAttended) || 0, incomingSeconds),
+                                status: data.status || lec.status
+                            };
                         }
                         return lec;
                     });
@@ -125,8 +134,17 @@ export default function CalendarScreen({
                         const updated = { ...prev, status: data.status };
                         if (updated.lectures) {
                             updated.lectures = updated.lectures.map(lec => {
-                                if (lec.status === 'active') {
-                                    return { ...lec, attended: data.timerSeconds, status: data.status };
+                                const isTargetPeriod = data.activePeriod && lec.period === data.activePeriod;
+                                const isCurrentActive = lec.status === 'active';
+                                if (isTargetPeriod || isCurrentActive) {
+                                    const incomingSeconds = Number(data.timerSeconds) || 0;
+                                    const currentSeconds = Number(lec.attended) || 0;
+                                    return {
+                                        ...lec,
+                                        attended: Math.max(currentSeconds, incomingSeconds),
+                                        actualAttended: Math.max(Number(lec.actualAttended) || 0, incomingSeconds),
+                                        status: data.status || lec.status
+                                    };
                                 }
                                 return lec;
                             });

@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 const mongoose = require("mongoose");
 
 // Complete official set from student_check.txt (both sections: named list + plain enrollment list)

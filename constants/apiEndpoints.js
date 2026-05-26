@@ -94,6 +94,7 @@ export const GET_TIMETABLE_BY_SEMESTER_BRANCH  = (semester, branch) => `${BASE_U
 export const GET_TIMETABLE_CURRENT_PERIOD      = `${BASE_URL}/api/timetable/current-period`;
 export const POST_TIMETABLE                    = `${BASE_URL}/api/timetable`;
 export const PUT_TIMETABLE_BY_SEMESTER_BRANCH  = (semester, branch) => `${BASE_URL}/api/timetable/${semester}/${branch}`;
+export const POST_TIMETABLE_UPDATE_ROOM        = `${BASE_URL}/api/timetable/update-room`;
 
 // ----------------------------
 // Periods
@@ -247,9 +248,10 @@ export const POST_DB_RESYNC_ATTENDANCE = `${BASE_URL}/api/db/resync-attendance`;
 export const POST_DB_WIPE_ALL          = `${BASE_URL}/api/db/resync-attendance`;  // ← /wipe-all removed; use scripts/format-database.js for full wipe
 
 // ----------------------------
-// Admin Utilities
+// Admin Utilities & Notifications
 // ----------------------------
 export const POST_ADMIN_PURGE_ORPHAN_SUBJECTS = `${BASE_URL}/api/admin/purge-orphan-subjects`;
+export const POST_EMAIL_BULK                  = `${BASE_URL}/api/email/bulk`;
 
 // ----------------------------
 // Legacy / Deprecated

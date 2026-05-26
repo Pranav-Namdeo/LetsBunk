@@ -7,6 +7,9 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class LoginActivity : AppCompatActivity() {
 
@@ -20,6 +23,18 @@ class LoginActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        val prefs = getSharedPreferences("app_prefs", MODE_PRIVATE)
+        val isLoggedIn = prefs.getBoolean("is_logged_in", false)
+        val loginDate = prefs.getString("login_date", "")
+        val currentDate = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+
+        if (isLoggedIn && loginDate == currentDate) {
+            startActivity(Intent(this, MainActivity::class.java))
+            finish()
+            return
+        }
+
         setContentView(R.layout.activity_login)
 
         usernameInput = findViewById(R.id.usernameInput)
@@ -37,7 +52,12 @@ class LoginActivity : AppCompatActivity() {
             }
 
             if (username == VALID_USERNAME && password == VALID_PASSWORD) {
-                // Correct credentials — go to main screen
+                // Correct credentials — save login state and date, then go to main screen
+                prefs.edit().apply {
+                    putBoolean("is_logged_in", true)
+                    putString("login_date", currentDate)
+                    apply()
+                }
                 startActivity(Intent(this, MainActivity::class.java))
                 finish()
             } else {

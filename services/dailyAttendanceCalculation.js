@@ -1,6 +1,27 @@
 // Daily Attendance Calculation Service (Task 6)
 const cron = require('node-cron');
 
+// Helper to get start of day in IST (Asia/Kolkata) regardless of server timezone
+function getISTMidnight(date = new Date()) {
+    const d = new Date(date);
+    const offset = 5.5 * 60 * 60 * 1000; // IST is UTC + 5:30
+    const istTime = new Date(d.getTime() + offset);
+    const y = istTime.getUTCFullYear();
+    const m = istTime.getUTCMonth();
+    const day = istTime.getUTCDate();
+    // Return the UTC date that corresponds to 00:00:00 IST
+    return new Date(Date.UTC(y, m, day, 0, 0, 0) - offset);
+}
+
+// Helper to get day of week in IST regardless of server timezone
+function getISTDayOfWeek(date) {
+    const d = new Date(date);
+    const offset = 5.5 * 60 * 60 * 1000; // IST is UTC + 5:30
+    const istTime = new Date(d.getTime() + offset);
+    return istTime.getUTCDay();
+}
+
+
 // Helper: Get default attendance threshold
 async function getAttendanceThreshold(SystemSettings) {
     try {
@@ -23,9 +44,8 @@ async function calculateDailyAttendance(models) {
     console.log('='.repeat(60));
 
     try {
-        // Get today's date
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
+        // Get start of day in IST (Asia/Kolkata) regardless of server timezone
+        const today = getISTMidnight(new Date());
         
         console.log(`📅 [DAILY-CALC] Calculating for date: ${today.toISOString()}`);
 
@@ -54,9 +74,9 @@ async function calculateDailyAttendance(models) {
                     continue;
                 }
 
-                // Get day of week
+                // Get day of week in IST
                 const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-                const dayName = days[today.getDay()];
+                const dayName = days[getISTDayOfWeek(today)];
                 const daySchedule = timetable.timetable[dayName];
 
                 if (!daySchedule || daySchedule.length === 0) {

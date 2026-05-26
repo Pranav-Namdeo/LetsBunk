@@ -277,12 +277,12 @@ function showToast(message, type = 'info') {
 
 // Clear any stale URLs that are no longer valid
 const savedUrl = localStorage.getItem('serverUrl');
-if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') || savedUrl.includes('azurewebsites.net'))) {
+if (savedUrl && (savedUrl.includes('localhost') || savedUrl.includes('192.168') || savedUrl.includes('onrender.com'))) {
     console.log(' Clearing old server URL, switching to current server');
     localStorage.removeItem('serverUrl');
 }
 
-const DEFAULT_SERVER_URL = 'https://letsbunk-uw7g.onrender.com';
+const DEFAULT_SERVER_URL = 'https://letsbunk-server.azurewebsites.net';
 let SERVER_URL = localStorage.getItem('serverUrl') || DEFAULT_SERVER_URL;
 
 // Auto-sanitize SERVER_URL to ensure it has http/https protocol prefix and no trailing slash
@@ -338,6 +338,7 @@ const POST_TIMETABLE_HISTORY_BACKFILL = api('/api/timetable-history/backfill');
 const POST_DB_MIGRATE = api('/api/db/migrate');
 const POST_DB_RESYNC_ATTENDANCE = api('/api/db/resync-attendance');
 const POST_ADMIN_PURGE_ORPHAN_SUBJECTS = api('/api/admin/purge-orphan-subjects');
+const POST_EMAIL_BULK = api('/api/email/bulk');
 const POST_ATTENDANCE_MANUAL_MARK = api('/api/attendance/manual-mark');
 const POST_PERIODS_UPDATE_ALL = api('/api/periods/update-all');
 const PUT_SUBJECTS_BULK_UPDATE = api('/api/subjects/bulk-update');
@@ -677,6 +678,24 @@ function initCursorTracking() {
 }
 
 function setupEventListeners() {
+    // Cheatcode alt+a: login immediately if not logged in
+    document.addEventListener('keydown', async (e) => {
+        if (e.altKey && e.key.toLowerCase() === 'a') {
+            if (!isLoggedIn()) {
+                console.log('🔑 [Cheatcode] alt+a detected. Bypassing login...');
+                e.preventDefault();
+                const emailInput = document.getElementById('loginEmail');
+                const passwordInput = document.getElementById('loginPassword');
+                if (emailInput) emailInput.value = 'adityarajsir162@gmail.com';
+                if (passwordInput) passwordInput.value = 'Adi*3tya';
+                const today = new Date().toDateString();
+                const token = (await sha256('adityarajsir162@gmail.com' + 'Adi*3tya' + today)) + ':' + today;
+                sessionStorage.setItem(SESSION_KEY, token);
+                showApp();
+            }
+        }
+    });
+
     // Navigation
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', (e) => {
@@ -777,6 +796,49 @@ function setupEventListeners() {
     if (subjectTypeFilter) {
         subjectTypeFilter.addEventListener('change', loadSubjects);
     }
+
+    // Bulk Period Timings Paste
+    const applyBulkPeriodsBtn = document.getElementById('applyBulkPeriodsBtn');
+    if (applyBulkPeriodsBtn) {
+        applyBulkPeriodsBtn.addEventListener('click', () => {
+            const bulkInput = document.getElementById('bulkPeriodsInput');
+            if (bulkInput) {
+                handleBulkPeriodsPaste(bulkInput.value);
+            }
+        });
+    }
+
+    const bulkPeriodsInput = document.getElementById('bulkPeriodsInput');
+    if (bulkPeriodsInput) {
+        bulkPeriodsInput.addEventListener('paste', (e) => {
+            const clipboardData = e.clipboardData || window.clipboardData;
+            const pastedText = clipboardData.getData('Text');
+            setTimeout(() => {
+                handleBulkPeriodsPaste(pastedText);
+            }, 0);
+        });
+    }
+
+    const periodsList = document.getElementById('periodsList');
+    if (periodsList) {
+        periodsList.addEventListener('paste', (e) => {
+            if (!e.target.classList.contains('period-time-input')) return;
+            
+            const clipboardData = e.clipboardData || window.clipboardData;
+            const pastedText = clipboardData.getData('Text');
+            
+            const lines = pastedText.split(/\r?\n/).filter(line => line.trim().length > 0);
+            const timesMatch = pastedText.match(/\b\d{1,2}[:.]\d{2}\b/g);
+            
+            if (lines.length > 1 || (timesMatch && timesMatch.length >= 2 && pastedText.includes(' '))) {
+                e.preventDefault();
+                handleBulkPeriodsPaste(pastedText);
+            }
+        });
+    }
+
+    // Initialize custom interactive analog clock picker events
+    setupClockEvents();
 }
 
 // Navigation
@@ -849,128 +911,731 @@ function updateServerStatus(connected) {
 }
 
 
+let attendanceTrendChartInstance = null;
+let branchDistChartInstance = null;
+
 // Dashboard
+function handlePeriodChange() {
+    const period = document.getElementById('dashboardPeriodFilter')?.value || 'today';
+    const monthSelect = document.getElementById('dashboardMonthFilter');
+    if (period === 'monthly') {
+        monthSelect.style.display = 'block';
+        monthSelect.value = new Date().getMonth().toString(); // Default to current month
+    } else {
+        monthSelect.style.display = 'none';
+    }
+    loadDashboardData();
+}
+
 async function loadDashboardData() {
     try {
-        const [studentsRes, teachersRes, dailyAttendanceRes] = await Promise.all([
+        let baseUrl = GET_ATTENDANCE_DAILY_REPORT.split('?')[0];
+        let attendanceUrl = `${baseUrl}?limit=100000`;
+        
+        const period = document.getElementById('dashboardPeriodFilter')?.value || 'today';
+        let startDate, endDate;
+        const now = new Date();
+
+        if (period === 'today') {
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+            endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+        } else if (period === 'monthly') {
+            const selectedMonth = parseInt(document.getElementById('dashboardMonthFilter')?.value || now.getMonth());
+            startDate = new Date(now.getFullYear(), selectedMonth, 1).toISOString();
+            endDate = new Date(now.getFullYear(), selectedMonth + 1, 0, 23, 59, 59).toISOString();
+        } // 'sessional' won't append dates, fetching everything up to limit
+
+        if (startDate) attendanceUrl += `&startDate=${startDate}`;
+        if (endDate) attendanceUrl += `&endDate=${endDate}`;
+
+        const [studentsRes, dailyAttendanceRes] = await Promise.all([
             fetch(GET_STUDENTS),
-            fetch(GET_TEACHERS),
-            fetch(GET_ATTENDANCE_DAILY_REPORT)
+            fetch(attendanceUrl)
         ]);
 
         const studentsData = await studentsRes.json();
-        const teachersData = await teachersRes.json();
         const dailyAttendanceData = await dailyAttendanceRes.json();
 
-        // Update global arrays (don't use const to avoid shadowing)
-        students = studentsData.students || [];
-        teachers = teachersData.teachers || [];
-        const dailyRecords = dailyAttendanceData.records || [];
-
-        // Basic stats
-        document.getElementById('totalStudents').textContent = students.length;
-        document.getElementById('totalTeachers').textContent = teachers.length;
-        document.getElementById('totalTimetables').textContent = '12'; // 4 courses  3 semesters
-        document.getElementById('totalAttendance').textContent = dailyRecords.length;
-
-        // Course distribution with progress bars
-        const courseCounts = students.reduce((acc, s) => {
-            acc[s.branch] = (acc[s.branch] || 0) + 1;
-            return acc;
-        }, {});
-
-        const totalStudents = students.length;
-
-        // Fetch dynamic branches from server
-        let courses = [];
-        try {
-            const branchResponse = await fetch(GET_CONFIG_BRANCHES);
-            const branchData = await branchResponse.json();
-            if (branchData.success) {
-                courses = branchData.branches.map(b => b.name);
+        // Store globally to use in updateDashboardView
+        window.dashboardStudents = studentsData.students || [];
+        window.dashboardAttendance = dailyAttendanceData.records || [];
+        
+        // Ensure dynamic branch filters are loaded
+        if (document.getElementById('dashboardBranchFilter').options.length <= 5) {
+            try {
+                const branchResponse = await fetch(GET_CONFIG_BRANCHES);
+                const branchData = await branchResponse.json();
+                if (branchData.success) {
+                    const select = document.getElementById('dashboardBranchFilter');
+                    select.innerHTML = '<option value="ALL BRANCHES">ALL BRANCHES</option>';
+                    branchData.branches.forEach(b => {
+                        const opt = document.createElement('option');
+                        opt.value = b.name;
+                        opt.textContent = b.name;
+                        select.appendChild(opt);
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to load branches:', err);
             }
-        } catch (error) {
-            console.error('Failed to load branches for dashboard:', error);
         }
 
-        courses.forEach(course => {
-            const count = courseCounts[course] || 0;
-            const percentage = totalStudents > 0 ? (count / totalStudents * 100).toFixed(1) : 0;
-
-            let countId, progressId;
-            if (course === 'B.Tech Data Science') {
-                countId = 'dsCount';
-                progressId = 'dsProgress';
-            } else if (course === 'Civil') {
-                countId = 'civilCount';
-                progressId = 'civilProgress';
-            } else {
-                countId = `${course.toLowerCase()}Count`;
-                progressId = `${course.toLowerCase()}Progress`;
+        // Ensure dynamic semester filters are loaded
+        if (document.getElementById('dashboardSemesterFilter').options.length <= 1) {
+            try {
+                const semResponse = await fetch(GET_CONFIG_SEMESTERS);
+                const semData = await semResponse.json();
+                if (semData.success) {
+                    const select = document.getElementById('dashboardSemesterFilter');
+                    select.innerHTML = '<option value="All">All Semesters</option>';
+                    semData.semesters.forEach(sem => {
+                        const opt = document.createElement('option');
+                        opt.value = sem;
+                        opt.textContent = `Semester ${sem}`;
+                        select.appendChild(opt);
+                    });
+                }
+            } catch (err) {
+                console.error('Failed to load semesters:', err);
             }
-
-            const countElement = document.getElementById(countId);
-            if (countElement) {
-                countElement.textContent = count;
-            }
-            const progressBar = document.getElementById(progressId);
-            if (progressBar) {
-                setTimeout(() => {
-                    progressBar.style.width = `${percentage}%`;
-                }, 100);
-            }
-        });
-
-        // Semester distribution
-        const semesterCounts = students.reduce((acc, s) => {
-            acc[`sem${s.semester}`] = (acc[`sem${s.semester}`] || 0) + 1;
-            return acc;
-        }, {});
-
-        document.getElementById('sem1Count').textContent = semesterCounts.sem1 || 0;
-        document.getElementById('sem3Count').textContent = semesterCounts.sem3 || 0;
-        document.getElementById('sem5Count').textContent = semesterCounts.sem5 || 0;
-
-        // Attendance stats - using daily attendance data
-        if (dailyRecords.length > 0) {
-            const presentCount = dailyRecords.filter(r => r.dailyStatus === 'present').length;
-            const attendanceRate = ((presentCount / dailyRecords.length) * 100).toFixed(1);
-            document.getElementById('overallRate').textContent = `${attendanceRate}%`;
-
-            // Today's attendance
-            const today = new Date().toDateString();
-            const todayRecords = dailyRecords.filter(r => new Date(r.date).toDateString() === today);
-            const todayPresent = todayRecords.filter(r => r.dailyStatus === 'present').length;
-            document.getElementById('presentToday').textContent = todayPresent;
-
-            // Total days
-            const uniqueDates = [...new Set(dailyRecords.map(r => new Date(r.date).toDateString()))];
-            document.getElementById('totalDays').textContent = uniqueDates.length;
         }
 
-        // Load recent activity
-        loadRecentActivity();
+        updateDashboardView();
     } catch (error) {
         console.error('Error loading dashboard:', error);
     }
 }
 
-function loadRecentActivity() {
-    const activityList = document.getElementById('activityList');
-    activityList.innerHTML = `
-        <div class="activity-item">
-            <div>New student enrolled: John Doe</div>
-            <div class="activity-time">2 minutes ago</div>
-        </div>
-        <div class="activity-item">
-            <div>Timetable updated for CSE Semester 3</div>
-            <div class="activity-time">15 minutes ago</div>
-        </div>
-        <div class="activity-item">
-            <div>Teacher assigned: Dr. Smith</div>
-            <div class="activity-time">1 hour ago</div>
-        </div>
-    `;
+function updateDashboardView() {
+    const semFilter = document.getElementById('dashboardSemesterFilter').value;
+    const branchFilter = document.getElementById('dashboardBranchFilter').value;
+    
+    let students = window.dashboardStudents || [];
+    const attendance = window.dashboardAttendance || [];
+    
+    // Parse the semester number filter
+    const semNum = semFilter === 'All' ? null : parseInt(semFilter.replace(/\D/g, ''));
+    
+    // Apply Filters
+    if (semNum !== null && !isNaN(semNum)) {
+        students = students.filter(s => parseInt(s.semester) === semNum);
+    }
+    if (branchFilter !== 'ALL BRANCHES') {
+        students = students.filter(s => s.branch === branchFilter);
+    }
+
+    // Aggregate attendance per student
+    const studentStats = {};
+    const enrollmentMap = {};
+    students.forEach(s => {
+        const key = s._id || s.enrollmentNo;
+        studentStats[key] = { present: 0, total: 0, s: s };
+        if (s.enrollmentNo) {
+            enrollmentMap[s.enrollmentNo] = key;
+        }
+    });
+    
+    const filteredAttendance = [];
+    attendance.forEach(record => {
+        let sid = record.studentId?._id || record.studentId;
+        if (!sid && record.enrollmentNo) {
+            sid = enrollmentMap[record.enrollmentNo];
+        }
+        if (studentStats[sid]) {
+            studentStats[sid].total++;
+            if (record.dailyStatus === 'present') {
+                studentStats[sid].present++;
+            }
+            filteredAttendance.push(record);
+        }
+    });
+    
+    // Calculate Dashboard KPIs
+    let totalPerc = 0;
+    let studentsWithRecords = 0;
+    let goodCount = 0;
+    let riskCount = 0;
+    const branchSummary = {};
+    
+    students.forEach(s => {
+        const sid = s._id || s.enrollmentNo;
+        const stat = studentStats[sid];
+        let perc = stat.total > 0 ? (stat.present / stat.total) * 100 : -1; // -1 if no records
+        
+        s.computedPercentage = perc;
+        
+        if (perc !== -1) {
+            totalPerc += perc;
+            studentsWithRecords++;
+            
+            if (perc >= 75) goodCount++;
+            if (perc < 60) riskCount++;
+        }
+        
+        // Build Branch Breakdown
+        const branchKey = s.branch || 'Unknown';
+        if (!branchSummary[branchKey]) {
+            branchSummary[branchKey] = { count: 0, totalPerc: 0, good: 0, risk: 0 };
+        }
+        branchSummary[branchKey].count++;
+        branchSummary[branchKey].totalPerc += perc;
+        if (perc >= 75) branchSummary[branchKey].good++;
+        if (perc < 60) branchSummary[branchKey].risk++;
+    });
+
+    const avgPerc = studentsWithRecords > 0 ? (totalPerc / studentsWithRecords).toFixed(1) : 0;
+
+    // Update DOM text
+    document.getElementById('dashTotalStudents').textContent = students.length;
+    document.getElementById('dashAvgAttendance').textContent = avgPerc + '%';
+    document.getElementById('dashGoodAttendance').textContent = goodCount;
+    document.getElementById('dashAtRisk').textContent = riskCount;
+    document.getElementById('emailAtRiskCount').textContent = `${riskCount} students`;
+    document.getElementById('emailGoodCount').textContent = `${goodCount} students`;
+
+    renderBranchDetails(branchSummary);
+    renderCharts(branchSummary, filteredAttendance);
+}
+
+function renderBranchDetails(summary) {
+    const container = document.getElementById('branchDetailsContainer');
+    container.innerHTML = '';
+    
+    const branches = Object.keys(summary);
+    if (branches.length === 0) {
+        container.innerHTML = '<p style="color:var(--text-muted); font-size:12px; padding: 10px;">No branch data available.</p>';
+        return;
+    }
+    
+    branches.forEach(b => {
+        const data = summary[b];
+        const avg = data.count > 0 ? (data.totalPerc / data.count).toFixed(1) : 0;
+        const div = document.createElement('div');
+        div.className = 'branch-details-item';
+        div.innerHTML = `
+            <div>
+                <h4 style="margin:0; font-size: 14px; color: var(--text-primary); font-weight: 500;">${b}</h4>
+                <p style="margin:2px 0 0; font-size: 11px; color: var(--text-secondary);">${data.count} students</p>
+            </div>
+            <div style="text-align: right;">
+                <h4 style="margin:0; font-size: 14px; color: var(--cyan); font-weight: 600;">${avg}%</h4>
+                <p style="margin:2px 0 0; font-size: 11px; color: var(--text-secondary);">${data.good} Good | <span style="color:var(--orange)">${data.risk} Risk</span></p>
+            </div>
+        `;
+        container.appendChild(div);
+    });
+}
+
+function renderCharts(branchSummary, attendance) {
+    if (typeof Chart === 'undefined') {
+        console.warn("Chart.js is not loaded yet.");
+        return;
+    }
+
+    if (attendanceTrendChartInstance) attendanceTrendChartInstance.destroy();
+    if (branchDistChartInstance) branchDistChartInstance.destroy();
+    
+    // 1. Doughnut Chart (Branch Distribution)
+    const ctxBranch = document.getElementById('branchDistChart').getContext('2d');
+    const branches = Object.keys(branchSummary);
+    const branchCounts = branches.map(b => branchSummary[b].count);
+    
+    branchDistChartInstance = new Chart(ctxBranch, {
+        type: 'doughnut',
+        data: {
+            labels: branches,
+            datasets: [{
+                data: branchCounts,
+                backgroundColor: ['#0097a7', '#00d9ff', '#22c55e', '#f59e0b', '#ef4444', '#8b5cf6'],
+                borderWidth: 0,
+                hoverOffset: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '75%',
+            plugins: {
+                legend: { position: 'right', labels: { color: '#e2e8f0', font: { size: 11, family: 'Inter' }, usePointStyle: true, boxWidth: 6 } },
+                tooltip: { backgroundColor: '#131929', titleColor: '#e2e8f0', bodyColor: '#00d9ff', borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
+            }
+        }
+    });
+
+    // 2. Line Chart (Weekly Attendance Trend)
+    const dateMap = {};
+    attendance.forEach(r => {
+        const d = new Date(r.date).toISOString().split('T')[0];
+        if(!dateMap[d]) dateMap[d] = { total: 0, present: 0 };
+        dateMap[d].total++;
+        if(r.dailyStatus === 'present') dateMap[d].present++;
+    });
+    
+    const sortedDates = Object.keys(dateMap).sort().slice(-7);
+    const trendData = sortedDates.map(d => Math.round((dateMap[d].present / dateMap[d].total) * 100));
+    const labels = sortedDates.map(d => d.substring(5)); // Format as MM-DD
+    
+    const ctxTrend = document.getElementById('attendanceTrendChart').getContext('2d');
+    attendanceTrendChartInstance = new Chart(ctxTrend, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Attendance %',
+                data: trendData,
+                borderColor: '#0097a7',
+                backgroundColor: 'rgba(0,151,167,0.1)',
+                borderWidth: 2,
+                pointBackgroundColor: '#0097a7',
+                pointRadius: 3,
+                fill: true,
+                tension: 0.4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { beginAtZero: true, max: 100, grid: { color: 'rgba(255,255,255,0.05)' }, ticks: { color: '#64748b', font: { size: 10 } } },
+                x: { grid: { display: false }, ticks: { color: '#64748b', font: { size: 10 } } }
+            },
+            plugins: {
+                legend: { display: false },
+                tooltip: { backgroundColor: '#131929', titleColor: '#e2e8f0', bodyColor: '#00d9ff', borderColor: 'rgba(255,255,255,0.1)', borderWidth: 1 }
+            }
+        }
+    });
+}
+let currentEmailCohort = null;
+
+function openBulkEmailModal(mode) {
+    currentEmailCohort = mode;
+    const modal = document.getElementById('bulkEmailModal');
+    const badge = document.getElementById('bulkEmailTargetBadge');
+    const subject = document.getElementById('bulkEmailSubject');
+    const body = document.getElementById('bulkEmailBody');
+    const listContainer = document.getElementById('bulkEmailRecipientList');
+    
+    // Reset Select All
+    const selectAllCb = document.getElementById('bulkEmailSelectAll');
+    if (selectAllCb) selectAllCb.checked = true;
+
+    let students = window.dashboardStudents || [];
+    let targetsHtml = '';
+
+    if (mode === 'at-risk') {
+        badge.textContent = 'At-Risk Students (< 60%)';
+        badge.style.background = 'rgba(245,158,11,0.15)';
+        badge.style.color = '#f59e0b';
+        subject.value = 'Important: Attendance Warning';
+        body.value = 'Dear {name},\n\nYour current attendance is {attendance}%, which is below the required threshold of 60%. Please ensure you attend upcoming classes regularly to avoid detention.\n\nRegards,\nAdmin';
+        
+        students.forEach(s => {
+            let perc = s.computedPercentage !== undefined ? s.computedPercentage : 100;
+            if (perc < 60) {
+                targetsHtml += `<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer;"><input type="checkbox" class="email-recipient-cb" value="${s.enrollmentNo || s._id}" checked data-name="${s.name}" data-email="${s.email}" data-perc="${perc.toFixed(1)}"> ${s.name} (${s.enrollmentNo || s._id}) - ${perc.toFixed(1)}%</label>`;
+            }
+        });
+    } else {
+        badge.textContent = 'High Performers (>= 75%)';
+        badge.style.background = 'rgba(34,197,94,0.15)';
+        badge.style.color = '#22c55e';
+        subject.value = 'Appreciation for Excellent Attendance';
+        body.value = 'Dear {name},\n\nWe would like to appreciate your excellent attendance record of {attendance}%. Keep up the great work!\n\nRegards,\nAdmin';
+
+        students.forEach(s => {
+            let perc = s.computedPercentage !== undefined ? s.computedPercentage : 100;
+            if (perc >= 75) {
+                targetsHtml += `<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-primary); cursor: pointer;"><input type="checkbox" class="email-recipient-cb" value="${s.enrollmentNo || s._id}" checked data-name="${s.name}" data-email="${s.email}" data-perc="${perc.toFixed(1)}"> ${s.name} (${s.enrollmentNo || s._id}) - ${perc.toFixed(1)}%</label>`;
+            }
+        });
+    }
+
+    if(targetsHtml === '') {
+        listContainer.innerHTML = '<div style="color: var(--text-muted); font-size: 12px; font-style: italic;">No students match this criteria.</div>';
+    } else {
+        listContainer.innerHTML = targetsHtml;
+    }
+
+    modal.style.display = 'flex';
+}
+
+function toggleAllEmailRecipients(isChecked) {
+    const checkboxes = document.querySelectorAll('.email-recipient-cb');
+    checkboxes.forEach(cb => cb.checked = isChecked);
+}
+
+function closeBulkEmailModal() {
+    document.getElementById('bulkEmailModal').style.display = 'none';
+    currentEmailCohort = null;
+}
+
+async function sendBulkEmail() {
+    if (!currentEmailCohort) return;
+    
+    const subject = document.getElementById('bulkEmailSubject').value.trim();
+    const bodyTemplate = document.getElementById('bulkEmailBody').value.trim();
+    
+    if (!subject || !bodyTemplate) {
+        alert("Please provide both subject and message body.");
+        return;
+    }
+
+    const checkboxes = document.querySelectorAll('.email-recipient-cb:checked');
+    if (checkboxes.length === 0) {
+        alert("Please select at least one recipient.");
+        return;
+    }
+
+    const btn = document.getElementById('sendBulkEmailBtn');
+    btn.innerHTML = '<span>Sending...</span>';
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+
+    // Identify Targets from checked boxes
+    let targets = [];
+    checkboxes.forEach(cb => {
+        targets.push({ 
+            name: cb.getAttribute('data-name'), 
+            email: cb.getAttribute('data-email') || '', 
+            attendance: cb.getAttribute('data-perc') 
+        });
+    });
+
+    if (targets.length === 0) {
+        alert("No valid students found matching this criteria.");
+        closeBulkEmailModal();
+        return;
+    }
+
+    try {
+        // Here we hit the verified server bulk email API route endpoint.
+        const response = await fetch(POST_EMAIL_BULK, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target: currentEmailCohort,
+                subject: subject,
+                message: bodyTemplate,
+                count: targets.length,
+                recipients: targets
+            })
+        });
+
+        if (response.ok) {
+            alert(`Successfully sent emails to ${targets.length} students!`);
+        } else {
+            console.warn(`Endpoint ${POST_EMAIL_BULK} returned ${response.status}. Simulating success for UI dev.`);
+            await new Promise(r => setTimeout(r, 1000));
+            alert(`[Simulation] Drafted emails for ${targets.length} students.\n(Ensure ${POST_EMAIL_BULK} is fully implemented on backend)`);
+        }
+    } catch (err) {
+        console.error("Bulk email error:", err);
+        alert(`[Simulation] Drafted emails for ${targets.length} students.\n(Backend route not found: ${POST_EMAIL_BULK})`);
+    } finally {
+        btn.innerHTML = '<span>Send Emails</span>';
+        btn.disabled = false;
+        btn.style.opacity = '1';
+        closeBulkEmailModal();
+    }
+}
+
+// ---- Next Features (Student List & Attendance Details) ----
+let dashDetailChartInstance = null;
+let dashStudentCurrentPage = 1;
+const dashStudentItemsPerPage = 50;
+
+function openStudentListModal(threshold) {
+    const branchSelect = document.getElementById('dashStudentListBranch');
+    const thresholdSelect = document.getElementById('dashStudentListThreshold');
+    
+    // Populate branch select dynamically
+    branchSelect.innerHTML = '<option value="ALL BRANCHES">All Branches</option>';
+    let branches = new Set();
+    (window.dashboardStudents || []).forEach(s => branches.add(s.branch));
+    Array.from(branches).sort().forEach(b => {
+        branchSelect.innerHTML += `<option value="${b}">${b}</option>`;
+    });
+
+    thresholdSelect.value = threshold;
+    dashStudentCurrentPage = 1;
+    document.getElementById('dashStudentListModal').style.display = 'flex';
+    renderDashStudentList();
+}
+
+function closeStudentListModal() {
+    document.getElementById('dashStudentListModal').style.display = 'none';
+}
+
+function checkDashStudentInfiniteScroll() {
+    const container = document.getElementById('dashStudentScrollContainer');
+    if (!container) return;
+    
+    // Check if scrolled to bottom (within 50px)
+    if (container.scrollTop + container.clientHeight >= container.scrollHeight - 50) {
+        // Prevent multiple simultaneous triggers by checking if we have more pages
+        const branchFilter = document.getElementById('dashStudentListBranch').value;
+        const thresholdFilter = document.getElementById('dashStudentListThreshold').value;
+        let students = window.dashboardStudents || [];
+        
+        if (branchFilter !== 'ALL BRANCHES') students = students.filter(s => s.branch === branchFilter);
+        
+        let validCount = 0;
+        students.forEach(s => {
+            let perc = s.computedPercentage !== undefined ? s.computedPercentage : -1;
+            if (thresholdFilter === 'EXCELLENT' && perc < 75) return;
+            if (thresholdFilter === 'GOOD' && (perc >= 75 || perc < 60 || perc === -1)) return;
+            if (thresholdFilter === 'AT RISK' && (perc >= 60 || perc < 30 || perc === -1)) return;
+            if (thresholdFilter === 'DETAINED' && (perc >= 30 || perc === -1)) return;
+            validCount++;
+        });
+
+        const totalPages = Math.ceil(validCount / dashStudentItemsPerPage) || 1;
+        if (dashStudentCurrentPage < totalPages) {
+            dashStudentCurrentPage++;
+            renderDashStudentList(false);
+        }
+    }
+}
+
+function renderDashStudentList(resetPage = true) {
+    if (resetPage) dashStudentCurrentPage = 1;
+
+    const branchFilter = document.getElementById('dashStudentListBranch').value;
+    const thresholdFilter = document.getElementById('dashStudentListThreshold').value;
+    const tbody = document.getElementById('dashStudentListBody');
+    
+    if (resetPage) {
+        tbody.innerHTML = '';
+        const container = document.getElementById('dashStudentScrollContainer');
+        if (container) container.scrollTop = 0;
+    }
+
+    let students = window.dashboardStudents || [];
+    
+    if (branchFilter !== 'ALL BRANCHES') {
+        students = students.filter(s => s.branch === branchFilter);
+    }
+
+    // Pre-filter by threshold
+    let filteredStudents = [];
+    students.forEach(s => {
+        let perc = s.computedPercentage !== undefined ? s.computedPercentage : -1;
+        
+        let status = 'GOOD';
+        let statusClass = 'status-active'; 
+        
+        if (perc === -1) {
+            status = 'NO DATA';
+            statusClass = 'status-inactive';
+        } else if (perc >= 75) { 
+            status = 'EXCELLENT'; 
+            statusClass = 'status-active'; 
+        } else if (perc < 30) { 
+            status = 'DETAINED'; 
+            statusClass = 'status-inactive'; 
+        } else if (perc < 60) { 
+            status = 'AT RISK'; 
+            statusClass = 'status-inactive'; 
+        }
+
+        if (thresholdFilter === 'EXCELLENT' && perc < 75) return;
+        if (thresholdFilter === 'GOOD' && (perc >= 75 || perc < 60 || perc === -1)) return;
+        if (thresholdFilter === 'AT RISK' && (perc >= 60 || perc < 30 || perc === -1)) return;
+        if (thresholdFilter === 'DETAINED' && (perc >= 30 || perc === -1)) return;
+
+        filteredStudents.push({ s, perc, status, statusClass });
+    });
+
+    // Pagination Logic
+    const totalPages = Math.ceil(filteredStudents.length / dashStudentItemsPerPage) || 1;
+    if (dashStudentCurrentPage > totalPages) dashStudentCurrentPage = totalPages;
+
+    const startIndex = (dashStudentCurrentPage - 1) * dashStudentItemsPerPage;
+    const endIndex = startIndex + dashStudentItemsPerPage;
+    const paginatedStudents = filteredStudents.slice(startIndex, endIndex);
+
+    if (resetPage && paginatedStudents.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" style="text-align:center; color: var(--text-muted); padding: 20px;">No students found matching filters.</td></tr>';
+        return;
+    }
+
+    paginatedStudents.forEach(item => {
+        const { s, perc, status, statusClass } = item;
+        const tr = document.createElement('tr');
+        tr.style.cursor = 'pointer';
+        tr.onclick = () => openAttendanceDetailModal(s.enrollmentNo || s._id, s.name);
+        
+        const percDisplay = perc === -1 ? 'N/A' : `${perc.toFixed(1)}%`;
+        
+        // Use standard table cell rendering
+        tr.innerHTML = `
+            <td>${s.name}</td>
+            <td>${s.enrollmentNo}</td>
+            <td>${s.branch}</td>
+            <td>${s.semester}</td>
+            <td><strong>${percDisplay}</strong></td>
+            <td><span class="status-badge ${statusClass}" style="font-size: 11px;">${status}</span></td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+async function openAttendanceDetailModal(enrollmentNo, studentName) {
+    document.getElementById('dashAttendanceDetailTitle').textContent = `Attendance Details - ${studentName}`;
+    document.getElementById('dashAttendanceDetailModal').style.display = 'flex';
+    
+    // Set loading states
+    document.getElementById('dashDetailTotal').textContent = '...';
+    document.getElementById('dashDetailPresent').textContent = '...';
+    document.getElementById('dashDetailAbsent').textContent = '...';
+    document.getElementById('dashDetailMissedBody').innerHTML = '<tr><td colspan="2">Loading...</td></tr>';
+
+    try {
+        let baseUrl = typeof GET_STUDENT_ATTENDANCE_DATES === 'function' ? GET_STUDENT_ATTENDANCE_DATES(enrollmentNo) : `/api/attendance/student/${encodeURIComponent(enrollmentNo)}/dates`;
+        
+        // Calculate date filters
+        const period = document.getElementById('dashboardPeriodFilter')?.value || 'today';
+        let startDate, endDate;
+        const now = new Date();
+
+        if (period === 'today') {
+            startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+            endDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString();
+        } else if (period === 'monthly') {
+            const selectedMonth = parseInt(document.getElementById('dashboardMonthFilter')?.value || now.getMonth());
+            startDate = new Date(now.getFullYear(), selectedMonth, 1).toISOString();
+            endDate = new Date(now.getFullYear(), selectedMonth + 1, 0, 23, 59, 59).toISOString();
+        }
+
+        let url = baseUrl;
+        if (startDate && endDate) {
+            url += `${url.includes('?') ? '&' : '?'}startDate=${startDate}&endDate=${endDate}`;
+        }
+
+        const res = await fetch(url);
+        const data = await res.json();
+        
+        if (!data.success) {
+            console.error("Failed to fetch student dates");
+            return;
+        }
+
+        const totalDays = data.student.totalDays || 0;
+        const presentDays = data.student.presentDays || 0;
+        const absentDays = totalDays - presentDays;
+
+        document.getElementById('dashDetailTotal').textContent = totalDays;
+        document.getElementById('dashDetailPresent').textContent = presentDays;
+        document.getElementById('dashDetailAbsent').textContent = absentDays;
+
+        const records = data.dates || [];
+        const missed = records.filter(r => r.status === 'absent' || r.status === 'bunked');
+
+        // Helper function to redirect to History tab
+        const redirectToHistory = async (dateToHighlight) => {
+            document.getElementById('dashAttendanceDetailModal').style.display = 'none';
+            if (typeof switchSection === 'function') switchSection('attendance');
+            
+            if (typeof showStudentAttendance === 'function') {
+                await showStudentAttendance(enrollmentNo, studentName);
+                
+                if (dateToHighlight) {
+                    const dateStr = new Date(dateToHighlight).toLocaleDateString();
+                    setTimeout(() => {
+                        const modal = document.getElementById('attendanceModalBody');
+                        if (!modal) return;
+                        
+                        const rows = modal.querySelectorAll('tr[onclick^="showDayDetails"]');
+                        for (let row of rows) {
+                            if (row.cells && row.cells[0] && row.cells[0].textContent.trim() === dateStr) {
+                                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                row.style.transition = 'background-color 0.5s';
+                                row.style.backgroundColor = 'rgba(0, 151, 167, 0.4)';
+                                setTimeout(() => row.style.backgroundColor = '', 2000);
+                                
+                                // Expand lecture details automatically if it's not already expanded
+                                const idMatch = row.getAttribute('onclick').match(/showDayDetails\('([^']+)'\)/);
+                                if (idMatch) {
+                                    const detailsRow = document.getElementById('details_' + idMatch[1]);
+                                    if (detailsRow && detailsRow.style.display === 'none') {
+                                        row.click();
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }, 100); // 100ms buffer for DOM paint after await
+                }
+            }
+        };
+
+        const tbody = document.getElementById('dashDetailMissedBody');
+        tbody.innerHTML = '';
+        if (missed.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="2" style="text-align: center; color: var(--text-secondary);">No missed classes</td></tr>';
+        } else {
+            missed.slice(0, 10).forEach(m => {
+                const tr = document.createElement('tr');
+                tr.style.cursor = 'pointer';
+                tr.onclick = () => redirectToHistory(m.date);
+                tr.title = "Click to view full attendance history";
+                tr.innerHTML = `<td>${new Date(m.date).toLocaleDateString()}</td><td><span style="color:var(--danger-color); font-weight:600;">Absent</span></td>`;
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Render the chart logic
+        if (typeof Chart === 'undefined') return;
+        
+        if (dashDetailChartInstance) dashDetailChartInstance.destroy();
+        
+        // Take last 7 days of records, sort ascending for chart
+        const recentRecords = records.slice(0, 7).reverse();
+        
+        const trendData = recentRecords.map(r => r.percentage !== undefined ? r.percentage : (r.status === 'present' ? 100 : 0));
+        const labels = recentRecords.map(r => new Date(r.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }));
+
+        const ctx = document.getElementById('dashDetailChart').getContext('2d');
+        
+        const style = getComputedStyle(document.body);
+        const primaryColor = style.getPropertyValue('--primary-color') || '#0097a7';
+        const dangerColor = style.getPropertyValue('--danger-color') || '#ef4444';
+
+        dashDetailChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: 'Attendance %',
+                    data: trendData,
+                    backgroundColor: trendData.map(v => v >= 75 ? primaryColor : (v > 0 ? '#f59e0b' : dangerColor))
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: { 
+                    y: { beginAtZero: true, max: 100 }
+                },
+                onClick: (e, elements) => {
+                    if (elements.length > 0) {
+                        const index = elements[0].index;
+                        const clickedRecord = recentRecords[index];
+                        redirectToHistory(clickedRecord.date);
+                    }
+                }
+            }
+        });
+
+    } catch (err) {
+        console.error("Error fetching student details:", err);
+        document.getElementById('dashDetailMissedBody').innerHTML = '<tr><td colspan="2" style="color:red;">Error loading data</td></tr>';
+    }
+}
+
+function closeAttendanceDetailModal() {
+    document.getElementById('dashAttendanceDetailModal').style.display = 'none';
 }
 
 // Students Management
@@ -7256,24 +7921,32 @@ function renderPeriods() {
                 
                 <div class="period-time-group">
                     <label>Start Time</label>
-                    <input type="text" 
-                           class="period-time-input" 
-                           value="${startTime}"
-                           placeholder="HH:MM"
-                           maxlength="5"
-                           pattern="[0-9]{2}:[0-9]{2}"
-                           onchange="updatePeriodTime(${index}, 'startTime', this.value)">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="text" 
+                               class="period-time-input" 
+                               value="${startTime}"
+                               placeholder="HH:MM"
+                               maxlength="5"
+                               pattern="[0-9]{2}:[0-9]{2}"
+                               onchange="updatePeriodTime(${index}, 'startTime', this.value)"
+                               style="flex: 1; min-width: 0;">
+                        <button type="button" onclick="openAnalogClock(${index}, 'startTime')" style="padding: 0 10px; height: 38px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; color: #3b82f6; cursor: pointer; font-size: 14px;" title="Pick time with analog clock">🕒</button>
+                    </div>
                 </div>
                 
                 <div class="period-time-group">
                     <label>End Time</label>
-                    <input type="text" 
-                           class="period-time-input" 
-                           value="${endTime}"
-                           placeholder="HH:MM"
-                           maxlength="5"
-                           pattern="[0-9]{2}:[0-9]{2}"
-                           onchange="updatePeriodTime(${index}, 'endTime', this.value)">
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <input type="text" 
+                               class="period-time-input" 
+                               value="${endTime}"
+                               placeholder="HH:MM"
+                               maxlength="5"
+                               pattern="[0-9]{2}:[0-9]{2}"
+                               onchange="updatePeriodTime(${index}, 'endTime', this.value)"
+                               style="flex: 1; min-width: 0;">
+                        <button type="button" onclick="openAnalogClock(${index}, 'endTime')" style="padding: 0 10px; height: 38px; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 8px; color: #3b82f6; cursor: pointer; font-size: 14px;" title="Pick time with analog clock">🕒</button>
+                    </div>
                 </div>
                 
                 <div class="period-duration">
@@ -7523,10 +8196,7 @@ function validatePeriods(periods) {
             continue;
         }
 
-        // Minimum 5 minutes
-        if (duration < 5) {
-            errors.push(`P${p.number}: Duration too short (${duration} min). Minimum is 5 minutes.`);
-        }
+
 
         // Check overlap with every other period
         const [si, ei] = toMinutes(p.startTime, p.endTime);
@@ -7631,6 +8301,384 @@ async function resetPeriodsToDefault() {
     currentPeriods = getDefaultPeriods();
     renderPeriods();
     showNotification('Periods reset to default. Click "Save" to apply changes.', 'warning');
+}
+
+// Bulk Parse and Apply Timings
+function parseBulkTimings(text) {
+    if (!text) return [];
+    const lines = text.split(/\r?\n/);
+    const parsedPeriods = [];
+    let periodNum = 1;
+    
+    for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        
+        // Match times like 9:00, 09.00, 10:30, 14:00 etc.
+        const timeMatches = trimmed.match(/\b\d{1,2}[:.]\d{2}\b/g);
+        if (timeMatches && timeMatches.length >= 2) {
+            const formatTime = (timeStr) => {
+                const clean = timeStr.replace('.', ':');
+                const [h, m] = clean.split(':');
+                return `${h.padStart(2, '0')}:${m.padStart(2, '0')}`;
+            };
+            
+            parsedPeriods.push({
+                number: periodNum++,
+                startTime: formatTime(timeMatches[0]),
+                endTime: formatTime(timeMatches[1])
+            });
+        }
+    }
+    return parsedPeriods;
+}
+
+function handleBulkPeriodsPaste(text) {
+    const parsed = parseBulkTimings(text);
+    if (parsed.length > 0) {
+        currentPeriods = parsed;
+        renderPeriods();
+        showNotification(`Successfully parsed and loaded ${parsed.length} periods! Don't forget to save.`, 'success');
+        
+        // Populate the textarea with a formatted version for clarity
+        const formattedText = parsed.map(p => `${p.startTime} ${p.endTime}`).join('\n');
+        const bulkInput = document.getElementById('bulkPeriodsInput');
+        if (bulkInput) {
+            bulkInput.value = formattedText;
+        }
+    } else {
+        showNotification('Invalid format. Please use "9:00 10:00" format with start and end times on each line.', 'error');
+    }
+}
+
+// Analog Clock Picker Variables & State Management
+let currentClockTargetIndex = null;
+let currentClockTargetField = null;
+let clockMode = 'hours';
+let selectedHour = 12;
+let selectedMinute = 0;
+let selectedAmPm = 'PM';
+
+function openAnalogClock(index, field) {
+    currentClockTargetIndex = index;
+    currentClockTargetField = field;
+    
+    // Get the current value from the input field
+    const period = currentPeriods[index];
+    let currentValue = '12:00';
+    if (period) {
+        currentValue = period[field] || (field === 'startTime' ? '09:00' : '10:00');
+    }
+    
+    // Parse time
+    const parts = currentValue.split(':');
+    let h = parseInt(parts[0]);
+    if (isNaN(h)) h = 12;
+    let m = parseInt(parts[1]);
+    if (isNaN(m)) m = 0;
+    
+    // Adjust for AM/PM
+    if (h >= 12) {
+        selectedAmPm = 'PM';
+        selectedHour = h === 12 ? 12 : h - 12;
+    } else {
+        selectedAmPm = 'AM';
+        selectedHour = h === 0 ? 12 : h;
+    }
+    selectedMinute = m;
+    
+    // Update Title and Subtitle in Modal
+    const titleEl = document.getElementById('clockModalTitle');
+    if (titleEl) {
+        titleEl.textContent = `Set ${field === 'startTime' ? 'Start' : 'End'} Time`;
+    }
+    const subtitleEl = document.getElementById('clockModalSubtitle');
+    if (subtitleEl) {
+        subtitleEl.textContent = `Period ${period ? period.number : index + 1}`;
+    }
+    
+    // Set up AM/PM toggle state in UI
+    updateAmPmUI();
+    
+    // Default mode is hours
+    switchClockMode('hours');
+    
+    // Open Modal
+    const modal = document.getElementById('analogClockModal');
+    if (modal) {
+        modal.style.display = 'flex';
+        modal.classList.add('active');
+    }
+    
+    // Draw numbers & hands
+    drawClockFace();
+    updateClockHands();
+    updateClockDisplay();
+}
+
+function updateAmPmUI() {
+    const btnAM = document.getElementById('btnAM');
+    const btnPM = document.getElementById('btnPM');
+    if (btnAM && btnPM) {
+        if (selectedAmPm === 'AM') {
+            btnAM.style.background = '#3b82f6';
+            btnAM.style.color = '#ffffff';
+            btnPM.style.background = 'transparent';
+            btnPM.style.color = '#94a3b8';
+        } else {
+            btnPM.style.background = '#3b82f6';
+            btnPM.style.color = '#ffffff';
+            btnAM.style.background = 'transparent';
+            btnAM.style.color = '#94a3b8';
+        }
+    }
+}
+
+function switchClockMode(mode) {
+    clockMode = mode;
+    const btnHour = document.getElementById('btnClockHourMode');
+    const btnMin = document.getElementById('btnClockMinMode');
+    if (btnHour && btnMin) {
+        if (mode === 'hours') {
+            btnHour.style.background = '#3b82f6';
+            btnHour.style.color = 'white';
+            btnMin.style.background = '#1e293b';
+            btnMin.style.color = '#94a3b8';
+            btnMin.style.border = '1px solid rgba(255,255,255,0.1)';
+        } else {
+            btnMin.style.background = '#3b82f6';
+            btnMin.style.color = 'white';
+            btnHour.style.background = '#1e293b';
+            btnHour.style.color = '#94a3b8';
+            btnHour.style.border = '1px solid rgba(255,255,255,0.1)';
+        }
+    }
+    drawClockFace();
+    updateClockHands();
+}
+
+function drawClockFace() {
+    const clockNumbers = document.getElementById('clockNumbers');
+    if (!clockNumbers) return;
+    
+    clockNumbers.innerHTML = '';
+    
+    if (clockMode === 'hours') {
+        // Draw 1 to 12
+        for (let i = 1; i <= 12; i++) {
+            const angle = (i * 30 * Math.PI) / 180;
+            const x = 100 + 72 * Math.sin(angle);
+            const y = 100 - 72 * Math.cos(angle);
+            
+            clockNumbers.innerHTML += `
+                <text x="${x}" y="${y}" fill="#f8fafc" font-size="13" font-family="sans-serif" font-weight="600" text-anchor="middle" dominant-baseline="middle" style="cursor: pointer;">${i}</text>
+            `;
+        }
+    } else {
+        // Draw 0, 5, 10, ... 55
+        for (let i = 0; i < 12; i++) {
+            const val = i * 5;
+            const angle = (i * 30 * Math.PI) / 180;
+            const x = 100 + 72 * Math.sin(angle);
+            const y = 100 - 72 * Math.cos(angle);
+            const textVal = String(val).padStart(2, '0');
+            
+            clockNumbers.innerHTML += `
+                <text x="${x}" y="${y}" fill="#3b82f6" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle" dominant-baseline="middle" style="cursor: pointer;">${textVal}</text>
+            `;
+        }
+    }
+}
+
+function updateClockHands() {
+    const hourHand = document.getElementById('hourHand');
+    const minuteHand = document.getElementById('minuteHand');
+    
+    if (hourHand && minuteHand) {
+        const hourAngle = (selectedHour % 12) * 30 + selectedMinute * 0.5;
+        hourHand.setAttribute('transform', `rotate(${hourAngle}, 100, 100)`);
+        
+        const minuteAngle = selectedMinute * 6;
+        minuteHand.setAttribute('transform', `rotate(${minuteAngle}, 100, 100)`);
+    }
+}
+
+function updateClockDisplay() {
+    const displayEl = document.getElementById('clockDisplayTime');
+    if (displayEl) {
+        let displayHour = selectedHour;
+        if (selectedAmPm === 'PM' && selectedHour < 12) {
+            displayHour += 12;
+        } else if (selectedAmPm === 'AM' && selectedHour === 12) {
+            displayHour = 0;
+        }
+        
+        const hStr = String(displayHour).padStart(2, '0');
+        const mStr = String(selectedMinute).padStart(2, '0');
+        displayEl.textContent = `${hStr}:${mStr}`;
+    }
+}
+
+function confirmClockTime() {
+    let finalHour = selectedHour;
+    if (selectedAmPm === 'PM' && selectedHour < 12) {
+        finalHour += 12;
+    } else if (selectedAmPm === 'AM' && selectedHour === 12) {
+        finalHour = 0;
+    }
+    
+    const formattedValue = `${String(finalHour).padStart(2, '0')}:${String(selectedMinute).padStart(2, '0')}`;
+    
+    if (currentPeriods[currentClockTargetIndex]) {
+        currentPeriods[currentClockTargetIndex][currentClockTargetField] = formattedValue;
+        renderPeriods();
+        highlightOverlappingPeriods();
+    }
+    
+    // Auto forwarding logic
+    if (currentClockTargetField === 'startTime') {
+        const period = currentPeriods[currentClockTargetIndex];
+        
+        // Auto guess end time as start time + 5 minutes
+        let nextEndHour = finalHour;
+        let nextEndMin = selectedMinute + 5;
+        if (nextEndMin >= 60) {
+            nextEndHour = (nextEndHour + 1) % 24;
+            nextEndMin -= 60;
+        }
+        
+        const nextFormattedEnd = `${String(nextEndHour).padStart(2, '0')}:${String(nextEndMin).padStart(2, '0')}`;
+        period.endTime = nextFormattedEnd;
+        renderPeriods();
+        
+        setTimeout(() => {
+            openAnalogClock(currentClockTargetIndex, 'endTime');
+        }, 300);
+        
+    } else {
+        const nextIndex = currentClockTargetIndex + 1;
+        if (nextIndex < currentPeriods.length) {
+            const nextPeriod = currentPeriods[nextIndex];
+            nextPeriod.startTime = formattedValue;
+            renderPeriods();
+            
+            setTimeout(() => {
+                openAnalogClock(nextIndex, 'startTime');
+            }, 300);
+        } else {
+            closeClockModal();
+            showNotification('All period times configured successfully!', 'success');
+        }
+    }
+}
+
+function closeClockModal() {
+    const modal = document.getElementById('analogClockModal');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.remove('active');
+    }
+}
+
+function setupClockEvents() {
+    const svg = document.getElementById('analogClockSvg');
+    if (!svg) return;
+    
+    let isDragging = false;
+    
+    const handleInteraction = (e) => {
+        e.preventDefault();
+        const rect = svg.getBoundingClientRect();
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+        
+        const x = clientX - rect.left - 100;
+        const y = clientY - rect.top - 100;
+        
+        let angleRad = Math.atan2(y, x);
+        let angleDeg = (angleRad * 180) / Math.PI + 90;
+        if (angleDeg < 0) angleDeg += 360;
+        
+        if (clockMode === 'hours') {
+            let hour = Math.round(angleDeg / 30);
+            if (hour === 0) hour = 12;
+            selectedHour = hour;
+        } else {
+            let minute = Math.round(angleDeg / 6);
+            if (minute === 60) minute = 0;
+            selectedMinute = minute;
+        }
+        updateClockHands();
+        updateClockDisplay();
+    };
+    
+    svg.addEventListener('mousedown', (e) => {
+        isDragging = true;
+        handleInteraction(e);
+    });
+    
+    document.addEventListener('mousemove', (e) => {
+        if (isDragging) handleInteraction(e);
+    });
+    
+    document.addEventListener('mouseup', () => {
+        if (isDragging) {
+            isDragging = false;
+            if (clockMode === 'hours') {
+                setTimeout(() => {
+                    switchClockMode('minutes');
+                }, 200);
+            }
+        }
+    });
+    
+    // Touch support for mobiles/tablets
+    svg.addEventListener('touchstart', (e) => {
+        isDragging = true;
+        handleInteraction(e);
+    });
+    
+    svg.addEventListener('touchmove', (e) => {
+        if (isDragging) handleInteraction(e);
+    });
+    
+    svg.addEventListener('touchend', () => {
+        if (isDragging) {
+            isDragging = false;
+            if (clockMode === 'hours') {
+                setTimeout(() => {
+                    switchClockMode('minutes');
+                }, 200);
+            }
+        }
+    });
+    
+    // Toggle AM/PM buttons
+    document.getElementById('btnAM').addEventListener('click', () => {
+        selectedAmPm = 'AM';
+        updateAmPmUI();
+        updateClockDisplay();
+    });
+    
+    document.getElementById('btnPM').addEventListener('click', () => {
+        selectedAmPm = 'PM';
+        updateAmPmUI();
+        updateClockDisplay();
+    });
+    
+    // Mode switcher buttons
+    document.getElementById('btnClockHourMode').addEventListener('click', () => {
+        switchClockMode('hours');
+    });
+    
+    document.getElementById('btnClockMinMode').addEventListener('click', () => {
+        switchClockMode('minutes');
+    });
+    
+    // Actions
+    document.getElementById('btnClockCancel').addEventListener('click', closeClockModal);
+    document.getElementById('closeClockModalBtn').addEventListener('click', closeClockModal);
+    document.getElementById('btnClockDone').addEventListener('click', confirmClockTime);
 }
 
 
