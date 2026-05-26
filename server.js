@@ -3361,11 +3361,11 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                 // No active period on server right now — this is a queued/late sync
                 // arriving after class ended. Don't blindly set 'absent'.
                 // Check if the student already has a 'present' PeriodAttendance record
-                // for today (written by the final sync that fired when the timer stopped).
+                // for this period today (written by the final sync that fired when the timer stopped).
                 if (Boolean(isRunning)) {
                     computedStatus = 'active';
                 } else {
-                    // Look for any 'present' period record today — if one exists, preserve it
+                    // Look for a 'present' record for this specific period today — if one exists, preserve it
                     const syncDate2 = eventTime;
                     const todayStart2 = getISTMidnight(syncDate2);
                     const todayEnd2 = new Date(todayStart2.getTime() + 86400000);
@@ -3373,6 +3373,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     const alreadyPresent = await PeriodAttendance.exists({
                         enrollmentNo: studentId,
                         date: { $gte: todayStart2, $lt: todayEnd2 },
+                        period: resolvedPeriodId,
                         status: 'present'
                     });
                     computedStatus = alreadyPresent ? 'present' : 'absent';
@@ -3383,7 +3384,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
             // On error, preserve running state — don't silently mark absent
             if (Boolean(isRunning)) computedStatus = 'active';
             else {
-                // Same guard as above — don't overwrite an existing 'present'
+                // Same guard as above — don't overwrite an existing 'present' for this period
                 try {
                     const syncDateE = eventTime;
                     const todayStartE = getISTMidnight(syncDateE);
@@ -3391,6 +3392,7 @@ app.post('/api/attendance/offline-sync', async (req, res) => {
                     const alreadyPresentE = await PeriodAttendance.exists({
                         enrollmentNo: studentId,
                         date: { $gte: todayStartE, $lt: todayEndE },
+                        period: resolvedPeriodId,
                         status: 'present'
                     });
                     computedStatus = alreadyPresentE ? 'present' : 'absent';
